@@ -1,0 +1,5 @@
+interface:
+  display_name: "Handoff"
+  short_description: "Capture context for the next work session"
+policy:
+  allow_implicit_invocation: false

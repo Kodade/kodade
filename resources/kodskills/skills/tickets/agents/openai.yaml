@@ -1,0 +1,5 @@
+interface:
+  display_name: "Tickets"
+  short_description: "Turn a spec into buildable tracer-bullet tickets"
+policy:
+  allow_implicit_invocation: false

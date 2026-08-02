@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose an improvement to Ködade's general-purpose workflow.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard today, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the useful result rather than prescribing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Current workaround
+      description: How do you handle this today?
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Related surface
+      options:
+        - KödChat
+        - Terminals
+        - Projects, files, or editor
+        - KödMem or KödMCP
+        - KödHarness or KödSkills
+        - Browser or GitHub
+        - Packaging or platform support
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions first.
+          required: true

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "1.4.14",
+  "profile": "public macOS app (default Rust features and production JavaScript dependencies)",
+  "target": "aarch64-apple-darwin",
+  "tools": {
+    "cargoAbout": "0.9.1",
+    "pnpm": "11.17.0"
+  },
+  "inputs": {
+    "package.json": "7e9f2aa1df63a8274830074ab2ef1ba1502c9aa3cb71937137c2d410352efa39",
+    "pnpm-lock.yaml": "928ec199aa74ba90558b0774b12d84cda80811b7961786f8c0e6606d9046b127",
+    "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
+    "src-tauri/Cargo.toml": "bd0c4377edfa28c296d77b2356ffb8963f5914ac0bde075440076973c81da1d3",
+    "src-tauri/Cargo.lock": "d5b0af36621190b2f79a9d617a1faa66f2691c360748afc84134e1c7acf668c4",
+    "licenses/dependencies/about.toml": "d56f30f1f89a1aba49dbf1b24d7868d40812a00d8ee92ca0d5c7c8e5ced969ff",
+    "licenses/dependencies/javascript-overrides.json": "7be480d97680a94cefc52731b9b3ef522c1d17e9fa733eae081b2561d6f00605",
+    "scripts/generate-dependency-licenses.mjs": "ac96b351dd5ce8052d177f95b9f67f6767a54b8efb64c3927c4dea2ca597984b"
+  },
+  "overrideFilesSha256": "bb68d280252e1b7b9858479bf123307754e58453a7e0196d121414431c19954f",
+  "counts": {
+    "javascriptPackages": 78,
+    "rustCrates": 347,
+    "rustLicenseDocuments": 107
+  },
+  "outputs": {
+    "JAVASCRIPT_LICENSES.html": "dae29638ca0bc7282808431df037ce086c67f9a4a5295297b32003c12aa3ec2c",
+    "RUST_LICENSES.html": "0fd315e7569be1de3313bbc7d6f67f28eea1e25cfe3bc573ca9e8bf66eb50d34"
+  }
+}

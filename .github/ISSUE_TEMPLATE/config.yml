@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/Kodade/kodade/discussions
+    about: Use Discussions for setup help and ideas that are not yet concrete issues.
+  - name: Security vulnerability
+    url: https://github.com/Kodade/kodade/security/advisories/new
+    about: Report vulnerabilities privately.

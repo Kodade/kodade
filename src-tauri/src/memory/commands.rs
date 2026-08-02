@@ -1,0 +1,486 @@
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
+use super::{
+    ActivityEvent, AuditEntry, AuditQuery, Checkpoint, CheckpointQuery, CheckpointSearchHit,
+    DeletedMemoryQuery, ExportBundle, MemoryError, MemoryQuery, MemoryRecord, MemoryRevision,
+    MemorySearchHit, MemoryStore, MutationProvenance, NewActivity, NewCheckpoint, NewMemory, Page,
+    RetentionReport, RetentionSettings, Tombstone, WorkingMemoryMode, WorkingMemoryStatus,
+    Workspace, WorkspaceContext,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpBinaryPath {
+    path: Option<String>,
+    exists: bool,
+}
+
+#[tauri::command]
+pub fn memory_mcp_binary_path(app: AppHandle) -> Result<McpBinaryPath, String> {
+    if let Some(path) = std::env::var_os("KODADE_MCP_PATH").map(PathBuf::from) {
+        if path.is_file() {
+            return Ok(existing_mcp_binary(path));
+        }
+        return Err(format!(
+            "KODADE_MCP_PATH does not point to a file: {}",
+            path.display()
+        ));
+    }
+    let resource_dir = app.path().resource_dir().ok();
+    let public_bundled = resource_dir
+        .as_ref()
+        .map(|root| root.join("helpers").join(mcp_binary_name()));
+    if let Some(path) = public_bundled
+        .as_ref()
+        .filter(|candidate| candidate.is_file())
+    {
+        return Ok(existing_mcp_binary(path.clone()));
+    }
+    let development_bundled = resource_dir.as_ref().map(|root| {
+        root.join("kodade-local")
+            .join("bin")
+            .join(mcp_binary_name())
+    });
+    if let Some(path) = development_bundled
+        .as_ref()
+        .filter(|candidate| candidate.is_file())
+    {
+        return Ok(existing_mcp_binary(path.clone()));
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate the running Kodade executable: {error}"))?;
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| "the running Kodade executable has no parent directory".to_string())?;
+    let sibling = executable_dir.join(mcp_binary_name());
+    if sibling.is_file() {
+        return Ok(existing_mcp_binary(sibling));
+    }
+
+    let debug = executable
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "target"))
+        .map(|target| target.join("debug").join(mcp_binary_name()));
+    if let Some(debug) = debug.as_ref().filter(|candidate| candidate.is_file()) {
+        return Ok(existing_mcp_binary(debug.clone()));
+    }
+
+    let debug_hint = debug
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<workspace>/target/debug/kodade-mcp".into());
+    Err(format!(
+        "kodade-mcp was not found in the bundled resource, at {}, or at {debug_hint}; run `cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --bin kodade-mcp`",
+        sibling.display()
+    ))
+}
+
+fn existing_mcp_binary(path: PathBuf) -> McpBinaryPath {
+    McpBinaryPath {
+        path: Some(path.to_string_lossy().to_string()),
+        exists: true,
+    }
+}
+
+fn mcp_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "kodade-mcp.exe"
+    } else {
+        "kodade-mcp"
+    }
+}
+
+fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("kodade-memory.sqlite3"))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn memory_database_path(app: AppHandle) -> Result<String, String> {
+    database_path(&app).map(|path| path.to_string_lossy().into_owned())
+}
+
+async fn run_memory<T, F>(app: AppHandle, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(MemoryStore) -> super::Result<T> + Send + 'static,
+{
+    let path = database_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = process_store(path)?;
+        operation(store)
+    })
+    .await
+    .map_err(|error| format!("memory worker failed: {error}"))?
+    .map_err(|error| error.to_string())
+}
+
+fn process_store(path: PathBuf) -> super::Result<MemoryStore> {
+    static STORE: OnceLock<Mutex<Option<(PathBuf, MemoryStore)>>> = OnceLock::new();
+    let cache = STORE.get_or_init(|| Mutex::new(None));
+    let mut cached = cache.lock().map_err(|_| {
+        super::MemoryError::InvalidInput("memory store cache is unavailable".into())
+    })?;
+    if let Some((cached_path, store)) = cached.as_ref() {
+        if cached_path == &path {
+            return Ok(store.clone());
+        }
+    }
+    let store = MemoryStore::open(&path)?;
+    *cached = Some((path, store.clone()));
+    Ok(store)
+}
+
+#[tauri::command]
+pub async fn memory_register_workspace(
+    app: AppHandle,
+    root: String,
+    display_name: String,
+    color: Option<String>,
+) -> Result<Workspace, String> {
+    run_memory(app, move |store| {
+        store.register_workspace(root, &display_name, color.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_resolve_workspace(
+    app: AppHandle,
+    root: String,
+) -> Result<Option<Workspace>, String> {
+    run_memory(app, move |store| match store.resolve_workspace(root) {
+        Ok(workspace) => Ok(Some(workspace)),
+        Err(MemoryError::WorkspaceNotRegistered(_)) => Ok(None),
+        Err(error) => Err(error),
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_list_workspaces(app: AppHandle) -> Result<Vec<Workspace>, String> {
+    run_memory(app, move |store| store.workspaces()).await
+}
+
+#[tauri::command]
+pub async fn memory_relink_workspace(
+    app: AppHandle,
+    workspace_id: String,
+    expected_root: String,
+    new_root: String,
+    source_client: String,
+) -> Result<Workspace, String> {
+    run_memory(app, move |store| {
+        store.relink_workspace(&workspace_id, &expected_root, new_root, &source_client)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_context(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<WorkspaceContext, String> {
+    run_memory(app, move |store| store.context(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn memory_search(
+    app: AppHandle,
+    query: MemoryQuery,
+) -> Result<Page<MemorySearchHit>, String> {
+    run_memory(app, move |store| store.search(query)).await
+}
+
+#[tauri::command]
+pub async fn memory_get(app: AppHandle, id: String) -> Result<MemoryRecord, String> {
+    run_memory(app, move |store| store.memory(&id)).await
+}
+
+#[tauri::command]
+pub async fn memory_list_deleted(
+    app: AppHandle,
+    query: DeletedMemoryQuery,
+) -> Result<Page<MemoryRecord>, String> {
+    run_memory(app, move |store| store.deleted_memory_page(query)).await
+}
+
+#[tauri::command]
+pub async fn memory_remember(app: AppHandle, input: NewMemory) -> Result<MemoryRecord, String> {
+    run_memory(app, move |store| store.remember(input)).await
+}
+
+#[tauri::command]
+pub async fn memory_revise(app: AppHandle, input: MemoryRevision) -> Result<MemoryRecord, String> {
+    run_memory(app, move |store| store.revise(input)).await
+}
+
+#[tauri::command]
+pub async fn memory_forget(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    source_client: String,
+    session_id: Option<String>,
+) -> Result<Tombstone, String> {
+    run_memory(app, move |store| {
+        store.forget(&id, expected_version, &source_client, session_id.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_restore(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    source_client: String,
+    session_id: Option<String>,
+) -> Result<MemoryRecord, String> {
+    run_memory(app, move |store| {
+        store.restore(&id, expected_version, &source_client, session_id.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_checkpoint(app: AppHandle, input: NewCheckpoint) -> Result<Checkpoint, String> {
+    run_memory(app, move |store| store.checkpoint(input)).await
+}
+
+#[tauri::command]
+pub async fn memory_search_checkpoints(
+    app: AppHandle,
+    query: CheckpointQuery,
+) -> Result<Page<CheckpointSearchHit>, String> {
+    run_memory(app, move |store| store.search_checkpoints(query)).await
+}
+
+#[tauri::command]
+pub async fn memory_working_status(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<Option<WorkingMemoryStatus>, String> {
+    run_memory(app, move |store| store.working_memory_status(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn memory_activate_working(
+    app: AppHandle,
+    workspace_id: String,
+    mode: WorkingMemoryMode,
+    export_existing: bool,
+) -> Result<WorkingMemoryStatus, String> {
+    run_memory(app, move |store| {
+        store.activate_working_memory(&workspace_id, mode, export_existing)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_sync_working(app: AppHandle, workspace_id: String) -> Result<u64, String> {
+    run_memory(app, move |store| store.sync_working_memory(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn memory_observe_commit(
+    app: AppHandle,
+    workspace_id: String,
+    head: String,
+) -> Result<Option<Checkpoint>, String> {
+    run_memory(app, move |store| {
+        store.observe_working_memory_commit(&workspace_id, &head)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_audit(app: AppHandle, query: AuditQuery) -> Result<Page<AuditEntry>, String> {
+    run_memory(app, move |store| store.audit_page(query)).await
+}
+
+#[tauri::command]
+pub async fn memory_set_retention(
+    app: AppHandle,
+    workspace_id: String,
+    settings: RetentionSettings,
+    provenance: MutationProvenance,
+) -> Result<Workspace, String> {
+    run_memory(app, move |store| {
+        store.set_retention(&workspace_id, settings, provenance)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_run_retention(
+    app: AppHandle,
+    workspace_id: String,
+    now: i64,
+    batch_size: u32,
+    provenance: MutationProvenance,
+) -> Result<RetentionReport, String> {
+    run_memory(app, move |store| {
+        store.run_retention(&workspace_id, now, batch_size, provenance)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_drain_retention(
+    app: AppHandle,
+    workspace_id: String,
+    provenance: MutationProvenance,
+) -> Result<RetentionReport, String> {
+    run_memory(app, move |store| {
+        store.drain_retention(&workspace_id, now_millis(), 1000, 10_000, provenance)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    markdown_path: String,
+    json_path: String,
+}
+
+#[tauri::command]
+pub async fn memory_export_to_directory(
+    app: AppHandle,
+    workspace_id: String,
+    destination: String,
+) -> Result<ExportResult, String> {
+    run_memory(app, move |store| {
+        let bundle = store.export_workspace(&workspace_id)?;
+        write_export(&workspace_id, Path::new(&destination), bundle)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_purge_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
+    run_memory(app, move |store| store.purge_workspace(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn memory_record_activity(
+    app: AppHandle,
+    input: NewActivity,
+) -> Result<Option<ActivityEvent>, String> {
+    run_memory(app, move |store| {
+        let workspace_id = input.workspace_id.clone();
+        let provenance = MutationProvenance {
+            source_client: input.source.clone(),
+            session_id: input.session_id.clone(),
+        };
+        let event = store.record_activity(input)?;
+        if let Some(event) = event.as_ref() {
+            store.checkpoint_activity_fallback(event)?;
+            store.run_retention(&workspace_id, now_millis(), 500, provenance)?;
+        }
+        Ok(event)
+    })
+    .await
+}
+
+fn write_export(
+    workspace_id: &str,
+    destination: &Path,
+    bundle: ExportBundle,
+) -> super::Result<ExportResult> {
+    static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(destination)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let sequence = EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let base = format!(
+        "kodade-memory-{workspace_id}-{timestamp}-{}-{sequence}",
+        std::process::id()
+    );
+    let markdown_path = destination.join(format!("{base}.md"));
+    let json_path = destination.join(format!("{base}.json"));
+    write_new_atomic(&markdown_path, bundle.markdown.as_bytes())?;
+    if let Err(error) = write_new_atomic(&json_path, bundle.json.as_bytes()) {
+        let _ = std::fs::remove_file(&markdown_path);
+        return Err(error.into());
+    }
+    Ok(ExportResult {
+        markdown_path: markdown_path.to_string_lossy().to_string(),
+        json_path: json_path.to_string_lossy().to_string(),
+    })
+}
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn write_new_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let temporary = path.with_extension(format!(
+        "{}.tmp-{}",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("export"),
+        std::process::id()
+    ));
+    std::fs::write(&temporary, contents)?;
+    match std::fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_cache_recovers_a_database_corrupted_after_startup() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "kodade-memory-command-cache-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create cache recovery fixture");
+        let path = root.join("memory.sqlite3");
+        let first = process_store(path.clone()).expect("open process-cached store");
+        let original = first
+            .register_workspace(&root, "Original", None)
+            .expect("register before corruption");
+        std::fs::write(&path, b"not sqlite after process cache initialization")
+            .expect("corrupt cached database");
+
+        let cached = process_store(path).expect("reuse process-cached store");
+        let recovered = cached
+            .register_workspace(&root, "Recovered", None)
+            .expect("cached store recovers");
+
+        assert_ne!(recovered.id, original.id);
+        assert!(cached
+            .recovery_backup()
+            .expect("preserved runtime corruption")
+            .exists());
+        drop(cached);
+        drop(first);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

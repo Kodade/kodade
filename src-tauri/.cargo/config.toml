@@ -1,0 +1,4 @@
+[env]
+# Distribution builds must not inherit CPU instructions from the build host.
+# Metal remains enabled separately by the macOS whisper-rs feature.
+GGML_NATIVE = "OFF"

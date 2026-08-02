@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "features": [],
+    "beforeBuildCommand": "pnpm build:public && pnpm stage:public-resources"
+  },
+  "bundle": {
+    "resources": [
+      "helpers",
+      "kodskills",
+      "legal"
+    ]
+  }
+}

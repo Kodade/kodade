@@ -1,0 +1,5 @@
+interface:
+  display_name: "Grill"
+  short_description: "Relentless interview to stress-test a plan, with a docs trail"
+policy:
+  allow_implicit_invocation: false

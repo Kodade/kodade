@@ -1,0 +1,15 @@
+{
+  "@tauri-apps/api@2.11.1": {
+    "source": "https://github.com/tauri-apps/tauri/tree/tauri-v2.11.1",
+    "files": [
+      "../../LICENSE",
+      "javascript-overrides/tauri-api-2.11.1-LICENSE-MIT.txt"
+    ]
+  },
+  "punycode.js@2.3.1": {
+    "source": "https://github.com/mathiasbynens/punycode.js/tree/v2.3.1",
+    "files": [
+      "javascript-overrides/punycode.js-2.3.1-LICENSE-MIT.txt"
+    ]
+  }
+}

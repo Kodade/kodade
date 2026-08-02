@@ -1,0 +1,5 @@
+interface:
+  display_name: "Spec"
+  short_description: "Turn a grilled idea into a build-ready PRD"
+policy:
+  allow_implicit_invocation: false

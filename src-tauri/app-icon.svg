@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- ködade app icon: the decided double-dot umlaut mark (DESIGN.md §1).
+       Two rounded squares on an ink-950 field — left amber (#E7A33B), right
+       paper (#F7F6F3). Proportions taken from favicon.svg (dots 18.75% wide, a
+       ~9% gap between them) so the pair survives downscaling and still reads as
+       two distinct dots at 16px. Sits in the middle-third vertical band as an
+       umlaut, centered with generous margin for the macOS icon grid. The amber
+       accent is the ICON's only brand color; in-app chrome takes color from the
+       active theme. No text, no gradients. -->
+
+  <!-- ink-950 rounded-square field -->
+  <rect width="1024" height="1024" rx="228" fill="#0F1012"/>
+
+  <!-- Two 192px rounded squares with a 96px gap (favicon's 12/6/12 ratio).
+       Pair spans x 272..752 (width 480), centered on 1024. Middle-third band
+       y 416..608. rx=32 matches the favicon's 2/12 corner ratio. -->
+  <rect x="272" y="416" width="192" height="192" rx="32" fill="#E7A33B"/>
+  <rect x="560" y="416" width="192" height="192" rx="32" fill="#F7F6F3"/>
+</svg>

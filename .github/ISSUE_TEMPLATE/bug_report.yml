@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible problem in a supported Ködade surface.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Ködade. Remove credentials, private project
+        content, and terminal transcripts before attaching logs or screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: Ködade version
+      description: Find this under Ködade → About Ködade.
+      placeholder: 1.4.14
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Windows
+        - Linux
+        - Build from source
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: What did you click or run, in order?
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or sanitized logs
+      description: Drag files here after removing sensitive information.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private source, and personal data.
+          required: true
+        - label: This is not a security vulnerability; security reports follow SECURITY.md.
+          required: true

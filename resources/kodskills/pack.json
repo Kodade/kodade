@@ -1,0 +1,287 @@
+{
+  "name": "KödSkills engineering pack",
+  "id": "kodskills-engineering",
+  "version": "1.0.0",
+  "description": "A curated idea-to-ship engineering workflow for agentic coding.",
+  "source": "https://github.com/ContractorKeith/skills",
+  "tag": "v1.0.0",
+  "sha": "000087d6fc70e92fc91eb40b89b0c62a67ebc78a",
+  "skills": [
+    {
+      "id": "ask-kod",
+      "dir": "ask-kod",
+      "description": "Ask which skill or flow fits the current situation — a router over the skills in this collection. Use when the user isn't sure where to start or which skill applies.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "640c0201f25f10c8a124bdba919c9a13d1a92db25e05ccdafd61c14ab12406d4"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "f8afcb2411d2a754c7c6fedc904f095addec53c3ed920fe4cbc45cf259f3ee41"
+        }
+      ]
+    },
+    {
+      "id": "code-review",
+      "dir": "code-review",
+      "description": "Reviews a change since a fixed point on two independent axes: documented repository standards and the originating ticket or spec. Use before committing or merging a ticket, when reviewing a branch or PR, or when asked to review since a base ref.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "5a7e931b9b50b756102a45ba8219cc64729177cb7cc9a28263b8074c57a91378"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "965dc9d39441805c5c1b75171a87010cd2f1610dcf363a8dbab7a9f9b8bfa3bf"
+        }
+      ]
+    },
+    {
+      "id": "codebase-design",
+      "dir": "codebase-design",
+      "description": "Provide a shared vocabulary and practical rules for designing deep modules, choosing seams, improving interfaces, and making code easier to test and navigate. Use when designing or restructuring a module, evaluating abstraction depth, or when another skill needs consistent architecture language.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "257bf20ab9ad465c9eed24b0b9d521dd02639f6800c994c079b877d0b3910b0b"
+        },
+        {
+          "path": "DEEPENING.md",
+          "sha256": "95a524c6903396e60c2807809e59674858fddffd220d52b9f660df23b76de8af"
+        },
+        {
+          "path": "DESIGN-IT-TWICE.md",
+          "sha256": "e724aa6bd23dd7ea384b224552cfd89d2f2b2b7aed301616f2b7bb9f28e15aae"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "bd57f857cdcc34cdb5feab12dfb6b8736ab4ac2bb572daebf6237595bbd7fbcd"
+        }
+      ]
+    },
+    {
+      "id": "debug",
+      "dir": "debug",
+      "description": "Diagnose hard bugs and performance regressions with a disciplined evidence loop. Use when the user says \"diagnose\" or \"debug this\", or reports something broken, throwing, failing, flaky, or slow.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "2078fc00e4bcb2e3eef4d8225038b17eaaec33509b443aba5fb2dfd22bfec2f9"
+        },
+        {
+          "path": "scripts/hitl-loop.template.sh",
+          "sha256": "30f859d287ca58dc2cedf3d7f64bb4d8e5ed0b1e1c59e83b5a7847a4a447d4c6"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "97219a7e0ce4e1c80bdb9f430de5ca7790da1b595cbd9c3004bd42df19c849b9"
+        }
+      ]
+    },
+    {
+      "id": "grill",
+      "dir": "grill",
+      "description": "A relentless interview — small batches of related questions — that stress-tests a plan or design before anything gets built, leaving a paper trail of resolved terms (CONTEXT.md) and decisions (ADRs) as it goes. Use when the user wants to pressure-test an idea, sharpen a plan, or says \"grill me\".",
+      "files": [
+        {
+          "path": "ADR-FORMAT.md",
+          "sha256": "a35299319de6a2944c1b874be71c4ef862f9dd13d6deaf029c9d5f68384a4af3"
+        },
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "b4efb1447cd7dd4b835238922ba3bd868cea52b55bbe2a0ed35ac107b6658e88"
+        },
+        {
+          "path": "CONTEXT-FORMAT.md",
+          "sha256": "7c5a36655b2fcfd2ba116535160ded11161a2113eaba0ffc1194f5241580cf4e"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "55877774ef2485a5c53ad56d9f0ca58a19ba597f267da294ac7badafa5b06395"
+        }
+      ]
+    },
+    {
+      "id": "handoff",
+      "dir": "handoff",
+      "description": "The handoff skill captures the current session in a concise file so a fresh agent can continue without replaying the conversation. Use it when pausing work, switching sessions, or pairing with `/prototype` or `/kodmap`.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "d5cc9dd4d4af7763741b1671b2a443f0eeea87def9d631492d95a786fc0a4c60"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "242222fbe63a489121e893b1085a78fcfeef947040852649c98f27bb791ba749"
+        }
+      ]
+    },
+    {
+      "id": "implement",
+      "dir": "implement",
+      "description": "Builds one well-defined ticket from its acceptance criteria through tests, review, commit, and ticket closure. Use when the user invokes `/implement` for a GitHub Issue or local markdown ticket that is ready to build.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "a5c0b681721e1f807a1a2474f8c325e0c447ef7105b3a979521a520bd669a83b"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "e614de6793c470d31a98962b25a784d7517be6a41e723a4a6b955676637411ef"
+        }
+      ]
+    },
+    {
+      "id": "kodmap",
+      "dir": "kodmap",
+      "description": "Plans work too large for one agent session as a shared map of investigation tickets, resolving one decision at a time until the route is clear. Use when an idea has too many unknowns for a normal spec-and-tickets pass, or the user asks to map a large effort.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "488af73894a20ed32b8d480531387b6a43d198368758f143a00a43c66cc1b782"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "77f4a23a034f0d333f39f7e76d32e70bbee153cc63e4d1ad06d5ea775df3e0e2"
+        }
+      ]
+    },
+    {
+      "id": "merge-conflicts",
+      "dir": "merge-conflicts",
+      "description": "Resolve an in-progress Git merge or rebase conflict without losing either change's intent. Use when Git reports unresolved conflict markers during a merge or rebase.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "b7dcd684906d08e6fddffbd169ac867088273a2a8f2ba8fb7488331881f32d25"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "8e8f15109bb343323570c75de883ff449d9e9f541318649c27be8a0b22d57695"
+        }
+      ]
+    },
+    {
+      "id": "prototype",
+      "dir": "prototype",
+      "description": "The prototype skill builds clearly throwaway code to answer a concrete design question about logic, state, data shape, or UI. Use it when runnable evidence will settle a design choice faster than more discussion.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "468873088c7925752c3232470dd1dfb1fa0329c976996752b35cfb2465e6176b"
+        },
+        {
+          "path": "LOGIC.md",
+          "sha256": "5ced87f69ca23e63d5fed73a375c8793b4b17a799dea9691c2f9e2d1fafa746e"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "9c728a9de3460119043bda046a4d5a83f5b478bd80c7616308fd4efdb5708d2e"
+        },
+        {
+          "path": "UI.md",
+          "sha256": "c6aaf2045eef07d7699eaf5b9cb2e4d84772fa4f5e367ea0d952c08d6a9aa39f"
+        }
+      ]
+    },
+    {
+      "id": "research",
+      "dir": "research",
+      "description": "The research skill investigates a problem before planning or implementation by clarifying intent, running proportionate parallel research, and synthesizing evidence into a recommendation. Use it for feature planning, bug investigation, refactoring, unfamiliar systems, or explicit deep dives.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "112094417fd85f5bf404e88afab6742d697d8194e9b46105319388b38b61dffb"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "f4b2bbb785cd31ac0f2460b1a1a359fc96d29842fd3a9d26191e7f057742e281"
+        }
+      ]
+    },
+    {
+      "id": "ship",
+      "dir": "ship",
+      "description": "The ship skill runs the end-of-work gate before a change is called complete: it executes the full project checks, verifies push and merge access, integrates parallel work in order, and confirms the final Git state. Use it when the user says “ship”, “ship it”, or “land this”, or when closing a multi-branch effort.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "3c389e88609d888206c0143c91e5bb28c4c1d095a417409f1f5a21a3e7c55e98"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "5c96882f73859dba6769b34f8d01b282d0b2e002d513b3f924245f4eb326e61b"
+        }
+      ]
+    },
+    {
+      "id": "spec",
+      "dir": "spec",
+      "description": "Turn a grilled idea or the current conversation into a durable, build-ready product spec (PRD), using the repository's language and decisions. Use after `/grill` when a feature is too large for one `/implement` session and needs a clear handoff to `/tickets`.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "b396f5f618fd8dc1552663498e1b8f27cb6956295cd1fd58ff803fce301cef9e"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "4a5f8c4789de4dd884707daae5021bea49e36f4ad60a79c2d71bd7714db67519"
+        }
+      ]
+    },
+    {
+      "id": "tdd",
+      "dir": "tdd",
+      "description": "Runs a disciplined red-green-refactor loop for one observable behavior at a public seam. Use while `/implement` is building a ticket, or whenever a feature or bug fix needs test-first evidence.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "5958f2bc19575433c290c99a29cb4948abb2337ea2a97b6cc10f337f802209f7"
+        },
+        {
+          "path": "MOCKING.md",
+          "sha256": "42b9363576eff55fa09a0d3a911ab8463214d49bd538693d071efb2c34b31e92"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "bc26b8d8a03fda98c96816b01e15635bac8434b0a6ca1e3c4fb434a7f1148888"
+        },
+        {
+          "path": "TESTS.md",
+          "sha256": "f70534f37f63f796226462e624a5371c95d0335aa0bdfc6cc6582a7995478cdb"
+        }
+      ]
+    },
+    {
+      "id": "tickets",
+      "dir": "tickets",
+      "description": "Break an approved spec, plan, or conversation into self-contained tracer-bullet tickets with explicit blocking edges. Use after `/spec` to create buildable work for fresh `/implement` contexts.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "f26a571da9551c72ecb2ee7e58571f4581ec81bbc51ddee8036d1c405884ce33"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "a5dd667aab3a7f7f3f62ca938f07923e93566f6e9862c1369110d962225a5656"
+        }
+      ]
+    },
+    {
+      "id": "unslop",
+      "dir": "unslop",
+      "description": "Audit a codebase for AI-generated slop and architectural drift, then rank evidence-backed cleanup candidates and guide the chosen change through design and verification. Use when asked to de-slop, simplify, consolidate, or improve an existing codebase's structure, testability, or maintainability.",
+      "files": [
+        {
+          "path": "agents/openai.yaml",
+          "sha256": "c4e0e69ea8153b07b302d51ad5800f911b1b69440abacc2ac31f43f1099a7542"
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "59071c9c4d5aa1140cac513558e2463c3ae805ffd41a7e23940b9c01a6d46e9f"
+        }
+      ]
+    }
+  ]
+}

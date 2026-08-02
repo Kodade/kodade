@@ -1,0 +1,24 @@
+version: 2
+# Keep routine version-update batches paused through the first release.
+# Repository security updates remain enabled independently in GitHub settings.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    open-pull-requests-limit: 0
+    schedule:
+      interval: monthly
+    groups:
+      frontend-production:
+        dependency-type: production
+      frontend-development:
+        dependency-type: development
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    open-pull-requests-limit: 0
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    open-pull-requests-limit: 0
+    schedule:
+      interval: monthly

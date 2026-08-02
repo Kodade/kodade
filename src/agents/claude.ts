@@ -1,0 +1,248 @@
+// Claude Code dialect (`claude -p --output-format stream-json`).
+//
+// The stream carries two overlapping layers: raw Anthropic API `stream_event`
+// frames (token deltas) and Claude Code's own assembled `assistant`/`user`
+// envelopes. We stream from the first and take truth from the second — the
+// assembled `assistant` message is the only place a tool call's arguments
+// arrive as parsed JSON rather than as `input_json_delta` fragments, and the
+// `user` envelope is where tool results come back.
+//
+// Verified against the shipped CLI (see src/agents/fixtures/claude-tool-turn.jsonl,
+// captured from a real run). Flags live in providers/catalog.ts, not here.
+
+import type { Provider, ProviderStream } from "../providers/catalog";
+import type {
+  AgentRunRequest,
+  AgentSpawn,
+  AgentStreamAdapter,
+  AgentStreamEvent,
+  AgentStreamParser,
+} from "./contract";
+import {
+  buildAgentSpawn,
+  clampToolResult,
+  contentToText,
+  endOfRunEvents,
+  failureEvent,
+  parseJsonLine,
+} from "./engine";
+
+type Json = Record<string, unknown>;
+
+function asRecord(value: unknown): Json | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Json)
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+class ClaudeParser implements AgentStreamParser {
+  private messageId = "";
+  private done = false;
+  // Content-block index → what kind of block it is, so a delta can be routed
+  // without re-reading the block's start frame.
+  private blocks = new Map<number, "text" | "thinking" | "tool_use">();
+
+  line(raw: string): AgentStreamEvent[] {
+    const value = parseJsonLine(raw);
+    if (!value) return [];
+    switch (value.type) {
+      case "system":
+        return this.system(value);
+      case "stream_event":
+        return this.streamEvent(value);
+      case "assistant":
+        return this.assistant(value);
+      case "user":
+        return this.user(value);
+      case "result":
+        return this.result(value);
+      default:
+        return [];
+    }
+  }
+
+  end(code: number | null, stderr: string): AgentStreamEvent[] {
+    return endOfRunEvents(this.done, code, stderr);
+  }
+
+  // `system/init` announces the session id that `--resume` needs next turn.
+  private system(value: Json): AgentStreamEvent[] {
+    if (value.subtype !== "init") return [];
+    const sessionId = asString(value.session_id);
+    return sessionId ? [{ type: "session", sessionId }] : [];
+  }
+
+  private streamEvent(value: Json): AgentStreamEvent[] {
+    const event = asRecord(value.event);
+    if (!event) return [];
+    if (event.type === "message_start") {
+      const message = asRecord(event.message);
+      this.messageId = asString(message?.id) ?? this.messageId;
+      this.blocks.clear();
+      return [];
+    }
+    if (event.type === "content_block_start") {
+      const index = typeof event.index === "number" ? event.index : -1;
+      const block = asRecord(event.content_block);
+      const kind = asString(block?.type);
+      if (index >= 0 && (kind === "text" || kind === "thinking" || kind === "tool_use")) {
+        this.blocks.set(index, kind);
+      }
+      return [];
+    }
+    if (event.type === "content_block_delta") {
+      const index = typeof event.index === "number" ? event.index : -1;
+      const delta = asRecord(event.delta);
+      const text = asString(delta?.text);
+      const thinking = asString(delta?.thinking);
+      if (delta?.type === "text_delta" && text) {
+        return [{ type: "message-delta", messageId: this.messageId, text }];
+      }
+      if (delta?.type === "thinking_delta" && thinking) {
+        return [{ type: "thinking-delta", messageId: this.messageId, text: thinking }];
+      }
+      // input_json_delta fragments are intentionally ignored: the assembled
+      // `assistant` envelope carries the same arguments already parsed.
+      void index;
+      return [];
+    }
+    return [];
+  }
+
+  // The assembled assistant message: the authoritative text, thinking, and
+  // tool calls for the turn so far.
+  private assistant(value: Json): AgentStreamEvent[] {
+    const message = asRecord(value.message);
+    if (!message) return [];
+    const messageId = asString(message.id) ?? this.messageId;
+    const content = Array.isArray(message.content) ? message.content : [];
+    const events: AgentStreamEvent[] = [];
+    for (const part of content) {
+      const block = asRecord(part);
+      if (!block) continue;
+      if (block.type === "text") {
+        const text = asString(block.text) ?? "";
+        if (text) {
+          events.push({
+            type: "message-complete",
+            messageId,
+            message: { role: "assistant", content: text },
+          });
+        }
+        continue;
+      }
+      if (block.type === "thinking") {
+        const text = asString(block.thinking) ?? "";
+        if (text) events.push({ type: "thinking-complete", messageId, text });
+        continue;
+      }
+      if (block.type === "tool_use") {
+        const callId = asString(block.id);
+        const tool = asString(block.name);
+        if (!callId || !tool) continue;
+        const input = asRecord(block.input) ?? {};
+        // TodoWrite is Claude Code's plan surface; render it as a plan block
+        // rather than as one more opaque tool card.
+        const plan = todoPlan(tool, input);
+        if (plan) events.push(plan);
+        events.push({ type: "tool-call-started", callId, call: { tool, args: input } });
+      }
+    }
+    return events;
+  }
+
+  // Tool results come back as a synthetic `user` message.
+  private user(value: Json): AgentStreamEvent[] {
+    const message = asRecord(value.message);
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const events: AgentStreamEvent[] = [];
+    for (const part of content) {
+      const block = asRecord(part);
+      if (!block || block.type !== "tool_result") continue;
+      const callId = asString(block.tool_use_id);
+      if (!callId) continue;
+      const result = clampToolResult(contentToText(block.content));
+      events.push({
+        type: "tool-call-completed",
+        callId,
+        outcome:
+          block.is_error === true
+            ? { status: "error", result }
+            : { status: "executed", result },
+      });
+    }
+    return events;
+  }
+
+  // The single terminal frame. `is_error` covers refusals, permission denials,
+  // and auth failures alike, so route its message through the shared classifier.
+  private result(value: Json): AgentStreamEvent[] {
+    this.done = true;
+    const events: AgentStreamEvent[] = [];
+    const sessionId = asString(value.session_id);
+    if (sessionId) events.push({ type: "session", sessionId });
+    if (value.is_error === true) {
+      const message =
+        asString(value.result) ?? asString(value.subtype) ?? "the agent reported an error";
+      events.push(failureEvent(message));
+    }
+    events.push({
+      type: "done",
+      ...(asString(value.stop_reason) ? { finishReason: asString(value.stop_reason)! } : {}),
+      ...(usageOf(value) ? { usage: usageOf(value)! } : {}),
+    });
+    return events;
+  }
+}
+
+function usageOf(value: Json) {
+  const usage = asRecord(value.usage);
+  if (!usage) return null;
+  const promptTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+  const completionTokens =
+    typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+  };
+}
+
+// Map a TodoWrite call's `todos` array onto the neutral plan shape.
+function todoPlan(tool: string, input: Json): AgentStreamEvent | null {
+  if (tool !== "TodoWrite" || !Array.isArray(input.todos)) return null;
+  const items = input.todos
+    .map((entry) => {
+      const todo = asRecord(entry);
+      const text = asString(todo?.content) ?? asString(todo?.activeForm) ?? "";
+      if (!text) return null;
+      const status = asString(todo?.status);
+      return {
+        text,
+        status:
+          status === "completed"
+            ? ("completed" as const)
+            : status === "in_progress"
+              ? ("in-progress" as const)
+              : ("pending" as const),
+      };
+    })
+    .filter((item): item is { text: string; status: "pending" | "in-progress" | "completed" } => !!item);
+  return items.length > 0 ? { type: "plan", items } : null;
+}
+
+export function createClaudeAdapter(
+  provider: Provider,
+  stream: ProviderStream,
+): AgentStreamAdapter {
+  return {
+    id: provider.id,
+    spawn: (request: AgentRunRequest): AgentSpawn =>
+      buildAgentSpawn(provider, stream, request),
+    createParser: () => new ClaudeParser(),
+  };
+}

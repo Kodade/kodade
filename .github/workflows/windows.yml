@@ -1,0 +1,214 @@
+name: Windows verification
+
+# Windows is still a development/QA platform rather than a supported public
+# release. Keep the expensive packaging proof manual until its physical QA and
+# signing gates close.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Windows 2025 / MSVC
+    runs-on: windows-2025
+    # 90 (was 60): the voice and KödLocal matrices compile separate ggml
+    # engines, then the NSIS release build compiles whisper.cpp again outside
+    # the short test target dir. A cold Windows runner needs just over an hour.
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Vulkan SDK for KödLocal
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --yes --no-progress
+          $sdk = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) { throw "Vulkan SDK installation did not create C:\VulkanSDK" }
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+        with:
+          version: 11.8.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Rust MSVC
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm exec tsc --noEmit
+
+      - name: Test frontend
+        run: pnpm vitest run
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Build KödLocal CLI resource
+        # Tauri's build script validates every configured resource even during
+        # cargo check/clippy, so the bundled CLI must exist before Rust gates.
+        run: pnpm build:cli
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Lint all Windows Rust targets
+        shell: pwsh
+        run: |
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --no-default-features --features modeld --all-targets -- -D warnings
+
+      - name: Check MSVC targets
+        shell: pwsh
+        run: |
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --no-default-features --features modeld --all-targets
+
+      - name: Test Rust and ConPTY lifecycle
+        # Cap the PATH bloat that broke child command resolution once whisper-rs
+        # linked in (issue #91): cargo prepends every native link-search dir to
+        # PATH for test binaries on Windows, and whisper-rs-sys emits one per
+        # cmake build-tree directory. A short CARGO_TARGET_DIR shrinks each
+        # injected entry, and Ninja flattens the cmake tree so fewer dirs are
+        # emitted, keeping PATH under cmd.exe's ~8 KiB per-variable limit.
+        # Scoped to this step only: the later NSIS/checksum steps read the
+        # default src-tauri/target paths, so this must not be job-wide. Trade-off
+        # is this step rebuilds native deps instead of sharing the rust-cache
+        # target dir.
+        env:
+          CARGO_TARGET_DIR: C:\ct
+          CMAKE_GENERATOR: Ninja
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+      - name: Test KödLocal Rust targets
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --features modeld --lib --bin kodade-modeld --test modeld_http -- --test-threads=1
+
+      - name: Test native browser-child policy lifecycle
+        id: native-tests
+        # Share the ConPTY step's C:\ct build tree: with the default target dir
+        # this step recompiles the whisper.cpp/ggml native deps from scratch
+        # (the rust-cache snapshot predates them) and times out at 5 minutes
+        # before its one test can run.
+        env:
+          CARGO_TARGET_DIR: C:\ct
+          CMAKE_GENERATOR: Ninja
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib browser::platform::windows_smoke::real_webview2_child_enforces_lifecycle_and_remote_ipc_boundary -- --exact --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -Variable testOutput
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          if (($testOutput -join "`n") -notmatch 'test result: ok\. 1 passed; 0 failed;') {
+            throw "The exact native browser-child test did not execute exactly once"
+          }
+
+      - name: Build x64 NSIS installer
+        run: pnpm tauri build --bundles nsis
+
+      - name: Generate release checksum and manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*_x64-setup.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one x64 NSIS installer, found $($installers.Count)"
+          }
+          $metadata = & ./scripts/windows-release-metadata.ps1 `
+            -InstallerPath $installers[0].FullName `
+            -Version $version `
+            -OutputDirectory "src-tauri/target/release/bundle/nsis"
+
+          "KODADE_VERSION=$version" >> $env:GITHUB_ENV
+          "KODADE_INSTALLER=$($metadata.Installer)" >> $env:GITHUB_ENV
+          "KODADE_CHECKSUM=$($metadata.Checksum)" >> $env:GITHUB_ENV
+          "KODADE_MANIFEST=$($metadata.Manifest)" >> $env:GITHUB_ENV
+
+      - name: Run installed Windows release-candidate proof
+        shell: pwsh
+        run: |
+          & ./scripts/windows-rc.ps1 `
+            -InstallerPath $env:KODADE_INSTALLER `
+            -Version $env:KODADE_VERSION
+
+          "### Windows release-candidate proof" >> $env:GITHUB_STEP_SUMMARY
+          "Built and verified ``$(Split-Path $env:KODADE_INSTALLER -Leaf)``." >> $env:GITHUB_STEP_SUMMARY
+          @(
+            "The current-user NSIS package launched twice with WebView2 and exited through a graceful window close.",
+            "Same-version reinstall and uninstall preserved the seeded project path and current-user data.",
+            "An identity-matched msedgewebview2.exe tree exited with the app; native ConPTY tests separately prove session-tree teardown.",
+            "The artifact includes SHA-256 and machine-readable release metadata."
+          ) | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Record human validation boundary
+        if: always()
+        shell: pwsh
+        run: |
+          "### Human Windows 11 validation" >> $env:GITHUB_STEP_SUMMARY
+          "The release app launch exercises Tauri and main-window WebView2 startup." >> $env:GITHUB_STEP_SUMMARY
+          if ("${{ steps.native-tests.outcome }}" -eq "success") {
+            "The Rust suite exercised Kodade's native Wry policy surface with a real Win32 window and child WebView2, proving navigation, bounds, visibility, history, reload, child-HWND destruction, popup/download denial, non-HTTP denial, isolated about:blank/srcdoc frames, and the disabled native IPC boundary." >> $env:GITHUB_STEP_SUMMARY
+          }
+          else {
+            "The native Rust suite did not pass; this run does not provide browser-child proof." >> $env:GITHUB_STEP_SUMMARY
+          }
+          @(
+            "Automation does not claim visible UI interaction, real provider or gh authentication, WebView2 recovery on a missing-runtime host, or signed-package trust.",
+            "Visible interactive browser inspection remains a Windows 11 gate in #70.",
+            "Complete the evidence matrix in ``docs/WINDOWS-QA.md`` before closing #70."
+          ) | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: Upload versioned installer, checksum, and manifest
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: kodade-windows-installer-${{ env.KODADE_VERSION }}-${{ github.run_number }}
+          path: |
+            ${{ env.KODADE_INSTALLER }}
+            ${{ env.KODADE_CHECKSUM }}
+            ${{ env.KODADE_MANIFEST }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unpacked Windows build
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: kodade-windows-unpacked-${{ github.run_number }}
+          path: |
+            dist/
+            src-tauri/target/release/kodade.exe
+            src-tauri/target/release/kodade.pdb
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"019f9d04-d92c-7541-a30f-d41f475ffebf"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I\u2019ll open `note.txt` in the current workspace and report it verbatim."}}
+{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' note.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' note.txt\"","aggregated_output":"hello world\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"`note.txt` contains:\n\n```text\nhello world\n```"}}
+{"type":"turn.completed","usage":{"input_tokens":50074,"cached_input_tokens":24320,"cache_write_input_tokens":0,"output_tokens":118,"reasoning_output_tokens":21}}

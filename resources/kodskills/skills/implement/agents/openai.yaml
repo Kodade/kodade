@@ -1,0 +1,5 @@
+interface:
+  display_name: "Implement"
+  short_description: "Build one ticket through tests, review, and commit"
+policy:
+  allow_implicit_invocation: false

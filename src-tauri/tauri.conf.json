@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "kodade",
+  "version": "1.4.14",
+  "identifier": "com.kodade.desktop",
+  "build": {
+    "features": ["development-features"],
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build && pnpm build:cli && pnpm build:modeld",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ködade",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 940,
+        "minHeight": 560,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "copyright": "Copyright © 2026 Keith Bloemendaal",
+    "category": "DeveloperTool",
+    "shortDescription": "An agentic development environment",
+    "longDescription": "kodade is a custom ADE (Agentic Development Environment) for agentic coding — point agents at a project, watch and steer their work, and ship code.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../dist-cli/kodade-local.mjs": "kodade-local/kodade-local.mjs",
+      "binaries": "kodade-local/bin",
+      "../resources/kodskills": "kodskills"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Ask Kod"
+  short_description: "Route to the right skill or flow for the situation"
+policy:
+  allow_implicit_invocation: false

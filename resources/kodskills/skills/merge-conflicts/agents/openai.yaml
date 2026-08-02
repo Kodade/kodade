@@ -1,0 +1,5 @@
+interface:
+  display_name: "Merge Conflicts"
+  short_description: "Resolve in-progress Git merge or rebase conflicts"
+policy:
+  allow_implicit_invocation: true

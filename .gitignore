@@ -1,0 +1,41 @@
+# OS
+.DS_Store
+
+# env / secrets
+.env
+.env.*
+
+# editors
+.idea/
+.vscode/
+/.codex/
+/.mcp.json
+/.claude/settings.local.json
+/docs/private/
+/docs/research/
+/docs/archive/
+/docs/*_PLAN.md
+/*_PLAN.md
+/artifacts/
+
+# dependencies & build output
+/node_modules
+dist/
+dist-cli/
+build/
+src-tauri/target/
+src-tauri/binaries/
+!src-tauri/binaries/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/kodade-local/
+src-tauri/helpers/
+src-tauri/kodskills/
+src-tauri/legal/
+src-tauri/gen/schemas/
+*.log
+__pycache__/
+.venv/
+
+# agent worktrees and local feedback artifacts stay out of the repo
+.claude/worktrees/

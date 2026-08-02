@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* Semantic color tokens. Each maps a Tailwind color name to a CSS variable the
+   theme applier sets on :root (see src/themes/applier.ts CSS_VARS). Components
+   use `bg-bg`, `text-text`, `border-border`, etc. — never hardcoded zinc-*.
+   Mapping table (Tailwind token -> variable):
+     bg            -> --kd-bg
+     surface       -> --kd-surface
+     surface-hover -> --kd-surface-hover
+     border        -> --kd-border
+     text          -> --kd-text
+     text-dim      -> --kd-text-dim
+     accent        -> --kd-accent
+     accent-text   -> --kd-accent-text
+   Fallbacks keep the app legible before the first applyCssVars() (Ködade Dark). */
+@theme {
+  --color-bg: var(--kd-bg, #26282d);
+  --color-surface: var(--kd-surface, #1e2024);
+  --color-surface-hover: var(--kd-surface-hover, #343841);
+  --color-border: var(--kd-border, #363a42);
+  --color-text: var(--kd-text, #bfc5da);
+  --color-text-dim: var(--kd-text-dim, #8b91a7);
+  --color-accent: var(--kd-accent, #E7A33B);
+  --color-accent-text: var(--kd-accent-text, #1e2024);
+}
+
+/* Session status-dot pulse (DESIGN.md §4.6): a subtle breathing glow on the
+   accent dot while an agent CLI is in the foreground of that session. Defined
+   once here; the sidebar toggles the `.kd-dot-pulse` class off session state.
+   Uses the theme accent so it re-skins with the palette. */
+@keyframes kd-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--kd-accent, #E7A33B);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-accent, #E7A33B) 30%, transparent);
+  }
+}
+.kd-dot-pulse {
+  animation: kd-dot-pulse 1.8s ease-in-out infinite;
+}
+
+/* The mic meter tracks native RMS capture level. Its short transition makes
+   speech legible without turning a functional indicator into decoration. */
+.kd-voice-level {
+  transition: width 80ms linear;
+}
+
+/* Adaptive sidebar cards are allowed to grow from the projection, never from
+   a CSS size animation. Clip long metadata so the full sidebar's narrowest
+   allowed panel stays horizontal-overflow free. */
+.kd-workspace-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Rendered Markdown stays inside this scope so document typography never leaks
+   into the editor chrome. Every color comes from the active semantic theme. */
+.markdown-view {
+  @apply mx-auto w-full max-w-[70ch] px-6 py-8 text-sm leading-7 text-text;
+}
+.markdown-view > :first-child { @apply mt-0; }
+.markdown-view > :last-child { @apply mb-0; }
+.markdown-view h1 { @apply mt-8 mb-4 text-3xl font-semibold leading-tight text-text; }
+.markdown-view h2 { @apply mt-8 mb-3 border-b border-border pb-2 text-2xl font-semibold leading-tight text-text; }
+.markdown-view h3 { @apply mt-6 mb-2 text-xl font-semibold leading-tight text-text; }
+.markdown-view h4,
+.markdown-view h5,
+.markdown-view h6 { @apply mt-5 mb-2 text-base font-semibold text-text; }
+.markdown-view p { @apply my-4; }
+.markdown-view a { @apply text-accent underline underline-offset-2 hover:opacity-80; }
+.markdown-view .markdown-image-link { @apply inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-xs no-underline; }
+.markdown-view ul { @apply my-4 list-disc pl-6; }
+.markdown-view ol { @apply my-4 list-decimal pl-6; }
+.markdown-view li > ul,
+.markdown-view li > ol { @apply my-1; }
+.markdown-view code { @apply rounded bg-surface px-1 py-0.5 font-mono text-[0.85em] text-text; }
+.markdown-view pre { @apply my-4 overflow-x-auto rounded border border-border bg-surface p-4; }
+.markdown-view pre code { @apply bg-transparent p-0; }
+.markdown-view blockquote { @apply my-4 border-l-2 border-border pl-4 text-text-dim; }
+.markdown-view hr { @apply my-8 border-0 border-t border-border; }
+.markdown-view table { @apply my-4 w-full border-collapse text-left; }
+.markdown-view th { @apply border border-border bg-surface px-3 py-2 font-semibold text-text; }
+.markdown-view td { @apply border border-border px-3 py-2 align-top; }
+
+/* KödMem uses the same low-contrast editor chrome, with a small repeated
+   vocabulary for actions and metadata labels. */
+.memory-action {
+  @apply rounded border border-border bg-bg px-2 py-1 text-[11px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50;
+}
+.memory-heading {
+  @apply text-[10px] font-semibold tracking-[0.15em] text-text-dim uppercase;
+}
+.memory-kicker {
+  @apply text-[9px] font-semibold tracking-[0.14em] text-text-dim uppercase;
+}
+.memory-kind {
+  @apply rounded border border-border px-1.5 py-0.5 text-[9px] tracking-wide text-text-dim uppercase;
+}
+
+/* Image transparency gets a quiet, theme-derived checkerboard — no hardcoded color. */
+.document-image-stage {
+  background-color: var(--kd-surface);
+  background-image: conic-gradient(
+    var(--kd-surface-hover) 25%,
+    transparent 0 50%,
+    var(--kd-surface-hover) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}
+/* Respect reduced-motion: no animation, but keep the dot visible (it still
+   signals "running" via presence/color — motion is the only thing dropped). */
+@media (prefers-reduced-motion: reduce) {
+  .kd-workspace-card {
+    transition: none;
+  }
+
+  .kd-dot-pulse {
+    animation: none;
+  }
+  .kd-voice-level {
+    transition: none;
+  }
+}
+
+/* Pre-JS first-frame fallback: a light-system machine gets Ködade Light vars
+   before the theme store's first applyCssVars(), so boot never flashes dark.
+   (An explicit saved dark theme may flash light for one frame instead — the
+   standard trade-off; the applier's inline :root vars override these.) */
+@media (prefers-color-scheme: light) {
+  :root {
+    --kd-bg: #f4f4f6;
+    --kd-surface: #eaebee;
+    --kd-surface-hover: #dfe0e6;
+    --kd-border: #cfd0da;
+    --kd-text: #3d4259;
+    --kd-text-dim: #5f6478;
+    --kd-accent: #9D5729;
+    --kd-accent-text: #f7f7f9;
+  }
+}

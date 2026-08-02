@@ -1,0 +1,27 @@
+# Ködade roadmap
+
+GitHub issues are the source of truth for implementation details and status.
+This file states the public product boundary.
+
+## Supported
+
+- macOS Apple Silicon on macOS 13 or newer
+- KödChat with Claude Code and Codex
+- Native terminals, projects, files, and editor
+- KödMem, KödMCP, KödHarness, and KödSkills
+- Embedded browser and GitHub desktop panes
+
+## In development
+
+- Windows packaging, signing, and platform QA
+- KödLocal local-model workflows
+- KödWhisper local voice workflows
+- KödSSH and Remote projects
+
+Development features are compiled out of public release builds until they are
+ready to support. Their presence in source is not a support promise.
+
+## Not in the current product
+
+Ködade is a native desktop application. A hosted browser application is not
+part of this repository or the current product direction.

@@ -1,0 +1,176 @@
+[package]
+name = "kodade"
+version = "1.4.14"
+description = "A custom agentic development environment"
+authors = ["Keith Bloemendaal"]
+license = "Apache-2.0"
+homepage = "https://kodade.com"
+repository = "https://github.com/Kodade/kodade"
+publish = false
+edition = "2021"
+# The Tauri bundler needs the app binary named explicitly because this crate
+# also ships standalone local helpers.
+default-run = "kodade"
+
+[features]
+default = ["voice"]
+# Voice and KödLocal both vendor ggml through separate upstream crates. MSVC
+# cannot link both copies into one binary, so keep each native subsystem behind
+# its own feature and build/test the matrices independently.
+voice = ["dep:whisper-rs"]
+# Public builds omit this feature. Development builds enable it through the
+# Tauri config so unfinished product surfaces fail closed at native IPC too.
+development-features = []
+# Native GGUF inference is opt-in so ordinary Ködade app builds never compile llama.cpp.
+modeld = ["dep:encoding_rs", "dep:llama-cpp-2", "dep:llama-cpp-sys-2"]
+# Windows release builds opt into Vulkan explicitly. Keeping it out of `modeld`
+# makes that feature a genuine CPU-only variant with no Vulkan loader linkage.
+modeld-vulkan = ["modeld", "llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]
+
+[lib]
+name = "kodade_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "kodade"
+path = "src/main.rs"
+required-features = ["voice"]
+
+# Fixed-root native tool host used by the KödLocal agent loop.
+[[bin]]
+name = "kodade-tool-host"
+path = "src/bin/tool_host.rs"
+required-features = ["development-features"]
+
+# The KödMem MCP adapter (M8d/M8e). This is a standalone stdio server so
+# agents can use the same local memory database while the desktop app is closed.
+[[bin]]
+name = "kodade-mcp"
+path = "src/bin/mcp.rs"
+
+# The shared KödLocal inference daemon. The native engine is deliberately absent
+# from default app builds; opt in with `--features modeld`.
+[[bin]]
+name = "kodade-modeld"
+path = "src/bin/modeld.rs"
+required-features = ["modeld", "development-features"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2.7.1"
+portable-pty = "0.9.0"
+base64 = "0.22.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+# KödMem needs one cross-process SQLite implementation. Bundling SQLite keeps
+# WAL and FTS5 behavior identical on supported macOS and Windows releases.
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Recovery must serialize across independently opened app/MCP processes, not
+# only clones in one process. fs2 provides that small cross-platform file lock.
+fs2 = "0.4.3"
+# recursive fs watching for the file-tree pane (debounced change events)
+notify = "8"
+# recoverable "delete" — moves to the OS trash (macOS NSFileManager / XDG /
+# Recycle Bin) instead of an unrecoverable rm. Standard cross-platform crate.
+trash = "5"
+url = "2"
+# --- KodWhisper voice engine (M9b) ---
+cpal = "0.16"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+ringbuf = "0.4.8"
+rubato = "0.16.2"
+
+# sha-256 for the harness config-write optimistic-concurrency check (config_write
+# rejects a stale write when on-disk bytes changed under the editor). Already
+# vendored transitively in Cargo.lock; sha2 is the standard, well-audited hash
+# crate — cheaper and safer than hand-rolling SHA-256.
+sha2 = "0.10"
+
+# KödLocal's model daemon and the internal browser bridge share the async HTTP
+# stack. These dependencies are kept out of product logic and bound to loopback.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["cors"] }
+# OS entropy for local capability tokens.
+getrandom = "0.2"
+
+# --- KödMCP stdio adapter (M8d/M8e, `kodade-mcp` binary only) ---
+# Official MCP Rust SDK pinned at the protocol gate used by KödMCP. The
+# minimal feature set provides the server model and stdio transport only.
+rmcp = { version = "=3.0.1", default-features = false, features = ["server", "transport-io"] }
+# Exact, auditable matching for the MCP-only secret rejection contract.
+regex = "1"
+# NFKC closes Unicode-width and compatibility bypasses before secret matching;
+# the original user text remains untouched for accepted writes.
+unicode-normalization = "0.1"
+# Incremental UTF-8 decoding for llama.cpp token pieces; native-engine-only.
+encoding_rs = { version = "=0.8.35", optional = true }
+
+# process-group signaling for PTY teardown (unix only; Windows uses the portable killer)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Direct Win32 file operations plus kill-on-close process trees and descendant
+# inspection for ConPTY sessions.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+] }
+
+# Build the browser child directly through Tauri's Wry runtime. Tauri-managed
+# WebviewBuilder instances receive the app IPC bridge. Both desktop targets use
+# the same pinned Wry API; the Apple bindings additionally remove Wry's inert
+# shim before navigation and install Kodade's guard.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+wry = "=0.55.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Wry exposes the WebView2 instance, but its cross-platform navigation handler
+# covers only the main document. Use the matching COM bindings to gate frames
+# and to drive native back/forward history without evaluating remote scripts.
+webview2-com = "=0.38.2"
+whisper-rs = { version = "0.16", optional = true, default-features = false }
+# `modeld` is the no-loader CPU build. `modeld-vulkan` adds the Vulkan backend
+# through crate features for the GPU artifact; CUDA remains intentionally absent.
+llama-cpp-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common", "sampler"] }
+llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "WKUserContentController", "WKUserScript"] }
+whisper-rs = { version = "0.16", optional = true, default-features = false, features = ["metal"] }
+# 0.1.151 vendors llama.cpp 9e3b928, after the cycle-detection/iterative GBNF fix for CVE-2026-2069.
+llama-cpp-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common", "sampler", "metal"] }
+llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common", "metal"] }
+
+[target.'cfg(all(not(target_os = "macos"), not(target_os = "windows")))'.dependencies]
+# Keep the cross-platform GGUF seam pinned with the safe bindings and matching vendored sys crate.
+llama-cpp-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common", "sampler"] }
+llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common"] }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+# ServiceExt drives the loopback HTTP handlers in memory during tests.
+tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+# The browser smoke needs a real Win32 parent window and message loop. Tauri
+# already resolves this Tao release through its Wry runtime, so this adds no
+# second windowing stack to production builds.
+tao = "=0.35.3"
+# Inspect the actual Wry child HWND before and after WebView drop. This matches
+# the Windows crate release already used by Wry/WebView2 and remains test-only.
+windows = { version = "=0.61.3", features = ["Win32_UI_WindowsAndMessaging"] }

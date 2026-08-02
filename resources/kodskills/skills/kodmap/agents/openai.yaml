@@ -1,0 +1,5 @@
+interface:
+  display_name: "Kodmap"
+  short_description: "Map multi-session work through one decision ticket at a time"
+policy:
+  allow_implicit_invocation: false

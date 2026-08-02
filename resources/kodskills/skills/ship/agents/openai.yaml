@@ -1,0 +1,5 @@
+interface:
+  display_name: "Ship"
+  short_description: "Run the final gates before calling work complete"
+policy:
+  allow_implicit_invocation: false

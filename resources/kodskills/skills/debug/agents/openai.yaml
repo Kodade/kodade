@@ -1,0 +1,5 @@
+interface:
+  display_name: "Debug"
+  short_description: "Diagnose bugs with a tight evidence loop"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Test-Driven Development"
+  short_description: "Build one behavior at a time with test-first proof"
+policy:
+  allow_implicit_invocation: true

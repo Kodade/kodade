@@ -1,0 +1,5 @@
+interface:
+  display_name: "Unslop"
+  short_description: "Audit AI slop and architectural drift into ranked cleanup work"
+policy:
+  allow_implicit_invocation: false
