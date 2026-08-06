@@ -47,7 +47,10 @@ describe("TerminalPane splits", () => {
     container = null;
   });
 
-  async function renderPane({ selectChat = false } = {}) {
+  async function renderPane({
+    selectChat = false,
+    workspaceTerminal = false,
+  } = {}) {
     const terminalRegistry = fakeTerminalRegistry();
     const projectsStore = createProjectsStore({
       storage: new MockStorage(),
@@ -59,8 +62,19 @@ describe("TerminalPane splits", () => {
     });
     await projectsStore.getState().hydrate();
     await projectsStore.getState().addProject("/repo");
-    const initialTerminalId = projectsStore.getState().sessions[0].id;
-    if (selectChat) {
+    let initialTerminalId = projectsStore.getState().sessions[0].id;
+    let workspaceId: string | undefined;
+    if (workspaceTerminal) {
+      await projectsStore.getState().closeSession(initialTerminalId);
+      const projectId = projectsStore.getState().projects[0].id;
+      workspaceId = projectsStore
+        .getState()
+        .addChatThread(projectId, "claude")!;
+      initialTerminalId = projectsStore
+        .getState()
+        .addTerminal(projectId, workspaceId)!;
+      projectsStore.getState().setActiveSession(projectId, workspaceId);
+    } else if (selectChat) {
       projectsStore
         .getState()
         .addChatThread(projectsStore.getState().projects[0].id, "claude");
@@ -74,6 +88,7 @@ describe("TerminalPane splits", () => {
           projectsStore={projectsStore}
           terminalRegistry={terminalRegistry}
           voiceControls={null}
+          workspaceId={workspaceId}
         />,
       ),
     );
@@ -173,6 +188,29 @@ describe("TerminalPane splits", () => {
         `[data-terminal-leaf-id="${initialTerminalId}"]`,
       ),
     ).not.toBeNull();
+  });
+
+  it("keeps a chat-owned terminal scoped and the thread selected when split", async () => {
+    const { projectsStore, terminalRegistry, initialTerminalId } =
+      await renderPane({ workspaceTerminal: true });
+    const state = projectsStore.getState();
+    const projectId = state.projects[0].id;
+    const threadId = state.sessions.find((session) => session.kind === "chat")!.id;
+    const first = state.sessions.find((session) => session.id === initialTerminalId)!;
+    const split = container!.querySelector<HTMLButtonElement>(
+      `button[aria-label="Split terminal ${first.name} vertically"]`,
+    );
+
+    await act(async () => split?.click());
+
+    const next = projectsStore.getState();
+    const terminals = next.sessions.filter((session) => session.kind !== "chat");
+    expect(terminals).toHaveLength(2);
+    expect(terminals.every((session) => session.workspaceId === threadId)).toBe(true);
+    expect(next.activeSessionByProject[projectId]).toBe(threadId);
+    expect(terminalRegistry.sync.mock.calls.at(-1)?.[1]).toEqual(
+      terminals.map((session) => session.id),
+    );
   });
 
   it("splits only the active leaf inside an existing split", async () => {

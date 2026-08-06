@@ -5,14 +5,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "../../markdown/render";
+import { rawAllowedAnchorHref } from "../../markdown/links";
 import type { ChatEntry, ChatThread } from "../../chat/model";
 import type { ToolOutcome } from "../../local/tools";
 
 export function ChatTranscript({
   thread,
+  onOpenLink,
   onOpenLoginTerminal,
 }: {
   thread: ChatThread;
+  onOpenLink(url: string): void;
   onOpenLoginTerminal(): void;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -47,6 +50,7 @@ export function ChatTranscript({
         <TranscriptEntry
           key={entry.id}
           entry={entry}
+          onOpenLink={onOpenLink}
           onOpenLoginTerminal={onOpenLoginTerminal}
         />
       ))}
@@ -57,9 +61,11 @@ export function ChatTranscript({
 
 function TranscriptEntry({
   entry,
+  onOpenLink,
   onOpenLoginTerminal,
 }: {
   entry: ChatEntry;
+  onOpenLink(url: string): void;
   onOpenLoginTerminal(): void;
 }) {
   if (entry.kind === "message") {
@@ -77,6 +83,15 @@ function TranscriptEntry({
         data-chat-role="assistant"
         data-streaming={entry.streaming ? "true" : undefined}
         className="markdown-view max-w-none text-sm text-text"
+        onClick={(event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const link = target.closest<HTMLAnchorElement>("a");
+          if (!link) return;
+          event.preventDefault();
+          const href = rawAllowedAnchorHref(link);
+          if (href) onOpenLink(href);
+        }}
         // Sanitized by renderMarkdown (markdown-it with html:false, then
         // DOMPurify) — the same boundary the editor preview uses.
         dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.text) }}

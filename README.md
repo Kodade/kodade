@@ -26,15 +26,16 @@ Windows support is under active development; Linux is planned.
 ## What Ködade does
 
 - **KödChat** provides a chat-first interface for Claude Code and Codex through
-  their official CLIs.
+  their official CLIs, with a project terminal split that stays attached to the
+  current thread.
 - **Real terminals** use your login shell, PATH, authentication, configuration,
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.
 - **KödMem and KödMCP** preserve local project context in readable files and a
   searchable local index.
 - **KödHarness and KödSkills** make agent instructions and skills inspectable.
-- **Browser and GitHub panes** keep previews and repository context in the
-  desktop workspace.
+- **Browser and GitHub panes** keep previews, assistant links, and repository
+  context in editor tabs without replacing the desktop workspace.
 
 Ködade does not proxy model traffic, hold provider credentials, or bill for
 tokens. You install and authenticate the agent CLIs you want to use.

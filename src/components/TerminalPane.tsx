@@ -4,7 +4,12 @@ import type { StoreApi } from "zustand/vanilla";
 import { Pane } from "./Pane";
 import { KodadeMark, KodadeWordmark } from "./KodadeBrand";
 import { appStore, registry, voiceStore } from "../store/appStore";
-import { isChatSession, type ProjectsState, type RegistryLike } from "../store/projects";
+import {
+  isChatSession,
+  type ProjectsState,
+  type RegistryLike,
+  type SessionMeta,
+} from "../store/projects";
 import { clearTerminalDropTarget, setTerminalDropTarget } from "../terminal/drop-target";
 import { VoiceControls } from "../voice/VoiceControls";
 import { RELEASE_MANIFEST } from "../release/manifest";
@@ -37,10 +42,12 @@ export function TerminalPane({
   projectsStore = appStore,
   terminalRegistry = registry,
   voiceControls,
+  workspaceId,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   terminalRegistry?: TerminalDisplayRegistry;
   voiceControls?: ReactNode;
+  workspaceId?: string;
 }) {
   const hostsRef = useRef<HTMLDivElement>(null);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
@@ -52,17 +59,26 @@ export function TerminalPane({
   );
   const selectedSession =
     sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const [embeddedSessionId, setEmbeddedSessionId] = useState<string | null>(null);
   const latestProjectTerminalId =
     sessions
       .filter(
-        (session) =>
-          session.projectId === activeProjectId && !isChatSession(session),
+        (session) => terminalInScope(session, activeProjectId, workspaceId),
       )
       .at(-1)?.id ?? null;
   const activeSessionId =
-    selectedSession && !isChatSession(selectedSession)
-      ? selectedSessionId
-      : latestProjectTerminalId;
+    workspaceId
+      ? embeddedSessionId &&
+        sessions.some(
+          (session) =>
+            session.id === embeddedSessionId &&
+            terminalInScope(session, activeProjectId, workspaceId),
+        )
+        ? embeddedSessionId
+        : latestProjectTerminalId
+      : selectedSession && !isChatSession(selectedSession)
+        ? selectedSessionId
+        : latestProjectTerminalId;
   const activeSession =
     sessions.find((session) => session.id === activeSessionId) ?? null;
   const hasProject = activeProjectId !== null;
@@ -78,12 +94,11 @@ export function TerminalPane({
       new Set(
         sessions
           .filter(
-            (session) =>
-              session.projectId === activeProjectId && !isChatSession(session),
+            (session) => terminalInScope(session, activeProjectId, workspaceId),
           )
           .map((session) => session.id),
       ),
-    [activeProjectId, sessions],
+    [activeProjectId, sessions, workspaceId],
   );
   const displayedTree = useMemo(
     () =>
@@ -129,9 +144,10 @@ export function TerminalPane({
   useEffect(() => {
     setLayoutTree(activeSessionId ? terminalLeaf(activeSessionId) : null);
     setMaximizedSessionId(null);
+    setEmbeddedSessionId(null);
     // activeSessionId is intentionally read only at the project boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId]);
+  }, [activeProjectId, workspaceId]);
 
   // Sidebar selection focuses an existing split leaf. Selecting a different
   // workspace starts that workspace in one-pane view; its other shells keep
@@ -195,6 +211,10 @@ export function TerminalPane({
 
   const focusTerminal = (sessionId: string) => {
     if (!activeProjectId || !projectSessionIds.has(sessionId)) return;
+    if (workspaceId) {
+      setEmbeddedSessionId(sessionId);
+      return;
+    }
     projectsStore.getState().setActiveSession(activeProjectId, sessionId);
   };
 
@@ -207,10 +227,14 @@ export function TerminalPane({
     if (!projectId) return;
     const current = state.sessions.find((session) => session.id === sessionId);
     if (!current || current.projectId !== projectId) return;
-    const workspaceId = current.workspaceId ?? current.id;
+    const terminalWorkspaceId = current.workspaceId ?? current.id;
     focusTerminal(sessionId);
-    const newId = state.addTerminal(projectId, workspaceId);
+    const newId = state.addTerminal(projectId, terminalWorkspaceId);
     if (!newId) return;
+    if (workspaceId) {
+      setEmbeddedSessionId(newId);
+      projectsStore.getState().setActiveSession(projectId, workspaceId);
+    }
     const currentTree = treeSessionIds.includes(sessionId)
       ? displayedTree
       : terminalLeaf(sessionId);
@@ -238,6 +262,20 @@ export function TerminalPane({
       current === sessionId ? null : current,
     );
     void state.closeSession(sessionId).then(() => {
+      if (
+        projectId &&
+        workspaceId &&
+        projectsStore
+          .getState()
+          .sessions.some(
+            (session) =>
+              session.projectId === projectId && session.id === workspaceId,
+          )
+      ) {
+        setEmbeddedSessionId(nextFocusedId);
+        projectsStore.getState().setActiveSession(projectId, workspaceId);
+        return;
+      }
       if (
         projectId &&
         nextFocusedId &&
@@ -330,7 +368,18 @@ export function TerminalPane({
                   aria-label="New terminal"
                   onClick={() => {
                     if (!activeProjectId) return;
-                    projectsStore.getState().addSession(activeProjectId);
+                    if (!workspaceId) {
+                      projectsStore.getState().addSession(activeProjectId);
+                      return;
+                    }
+                    const newId = projectsStore
+                      .getState()
+                      .addTerminal(activeProjectId, workspaceId);
+                    if (!newId) return;
+                    setEmbeddedSessionId(newId);
+                    projectsStore
+                      .getState()
+                      .setActiveSession(activeProjectId, workspaceId);
                   }}
                   className="rounded border border-border px-3 py-1.5 text-xs text-text hover:bg-surface-hover focus:outline-none focus:ring-1 focus:ring-accent"
                 >
@@ -348,6 +397,18 @@ export function TerminalPane({
         </div>
       </div>
     </Pane>
+  );
+}
+
+function terminalInScope(
+  session: SessionMeta,
+  projectId: string | null,
+  workspaceId?: string,
+): boolean {
+  return (
+    session.projectId === projectId &&
+    !isChatSession(session) &&
+    (!workspaceId || session.workspaceId === workspaceId)
   );
 }
 

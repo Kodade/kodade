@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed KödChat terminals so Show terminal immediately opens a thread-owned
+  split without replacing the chat or adding a workspace card.
+- Opened assistant links in the editor's browser tab instead of navigating the
+  entire app window away from Ködade.
 - Removed the retired hosted browser application, pairing/service code, and
   deployment configuration from the desktop source tree.
 - Decoupled KödLocal tools from the retired server through a fixed-root native
