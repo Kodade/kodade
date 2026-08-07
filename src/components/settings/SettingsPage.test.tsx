@@ -95,7 +95,6 @@ describe("settings page", () => {
       "ködwhisper",
       "ködssh",
       "keybindings",
-      "account",
     ]) {
       expect(navLink(label)).not.toBeUndefined();
     }
@@ -382,14 +381,14 @@ describe("settings page", () => {
   });
 
   it("hides restore defaults for sections with nothing to reset", async () => {
-    settingsViewStore.setState({ section: "account" });
+    settingsViewStore.setState({ section: "keybindings" });
     await render(<SettingsPage />);
 
     const restore = Array.from(
       container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
     ).find((button) => button.textContent === "Restore defaults");
     expect(restore).toBeUndefined();
-    expect(container?.textContent).toContain("license");
+    expect(container?.textContent).toContain("shortcut");
   });
 
   it("keeps launchable agent status in the providers section", async () => {
