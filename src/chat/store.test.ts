@@ -105,6 +105,19 @@ describe("a turn", () => {
     expect(store.getState().threads.t1.model).toBeNull();
   });
 
+  it("spawns with the thread's chosen thinking level", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await openThread(store);
+    store.getState().setThinking("t1", "high");
+    await store.getState().send("t1", "go");
+
+    expect(agent.starts[0].args.join(" ")).toContain("--effort high");
+    // Switching provider forgets the level too — another CLI has its own list.
+    store.getState().setProvider("t1", "codex");
+    expect(store.getState().threads.t1.thinking).toBeNull();
+  });
+
   it("renders the claude stream into user, thinking, tool and assistant entries", async () => {
     const { agent, store } = setup();
     await store.getState().start();
@@ -309,6 +322,31 @@ describe("transcript persistence", () => {
     expect(reopened.getState().threads.t1.entries).toEqual(doc.entries);
     expect(reopened.getState().threads.t1.title).toBe("read note.txt");
     expect(reopened.getState().threads.t1.resumeId).toBe(doc.resumeId);
+  });
+
+  it("round-trips the thread's thinking level through its document", async () => {
+    const { storage, store } = setup();
+    await openThread(store);
+    store.getState().setThinking("t1", "xhigh");
+    await store.getState().flush("t1");
+
+    const doc = parsePersistedThread(storage.docs.get(chatDocName("t1"))!)!;
+    expect(doc.thinking).toBe("xhigh");
+
+    const reopened = createChatStore({
+      agent: new MockAgentIpc(),
+      storage,
+      projectRoot: () => "/repo",
+    });
+    await reopened.getState().openThread("t1", "p1", "claude");
+    expect(reopened.getState().threads.t1.thinking).toBe("xhigh");
+
+    // A document from before thinking levels existed parses to the default.
+    expect(
+      parsePersistedThread(
+        JSON.stringify({ version: 1, id: "t9", projectId: "p1", entries: [] }),
+      )!.thinking,
+    ).toBeNull();
   });
 
   it("survives a corrupt or foreign-version document", async () => {

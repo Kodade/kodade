@@ -70,6 +70,8 @@ export type ChatState = {
   // The thread's model pick (null = the CLI's default) and permission posture.
   setModel(threadId: string, model: string | null): void;
   setAccess(threadId: string, access: ChatAccessLevel): void;
+  // The thread's thinking level (null = the CLI's default effort).
+  setThinking(threadId: string, thinking: string | null): void;
   // Send one user message and run a turn. Resolves once the run has STARTED —
   // the answer arrives through the event stream.
   send(threadId: string, text: string): Promise<void>;
@@ -389,6 +391,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           resumeId: doc.resumeId,
           model: doc.model,
           access: doc.access,
+          thinking: doc.thinking,
           entries: doc.entries,
         }));
       },
@@ -398,9 +401,10 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           thread.providerId === providerId
             ? thread
             : // A different CLI cannot resume the previous one's session (or
-              // run its models), so switching provider starts a fresh
-              // conversation on that CLI while keeping the readable transcript.
-              { ...thread, providerId, resumeId: null, model: null },
+              // run its models or thinking levels), so switching provider
+              // starts a fresh conversation on that CLI while keeping the
+              // readable transcript.
+              { ...thread, providerId, resumeId: null, model: null, thinking: null },
         );
         persistDebounced(threadId);
       },
@@ -415,6 +419,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       setAccess(threadId: string, access: ChatAccessLevel) {
         patch(threadId, (thread) =>
           thread.access === access ? thread : { ...thread, access },
+        );
+        persistDebounced(threadId);
+      },
+
+      setThinking(threadId: string, thinking: string | null) {
+        patch(threadId, (thread) =>
+          thread.thinking === thinking ? thread : { ...thread, thinking },
         );
         persistDebounced(threadId);
       },
@@ -473,6 +484,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           resumeId: thread.resumeId,
           model: thread.model,
           access: thread.access,
+          thinking: thread.thinking,
         });
         const process = remoteTarget
           ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)

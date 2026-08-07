@@ -125,6 +125,7 @@ export function ChatPane({
                 providerId={thread.providerId}
                 model={thread.model}
                 access={thread.access}
+                thinking={thread.thinking}
                 attachments={attachments}
                 working={thread.status === "working"}
                 onProviderChange={(id) =>
@@ -135,6 +136,9 @@ export function ChatPane({
                 }
                 onAccessChange={(access) =>
                   chatThreadsStore.getState().setAccess(thread.id, access)
+                }
+                onThinkingChange={(thinking) =>
+                  chatThreadsStore.getState().setThinking(thread.id, thinking)
                 }
                 onRemoveAttachment={(path) =>
                   setAttachments((current) => current.filter((entry) => entry !== path))
