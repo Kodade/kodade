@@ -564,7 +564,7 @@ describe("settings page", () => {
 
   it("ignores a provider KödChat cannot drive", async () => {
     appStore.setState({ chatProvider: "claude" });
-    appStore.getState().setChatProvider("grok");
+    appStore.getState().setChatProvider("ollama");
     // Rejected: the preference can never leave the composer unusable.
     expect(appStore.getState().chatProvider).toBe("claude");
   });
