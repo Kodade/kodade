@@ -11,7 +11,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { appStore, chatStore, themeStore } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
-import type { ChatThread } from "../../chat/model";
+import { DEFAULT_TITLE, type ChatThread } from "../../chat/model";
 import type { ProjectsState, SessionMeta } from "../../store/projects";
 import { isChatSession } from "../../store/projects";
 import { ProjectColorChoices } from "../workspace/ProjectColorChoices";
@@ -260,9 +260,16 @@ export function ChatThreadRow({
   onClose(): void;
 }) {
   const state = threadState(thread);
-  // Before a thread's transcript loads, its session name ("claude 1") is the
-  // best label we have; the title takes over once it's read.
-  const label = thread && thread.entries.length > 0 ? thread.title : session.name;
+  // A renamed session (manual, or the auto-title push after the first turn)
+  // always shows its name. Otherwise the loaded title takes over once the
+  // thread has messages, and an empty thread reads "New chat" — never the
+  // provider-numbered session name ("claude 1"), which only exists so the
+  // provider can be inferred before the transcript loads.
+  const label = session.nameLocked
+    ? session.name
+    : thread && thread.entries.length > 0
+      ? thread.title
+      : DEFAULT_TITLE;
   return (
     <li className="group/thread relative">
       <button

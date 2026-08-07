@@ -92,15 +92,39 @@ export function chatDocName(threadId: string): string {
 // document without limit.
 export const MAX_THREAD_ENTRIES = 2_000;
 
-const DEFAULT_TITLE = "New chat";
+// What an empty thread is called everywhere a title renders (sidebar, header).
+export const DEFAULT_TITLE = "New chat";
 
-// Threads are named from their first user message — the same convention every
-// chat surface uses, and better than "Chat 3" for finding one again later.
+// Filler dropped when distilling a prompt into a topic: politeness, pronouns,
+// auxiliaries, articles, prepositions, and request verbs that carry no topic
+// ("help", "fix", "make sure"). Content verbs ("explain", "add") are kept.
+const TITLE_STOPWORDS = new Set([
+  "a", "an", "the", "this", "that", "these", "those", "there", "here",
+  "i", "me", "my", "we", "us", "our", "you", "your", "it", "its",
+  "is", "are", "was", "were", "be", "been", "am", "do", "does", "did",
+  "have", "has", "had", "can", "could", "would", "should", "will",
+  "shall", "may", "might", "must", "to", "of", "in", "on", "at", "for",
+  "with", "from", "about", "into", "and", "or", "but", "so", "if",
+  "then", "how", "what", "when", "where", "why", "who", "which",
+  "please", "help", "want", "need", "like", "just", "some", "any",
+  "get", "got", "let", "lets", "make", "sure", "fix", "try", "trying",
+  "hi", "hey", "hello", "thanks", "thank", "ok", "okay",
+]);
+
+// Threads are auto-titled from their first user message: a short 2–3 word
+// topic rather than the raw line, and never a provider-numbered name.
+// Falls back to DEFAULT_TITLE when nothing meaningful remains.
 export function titleFromMessage(text: string): string {
   const line = text.trim().split(/\r?\n/).find((entry) => entry.trim().length > 0) ?? "";
-  const cleaned = line.trim().replace(/\s+/g, " ");
-  if (!cleaned) return DEFAULT_TITLE;
-  return cleaned.length > 60 ? `${cleaned.slice(0, 57)}…` : cleaned;
+  const words = line
+    .replace(/[`*_~#>\[\]|(){}"]/g, " ") // markdown decoration → spaces
+    .split(/\s+/)
+    // Trim leading/trailing punctuation but keep internal chars ("note.txt").
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter((word) => word.length > 0 && !TITLE_STOPWORDS.has(word.toLowerCase()));
+  const title = words.slice(0, 3).join(" ");
+  if (!title) return DEFAULT_TITLE;
+  return title.length > 60 ? `${title.slice(0, 57)}…` : title;
 }
 
 export function newThread(

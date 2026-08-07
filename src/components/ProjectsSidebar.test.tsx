@@ -246,7 +246,8 @@ describe("ProjectsSidebar adaptive workspace seam", () => {
     await act(async () => root?.render(<ProjectsSidebar />));
 
     const close = container?.querySelector<HTMLButtonElement>(
-      'button[aria-label="Close chat claude 1"]',
+      // An empty thread is labelled "New chat", never "claude 1" (issue #6).
+      'button[aria-label="Close chat New chat"]',
     );
     expect(close).not.toBeNull();
     await act(async () => close?.click());

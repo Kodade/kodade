@@ -2,7 +2,7 @@
 // privacy boundary. Driven with the real adapters against the real IPC mocks —
 // only the process is fake.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockAgentIpc, MockStorage } from "../ipc/mock";
 import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN } from "../agents/fixtures";
 import { chatDocName, parsePersistedThread, titleFromMessage } from "./model";
@@ -166,10 +166,10 @@ describe("a turn", () => {
     await store.getState().start();
     await openThread(store);
     await store.getState().send("t1", "Explain the terminal registry\nand its hosts");
-    expect(store.getState().threads.t1.title).toBe("Explain the terminal registry");
+    expect(store.getState().threads.t1.title).toBe("Explain terminal registry");
     agent.exit("t1#1", 0);
-    await store.getState().send("t1", "now do something else");
-    expect(store.getState().threads.t1.title).toBe("Explain the terminal registry");
+    await store.getState().send("t1", "now describe something else");
+    expect(store.getState().threads.t1.title).toBe("Explain terminal registry");
   });
 
   it("ignores an empty message and refuses a second concurrent turn", async () => {
@@ -396,12 +396,32 @@ describe("switching provider", () => {
 });
 
 describe("thread titles", () => {
-  beforeEach(() => undefined);
+  it("distills the first line into a short 2-3 word topic", () => {
+    expect(
+      titleFromMessage("Please can you help me fix the login form validation?"),
+    ).toBe("login form validation");
+    expect(titleFromMessage("How do I add dark mode to the settings pane?")).toBe(
+      "add dark mode",
+    );
+    // Original casing is preserved; only filler ("the") is dropped.
+    expect(titleFromMessage("Explain the terminal registry")).toBe(
+      "Explain terminal registry",
+    );
+    expect(titleFromMessage("read note.txt")).toBe("read note.txt");
+  });
 
-  it("collapses whitespace and truncates long first messages", () => {
-    expect(titleFromMessage("   hello    world  ")).toBe("hello world");
+  it("strips markdown decoration and edge punctuation", () => {
+    expect(titleFromMessage("## Fix the `parser` bug!")).toBe("parser bug");
+    expect(titleFromMessage("   hello    world  ")).toBe("world");
+  });
+
+  it("falls back to New chat when nothing meaningful remains", () => {
     expect(titleFromMessage("")).toBe("New chat");
     expect(titleFromMessage("\n\n")).toBe("New chat");
+    expect(titleFromMessage("hi there, can you please help me?")).toBe("New chat");
+  });
+
+  it("caps a runaway single word defensively", () => {
     expect(titleFromMessage("x".repeat(100))).toHaveLength(58); // 57 + ellipsis
   });
 });

@@ -529,7 +529,10 @@ describe("RemoteHostsSection", () => {
       remote: true,
     });
     expect(projectsStore.getState().activeProjectId).toBe(projectId);
-    expect(container!.textContent).toContain("claude 1");
+    // The session keeps its provider-numbered name (asserted above), but the
+    // sidebar shows an empty thread as "New chat" (issue #6).
+    expect(container!.textContent).toContain("New chat");
+    expect(container!.textContent).not.toContain("claude 1");
   });
 
   it("sidebar mode keeps project actions project-like and opens a clean nested terminal", async () => {
