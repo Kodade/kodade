@@ -14,7 +14,7 @@ body:
     attributes:
       label: Ködade version
       description: Find this under Ködade → About Ködade.
-      placeholder: 1.4.14
+      placeholder: 1.4.15
     validations:
       required: true
   - type: dropdown

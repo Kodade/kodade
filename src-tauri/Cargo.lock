@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "kodade"
-version = "1.4.14"
+version = "1.4.15"
 dependencies = [
  "axum",
  "base64 0.22.1",

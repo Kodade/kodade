@@ -16,18 +16,18 @@
 
 ## Status
 
-Ködade 1.4.14 is the first public macOS Apple Silicon release. It is Developer
-ID signed, Apple-notarized, and Gatekeeper-verified. Download it from the
-[Releases page](https://github.com/Kodade/kodade/releases/tag/v1.4.14).
+Ködade 1.4.15 is the current public macOS Apple Silicon release. It is
+Developer ID signed, Apple-notarized, and Gatekeeper-verified. Download it from
+the [Releases page](https://github.com/Kodade/kodade/releases/tag/v1.4.15).
 
 The supported package targets **Apple Silicon Macs running macOS 13 or newer**.
 Windows support is under active development; Linux is planned.
 
 ## What Ködade does
 
-- **KödChat** provides a chat-first interface for Claude Code and Codex through
-  their official CLIs, with a project terminal split that stays attached to the
-  current thread.
+- **KödChat** provides a chat-first interface for Claude Code, Codex, and Grok
+  Build through their official CLIs, with a project terminal split that stays
+  attached to the current thread.
 - **Real terminals** use your login shell, PATH, authentication, configuration,
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.
