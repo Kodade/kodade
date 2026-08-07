@@ -4,6 +4,7 @@ import { filesStore } from "../store/appStore";
 import { filterMatches, type FileEdit } from "../store/files";
 import type { DirEntry } from "../ipc/contract";
 import { FileIcon, iconCategoryFor } from "../icons/file-icons";
+import { FilesPaneToggle } from "./FilesPaneToggle";
 import { canRevealInOs, capabilitiesStore } from "../platform/capabilities";
 import { REVEAL_IN_FILE_MANAGER_LABEL } from "../platform/guidance";
 
@@ -75,6 +76,10 @@ export function FileTreePane() {
         >
           <IconCollapse />
         </ToolbarButton>
+        {/* Pane collapse control stays at the right edge (issue #8). */}
+        <span className="ml-auto">
+          <FilesPaneToggle collapsed={false} />
+        </span>
       </header>
 
       {opError && (

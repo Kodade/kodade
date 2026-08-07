@@ -76,4 +76,40 @@ describe("WorkspaceFilesPane", () => {
     expect(opened).toEqual([{ host: "box", path: "/srv/app/README.md" }]);
     expect(container!.textContent).not.toContain("No project selected");
   });
+
+  it("collapses to a rail with an expand affordance and reopens (issue #8)", async () => {
+    const projectsStore = createProjectsStore({
+      storage: new MockStorage(),
+      registry: {
+        open: () => undefined,
+        close: async () => undefined,
+        write: () => undefined,
+      },
+      newId: () => "id-1",
+    });
+    await projectsStore.getState().hydrate();
+    projectsStore.getState().setFilesCollapsed(true);
+
+    await act(async () =>
+      root?.render(<WorkspaceFilesPane projectsStore={projectsStore} />),
+    );
+    await flush();
+
+    // Collapsed: no tree, just the rail with the expand button.
+    expect(container!.textContent).not.toContain("No project selected");
+    const expand = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand files sidebar"]',
+    );
+    expect(expand).toBeTruthy();
+    expect(expand!.getAttribute("aria-pressed")).toBe("true");
+
+    // Clicking the affordance expands the pane again.
+    await act(async () => expand!.click());
+    await flush();
+    expect(projectsStore.getState().filesCollapsed).toBe(false);
+    const collapse = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse files sidebar"]',
+    );
+    expect(collapse).toBeTruthy();
+  });
 });

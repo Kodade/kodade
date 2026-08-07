@@ -182,6 +182,9 @@ export type PersistedDoc = {
   // Optional and additive (still STORAGE_VERSION 1): projects sidebar density.
   // Missing or invalid values retain the first-run full sidebar.
   sidebarMode?: SidebarMode;
+  // Optional and additive (still STORAGE_VERSION 1): whether the right files
+  // pane is collapsed to its narrow rail. Missing or invalid stays expanded.
+  filesCollapsed?: boolean;
   // Optional and additive (still STORAGE_VERSION 1): per-project ordered tab
   // encodings. Legacy values are unchanged file paths; non-file tabs reserve
   // prefixes such as `github:`.
@@ -261,6 +264,7 @@ export type ProjectsState = {
   theme: string; // app-level theme selection ("system" or a theme id)
   chatProvider: string; // provider id new KödChat threads start on
   sidebarMode: SidebarMode; // full project/session list, or compact icon rail
+  filesCollapsed: boolean; // right files pane collapsed to its narrow rail
   openTabs: Record<string, string[]>; // per-project encoded editor tabs
   voicePreferences: VoicePreferences; // app-level KödWhisper preferences
   localModelPreferences: LocalModelPreferences;
@@ -307,6 +311,9 @@ export type ProjectsState = {
   setChatProvider(providerId: string): void;
   setSidebarMode(mode: SidebarMode): void;
   toggleSidebarMode(): void;
+  // Collapse/expand the right files pane to/from its narrow rail (issue #8).
+  setFilesCollapsed(collapsed: boolean): void;
+  toggleFilesPanel(): void;
   // Set a picked palette id, or null to return to deterministic auto-color.
   setProjectColor(projectId: string, colorId: string | null): void;
   // Record a project's open editor tabs (v1.1) and persist (debounced, like
@@ -620,6 +627,7 @@ export function createProjectsStore(deps: StoreDeps) {
           theme,
           chatProvider,
           sidebarMode,
+          filesCollapsed,
           openTabs,
           voicePreferences,
           localModelPreferences,
@@ -650,6 +658,7 @@ export function createProjectsStore(deps: StoreDeps) {
           theme,
           chatProvider,
           sidebarMode,
+          filesCollapsed,
           openTabs,
           voice: voicePreferences,
           local: localModelPreferences,
@@ -797,6 +806,7 @@ export function createProjectsStore(deps: StoreDeps) {
       theme: "system", // system-following by default (resolved by the theme store)
       chatProvider: DEFAULT_CHAT_PROVIDER,
       sidebarMode: "full",
+      filesCollapsed: false, // files pane starts expanded
       openTabs: {}, // per-project open editor tabs (v1.1)
       voicePreferences: DEFAULT_VOICE_PREFERENCES,
       localModelPreferences: DEFAULT_LOCAL_MODEL_PREFERENCES,
@@ -1005,6 +1015,10 @@ export function createProjectsStore(deps: StoreDeps) {
                 : s.sidebarMode;
               const sidebarMode =
                 s.sidebarMode !== "full" ? s.sidebarMode : docSidebarMode;
+              // Files pane collapse follows the sidebar rule: a pre-hydration
+              // toggle wins; anything but `true` on disk stays expanded.
+              const filesCollapsed =
+                s.filesCollapsed || doc.filesCollapsed === true;
               // Same pre-hydration rule as theme: a choice already made in this
               // session outranks the stale document. An unknown id (a provider
               // that lost its adapter) falls back to the default.
@@ -1053,6 +1067,7 @@ export function createProjectsStore(deps: StoreDeps) {
                 theme,
                 chatProvider,
                 sidebarMode,
+                filesCollapsed,
                 openTabs,
                 voicePreferences,
                 localModelPreferences,
@@ -1565,6 +1580,20 @@ export function createProjectsStore(deps: StoreDeps) {
 
       toggleSidebarMode() {
         get().setSidebarMode(get().sidebarMode === "full" ? "rail" : "full");
+      },
+
+      setFilesCollapsed(filesCollapsed: boolean) {
+        if (get().filesCollapsed === filesCollapsed) return;
+        set({ filesCollapsed });
+        // Same rule as setSidebarMode: never persist before hydration settles.
+        void (async () => {
+          await hydrationSettled();
+          await persist();
+        })();
+      },
+
+      toggleFilesPanel() {
+        get().setFilesCollapsed(!get().filesCollapsed);
       },
 
       setProjectColor(projectId: string, colorId: string | null) {

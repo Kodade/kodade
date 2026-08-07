@@ -529,6 +529,7 @@ export function installAppShortcuts(): () => void {
   return installShortcuts({
     actions: {
       toggleSidebar: () => appStore.getState().toggleSidebarMode(),
+      toggleFiles: () => appStore.getState().toggleFilesPanel(),
       newSession: () => {
         const projectId = appStore.getState().activeProjectId;
         if (projectId) appStore.getState().addSession(projectId);

@@ -13,6 +13,7 @@ import type { RemoteTarget } from "../ssh/model";
 import { entitlements as defaultEntitlements, type Entitlements } from "../app/entitlements";
 import type { StoreApi } from "zustand/vanilla";
 import { FileIcon, iconCategoryFor } from "../icons/file-icons";
+import { FilesPaneToggle } from "./FilesPaneToggle";
 
 export function RemoteFilesPane({
   host,
@@ -73,6 +74,8 @@ export function RemoteFilesPane({
         >
           ↻
         </button>
+        {/* Pane collapse control stays at the right edge (issue #8). */}
+        <FilesPaneToggle collapsed={false} />
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto">

@@ -15,6 +15,7 @@ import {
 
 export type ActionId =
   | "toggle-sidebar"
+  | "toggle-files"
   | "new-session"
   | "save-file"
   | "next-session"
@@ -31,6 +32,7 @@ export type ActionId =
 // appStore, fakes in tests) so no shortcut logic imports a live store.
 export type ShortcutActions = {
   toggleSidebar(): void; // switch between the full projects list and icon rail
+  toggleFiles(): void; // collapse/expand the right files pane
   newSession(): void; // open a new terminal in the active project
   saveFile(): void; // save the editor's open file
   nextSession(): void; // switch to the next session in the active project
@@ -66,6 +68,12 @@ const ALL_BINDINGS: Binding[] = [
     combo: "Mod-b",
     description: "Toggle projects sidebar",
     run: (a) => a.toggleSidebar(),
+  },
+  {
+    id: "toggle-files",
+    combo: "Mod-Shift-b",
+    description: "Toggle files sidebar",
+    run: (a) => a.toggleFiles(),
   },
   {
     id: "new-session",

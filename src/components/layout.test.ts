@@ -9,6 +9,7 @@ import {
   shouldPersistLayout,
   sizesToExpandedSidebarLayout,
   sizesToLayout,
+  sizesToRestoredLayout,
 } from "./layout";
 
 describe("layout helpers", () => {
@@ -53,6 +54,11 @@ describe("layout helpers", () => {
     expect(shouldPersistLayout(true, "rail")).toBe(false);
   });
 
+  it("never persists layout changes while the files pane rail is active", () => {
+    expect(shouldPersistLayout(true, "full", true)).toBe(false);
+    expect(shouldPersistLayout(true, "full", false)).toBe(true);
+  });
+
   it("restores a visible sidebar when expanding from a persisted collapsed layout", () => {
     expect(sizesToExpandedSidebarLayout([0, 54, 16, 30])).toEqual({
       sidebar: 14,
@@ -69,5 +75,29 @@ describe("layout helpers", () => {
       files: 16,
       editor: 28,
     });
+  });
+
+  it("restores a visible files pane when expanding from a persisted zero", () => {
+    // Persisted order: [sidebar, terminal, files, editor]; files default = 16.
+    const layout = sizesToRestoredLayout([14, 56, 0, 30], ["files"]);
+    expect(layout.files).toBe(DEFAULT_SIZES[2]);
+    expect(
+      Object.values(layout).reduce((total, size) => total + size, 0),
+    ).toBeCloseTo(100, 1);
+  });
+
+  it("restores both the sidebar and files pane from persisted zeros", () => {
+    const layout = sizesToRestoredLayout([0, 70, 0, 30], ["sidebar", "files"]);
+    expect(layout.sidebar).toBe(DEFAULT_SIZES[0]);
+    expect(layout.files).toBe(DEFAULT_SIZES[2]);
+    expect(
+      Object.values(layout).reduce((total, size) => total + size, 0),
+    ).toBeCloseTo(100, 1);
+  });
+
+  it("leaves visible panels untouched when nothing needs restoring", () => {
+    expect(sizesToRestoredLayout([12, 44, 16, 28], ["sidebar", "files"])).toEqual(
+      { sidebar: 12, terminal: 44, files: 16, editor: 28 },
+    );
   });
 });

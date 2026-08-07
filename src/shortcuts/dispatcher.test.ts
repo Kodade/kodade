@@ -23,6 +23,7 @@ afterEach(() => {
 function fakeActions() {
   return {
     toggleSidebar: vi.fn(),
+    toggleFiles: vi.fn(),
     newSession: vi.fn(),
     saveFile: vi.fn(),
     nextSession: vi.fn(),

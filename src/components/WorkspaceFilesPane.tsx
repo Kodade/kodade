@@ -13,6 +13,7 @@ import {
   type Entitlements,
 } from "../app/entitlements";
 import { FileTreePane } from "./FileTreePane";
+import { FilesPaneToggle } from "./FilesPaneToggle";
 import { RemoteFilesPane } from "./RemoteFilesPane";
 import { RELEASE_MANIFEST } from "../release/manifest";
 
@@ -39,9 +40,26 @@ export function WorkspaceFilesPane({
     projectsStore,
     (state) => state.remoteTargets,
   );
+  const filesCollapsed = useStore(
+    projectsStore,
+    (state) => state.filesCollapsed,
+  );
   const target = RELEASE_MANIFEST.features.ssh && activeProjectId
     ? remoteTargetForProjectId(remoteTargets, activeProjectId)
     : null;
+
+  // Collapsed (issue #8): the pane is a fixed 44px rail — just the re-open
+  // affordance at the top, mirroring the projects sidebar's rail mode.
+  if (filesCollapsed) {
+    return (
+      <section
+        aria-label="Files sidebar (collapsed)"
+        className="flex h-full flex-col items-center bg-surface pt-1.5"
+      >
+        <FilesPaneToggle collapsed store={projectsStore} />
+      </section>
+    );
+  }
 
   if (!target) return <FileTreePane />;
   return (
