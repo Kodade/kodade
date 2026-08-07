@@ -226,6 +226,42 @@ describe("projects store", () => {
     });
   });
 
+  it("persists the files pane collapse across a restart", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage);
+    first.store.getState().toggleFilesPanel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
+      filesCollapsed: true,
+    });
+
+    const second = makeStore(storage);
+    await second.store.getState().hydrate();
+    expect(second.store.getState().filesCollapsed).toBe(true);
+
+    // Toggling back persists the expanded state too.
+    second.store.getState().toggleFilesPanel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
+      filesCollapsed: false,
+    });
+  });
+
+  it("hydrate ignores a non-boolean files pane collapse value", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      filesCollapsed: "yes",
+    });
+
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+    expect(store.getState().filesCollapsed).toBe(false);
+  });
+
   it("hydrate ignores an invalid sidebar mode", async () => {
     const storage = new MockStorage();
     storage.doc = JSON.stringify({

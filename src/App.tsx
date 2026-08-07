@@ -17,8 +17,9 @@ import { WorkspaceFilesPane } from "./components/WorkspaceFilesPane";
 import {
   layoutToSizes,
   shouldPersistLayout,
-  sizesToExpandedSidebarLayout,
   sizesToLayout,
+  sizesToRestoredLayout,
+  type PanelId,
 } from "./components/layout";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { appStore, initApp, sshStore } from "./store/appStore";
@@ -51,42 +52,46 @@ export default function App() {
 
   const activeProjectId = useStore(appStore, (s) => s.activeProjectId);
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
+  const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
   const settingsOpen = useStore(settingsViewStore, (s) => s.section !== null);
   const groupRef = useRef<GroupImperativeHandle | null>(null);
   const sidebarRef = usePanelRef();
+  const filesRef = usePanelRef();
 
   // Apply the active project's saved sizes imperatively on project switch and
-  // sidebar-mode changes. In rail mode the panel's 44px constraints win; the
-  // saved full layout is reapplied untouched when those constraints lift.
-  // Deliberately NOT a keyed remount: the terminal hosts live outside React
-  // in the session registry, and remounting the group would reparent live
-  // xterm canvases mid-session (a WKWebView/WebGL hazard).
+  // rail-mode changes (sidebar and files pane). In rail mode a panel's 44px
+  // constraints win; the saved full layout is reapplied untouched when those
+  // constraints lift. Deliberately NOT a keyed remount: the terminal hosts
+  // live outside React in the session registry, and remounting the group
+  // would reparent live xterm canvases mid-session (a WKWebView/WebGL hazard).
   useEffect(() => {
     const saved = activeProjectId
       ? appStore.getState().layouts[activeProjectId]
       : undefined;
-    const target =
-      sidebarMode === "full"
-        ? sizesToExpandedSidebarLayout(saved)
-        : sizesToLayout(saved);
+    const expand: PanelId[] = [];
+    if (sidebarMode === "full") expand.push("sidebar");
+    if (!filesCollapsed) expand.push("files");
+    const target = sizesToRestoredLayout(saved, expand);
     groupRef.current?.setLayout(target);
 
-    // react-resizable-panels reconciles the rail's old fixed 44px constraint
+    // react-resizable-panels reconciles a rail's old fixed 44px constraint
     // after this parent effect. Reassert the full size on the next frame, once
-    // the constraint is gone, or a saved/collapsed sidebar can remain at 0.
-    if (sidebarMode !== "full") return;
+    // the constraint is gone, or a saved/collapsed panel can remain at 0.
+    if (sidebarMode !== "full" && filesCollapsed) return;
     const frame = requestAnimationFrame(() => {
       groupRef.current?.setLayout(target);
-      sidebarRef.current?.resize(`${target.sidebar}%`);
+      if (sidebarMode === "full") sidebarRef.current?.resize(`${target.sidebar}%`);
+      if (!filesCollapsed) filesRef.current?.resize(`${target.files}%`);
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeProjectId, sidebarMode]);
+  }, [activeProjectId, sidebarMode, filesCollapsed]);
 
   // Persist only user-driven changes (drag/keyboard). Programmatic setLayout
   // (the effect above) and initial mount report isUserInteraction=false, so
   // restoring a layout never re-persists it.
   const onLayoutChanged = (layout: Layout, meta: LayoutChangedMeta) => {
-    if (!shouldPersistLayout(meta.isUserInteraction, sidebarMode)) return;
+    if (!shouldPersistLayout(meta.isUserInteraction, sidebarMode, filesCollapsed))
+      return;
     const projectId = appStore.getState().activeProjectId;
     if (!projectId) return;
     appStore.getState().setLayout(projectId, layoutToSizes(layout));
@@ -139,8 +144,22 @@ export default function App() {
             <Panel id="editor" minSize="12%" collapsible collapsedSize={0}>
               <EditorPane />
             </Panel>
-            <Separator className={SEP} />
-            <Panel id="files" minSize="10%" collapsible collapsedSize={0}>
+            <Separator
+              className={SEP}
+              disabled={filesCollapsed}
+              disableDoubleClick={filesCollapsed}
+            />
+            {/* Files mirrors the sidebar's rail treatment (issue #8): collapsed
+                is a fixed 44px rail holding the re-open affordance, never 0. */}
+            <Panel
+              panelRef={filesRef}
+              id="files"
+              minSize={filesCollapsed ? 44 : "10%"}
+              maxSize={filesCollapsed ? 44 : undefined}
+              disabled={filesCollapsed}
+              collapsible={!filesCollapsed}
+              collapsedSize={filesCollapsed ? undefined : 0}
+            >
               <WorkspaceFilesPane />
             </Panel>
           </Group>

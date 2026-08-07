@@ -18,13 +18,15 @@ export const DEFAULT_SIZES: number[] = [14, 40, 16, 30];
 // react-resizable-panels Layout: { panelId: percentage }.
 export type Layout = Record<string, number>;
 
-// Rail sizing is intentionally temporary: only a user resize in the full
-// sidebar should become that project's remembered layout.
+// Rail sizing is intentionally temporary: only a user resize with the full
+// sidebar AND an expanded files pane should become that project's remembered
+// layout — a fixed 44px rail width must never be recorded as a real size.
 export function shouldPersistLayout(
   isUserInteraction: boolean,
   sidebarMode: "full" | "rail",
+  filesCollapsed = false,
 ): boolean {
-  return isUserInteraction && sidebarMode === "full";
+  return isUserInteraction && sidebarMode === "full" && !filesCollapsed;
 }
 
 // Persisted array (panel order) -> Layout map for `defaultLayout`. Falls back
@@ -41,30 +43,44 @@ export function sizesToLayout(sizes: number[] | undefined): Layout {
   return layout;
 }
 
-// A user can collapse the full sidebar to 0 with the panel handle. The compact
-// rail still has a fixed width, but returning to full mode must not reapply the
-// saved zero and strand the sidebar off-screen. Restore its default share and
-// proportionally shrink the other panes so the layout still totals 100.
-export function sizesToExpandedSidebarLayout(
+// A user can collapse a panel to 0 with the drag handle. The compact rails
+// still have a fixed width, but returning to the expanded state must not
+// reapply the saved zero and strand the panel off-screen. Restore each
+// expanded-but-zero panel's default share and proportionally shrink the other
+// panes so the layout still totals 100.
+export function sizesToRestoredLayout(
   sizes: number[] | undefined,
+  expandIds: readonly PanelId[],
 ): Layout {
   const layout = sizesToLayout(sizes);
-  if (layout.sidebar > 0) return layout;
+  const restore = expandIds.filter((id) => layout[id] <= 0);
+  if (restore.length === 0) return layout;
 
-  const sidebar = DEFAULT_SIZES[0];
-  const remaining = PANEL_IDS.slice(1).reduce(
+  const restoredTotal = restore.reduce(
+    (total, id) => total + DEFAULT_SIZES[PERSISTED_PANEL_IDS.indexOf(id)],
+    0,
+  );
+  const remaining = PANEL_IDS.filter((id) => !restore.includes(id)).reduce(
     (total, id) => total + layout[id],
     0,
   );
   if (remaining <= 0) return sizesToLayout(undefined);
 
-  const scale = (100 - sidebar) / remaining;
-  return {
-    sidebar,
-    terminal: roundLayoutSize(layout.terminal * scale),
-    editor: roundLayoutSize(layout.editor * scale),
-    files: roundLayoutSize(layout.files * scale),
-  };
+  const scale = (100 - restoredTotal) / remaining;
+  const restored: Layout = {};
+  PANEL_IDS.forEach((id) => {
+    restored[id] = restore.includes(id)
+      ? DEFAULT_SIZES[PERSISTED_PANEL_IDS.indexOf(id)]
+      : roundLayoutSize(layout[id] * scale);
+  });
+  return restored;
+}
+
+// Back-compat wrapper: restore only the sidebar (pre-files-toggle behavior).
+export function sizesToExpandedSidebarLayout(
+  sizes: number[] | undefined,
+): Layout {
+  return sizesToRestoredLayout(sizes, ["sidebar"]);
 }
 
 function roundLayoutSize(value: number): number {
