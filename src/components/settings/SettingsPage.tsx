@@ -136,7 +136,7 @@ function SectionLink({
 }
 
 // Two-step reset for the ACTIVE section only. Sections with nothing meaningful
-// to reset (providers, ködharness, ködssh, keybindings, account) declare no
+// to reset (providers, ködharness, ködssh, keybindings) declare no
 // restoreDefaults and get no button at all.
 function RestoreDefaults({ section }: { section: SettingsSection }) {
   const [confirming, setConfirming] = useState(false);

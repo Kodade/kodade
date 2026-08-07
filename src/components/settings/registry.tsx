@@ -13,7 +13,6 @@ import { appStore, themeStore } from "../../store/appStore";
 import { DEFAULT_CHAT_PROVIDER } from "../../store/projects";
 import { DEFAULT_LOCAL_MODEL_PREFERENCES } from "../../local/models";
 import { DEFAULT_VOICE_PREFERENCES } from "../../voice/models";
-import { AccountSection } from "./AccountSection";
 import { ChatSection } from "./ChatSection";
 import { GeneralSection } from "./GeneralSection";
 import { HarnessSection } from "./HarnessSection";
@@ -24,7 +23,6 @@ import { ProvidersSection } from "./ProvidersSection";
 import { SshSection } from "./SshSection";
 import { VoiceSection } from "./VoiceSection";
 import {
-  AccountIcon,
   ChatIcon,
   ChipIcon,
   HarnessGlyph,
@@ -130,13 +128,6 @@ export const SETTINGS_SECTIONS = [
     description: "Every shortcut Ködade handles.",
     icon: KeyboardIcon,
     Content: KeybindingsSection,
-  },
-  {
-    id: "account",
-    label: "account",
-    description: "Your plan and license on this device.",
-    icon: AccountIcon,
-    Content: AccountSection,
   },
 ] as const satisfies readonly SettingsSection[];
 

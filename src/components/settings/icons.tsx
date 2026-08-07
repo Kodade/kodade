@@ -120,11 +120,3 @@ export function KeyboardIcon() {
   );
 }
 
-export function AccountIcon() {
-  return (
-    <Icon>
-      <circle cx="8" cy="6" r="2.5" />
-      <path d="M3.5 13c.75-2.25 2.4-3.5 4.5-3.5s3.75 1.25 4.5 3.5" />
-    </Icon>
-  );
-}
