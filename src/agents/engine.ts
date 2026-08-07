@@ -1,12 +1,18 @@
 // Shared machinery every stream adapter reuses, so each dialect file stays a
 // thin map from "what this CLI prints" to the normalized event union.
 
-import { DEFAULT_ACCESS_LEVEL, type Provider, type ProviderStream } from "../providers/catalog";
+import {
+  DEFAULT_ACCESS_LEVEL,
+  thinkingLevelsFor,
+  type Provider,
+  type ProviderStream,
+} from "../providers/catalog";
 import type { AgentRunRequest, AgentSpawn, AgentStreamEvent } from "./contract";
 
 // Substituted into a provider's `stream` argv templates at spawn time.
 const SESSION_TOKEN = "{session}";
 const MODEL_TOKEN = "{model}";
+const LEVEL_TOKEN = "{level}";
 
 // Build one run's argv from the catalog's `stream` block. Order is load-bearing
 // for subcommand CLIs: base options first, then the model, then the resume
@@ -21,6 +27,21 @@ export function buildAgentArgs(
   const args = [...stream.args, ...stream.accessArgs[request.access ?? DEFAULT_ACCESS_LEVEL]];
   if (request.model && stream.modelArgs) {
     args.push(...stream.modelArgs.map((arg) => arg.replace(MODEL_TOKEN, request.model!)));
+  }
+  // Thinking args are exec options too, so they must precede resumeArgs. A
+  // level the current model doesn't offer (stale after a model switch, or a
+  // hand-edited document) is dropped rather than handed to a CLI that would
+  // reject the whole run.
+  if (
+    request.thinking &&
+    stream.thinkingArgs &&
+    thinkingLevelsFor(stream, request.model ?? null).some(
+      (level) => level.id === request.thinking,
+    )
+  ) {
+    args.push(
+      ...stream.thinkingArgs.map((arg) => arg.replace(LEVEL_TOKEN, request.thinking!)),
+    );
   }
   if (request.resumeId && stream.resumeArgs) {
     args.push(

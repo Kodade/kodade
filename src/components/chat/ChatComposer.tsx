@@ -1,14 +1,14 @@
 // The composer: prompt box, attachments, and the per-thread run controls —
-// provider, model, and access level — styled like a chat app, not a CLI
-// (t3-style): one rounded input surface, chip menus with brand logos, and a
-// round send button.
+// provider, model, access level, and thinking level — styled like a chat app,
+// not a CLI (t3-style): one rounded input surface with a round send button,
+// and the chip menus in a row beneath it.
 //
 // Enter sends, Shift+Enter starts a new line — the convention every chat
 // surface uses, and the one thing users try first.
 
 import { useState, type KeyboardEvent } from "react";
 import type { ChatAccessLevel, Provider } from "../../providers/catalog";
-import { ACCESS_LEVELS, supportsChat } from "../../providers/catalog";
+import { ACCESS_LEVELS, supportsChat, thinkingLevelsFor } from "../../providers/catalog";
 import { ComposerMenu } from "./ComposerMenu";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -17,12 +17,14 @@ export function ChatComposer({
   providerId,
   model,
   access,
+  thinking,
   attachments,
   working,
   disabled,
   onProviderChange,
   onModelChange,
   onAccessChange,
+  onThinkingChange,
   onRemoveAttachment,
   onSend,
   onCancel,
@@ -31,12 +33,14 @@ export function ChatComposer({
   providerId: string;
   model: string | null;
   access: ChatAccessLevel;
+  thinking: string | null;
   attachments: string[];
   working: boolean;
   disabled?: boolean;
   onProviderChange(providerId: string): void;
   onModelChange(model: string | null): void;
   onAccessChange(access: ChatAccessLevel): void;
+  onThinkingChange(thinking: string | null): void;
   onRemoveAttachment(path: string): void;
   onSend(text: string): void;
   onCancel(): void;
@@ -45,6 +49,9 @@ export function ChatComposer({
   const selected = providers.find((provider) => provider.id === providerId);
   const chatCapable = selected ? supportsChat(selected) : false;
   const models = selected?.stream?.models ?? [];
+  // Empty when this provider/model has no verified thinking flag — the pill
+  // simply doesn't render then.
+  const thinkingLevels = chatCapable ? thinkingLevelsFor(selected?.stream, model) : [];
   const canSend =
     !working &&
     !disabled &&
@@ -67,6 +74,10 @@ export function ChatComposer({
   // "" is the menu id for "let the CLI pick" — a null model on the thread.
   const modelLabel =
     models.find((entry) => entry.id === model)?.label ?? "Default model";
+  // Null (or a level the current model no longer offers) shows the neutral
+  // chip label; engine.buildAgentArgs drops a stale level the same way.
+  const thinkingLabel =
+    thinkingLevels.find((level) => level.id === thinking)?.label ?? "Thinking";
 
   return (
     <div className="shrink-0 border-t border-border bg-bg px-3 py-3">
@@ -112,54 +123,6 @@ export function ChatComposer({
           className="w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-sm text-text placeholder:text-text-dim focus:outline-none disabled:opacity-50"
         />
         <div className="flex items-center gap-1.5 px-2 pb-2">
-          <ComposerMenu
-            label="Provider"
-            value={providerId}
-            onSelect={onProviderChange}
-            options={providers.map((provider) => ({
-              id: provider.id,
-              label: provider.name,
-              icon: <ProviderLogo providerId={provider.id} size={20} />,
-              disabled: !supportsChat(provider),
-              disabledHint: `${provider.name} is terminal-only for now`,
-              description: supportsChat(provider) ? undefined : "terminal only",
-            }))}
-          >
-            <ProviderLogo providerId={providerId} size={18} />
-            <span className="max-w-[130px] truncate">
-              {selected?.name ?? providerId}
-            </span>
-          </ComposerMenu>
-          {chatCapable && models.length > 0 && (
-            <ComposerMenu
-              label="Model"
-              value={model ?? ""}
-              onSelect={(id) => onModelChange(id || null)}
-              options={[
-                { id: "", label: "Default model" },
-                ...models.map((entry) => ({ id: entry.id, label: entry.label })),
-              ]}
-              menuWidthClass="min-w-[190px]"
-            >
-              <span className="max-w-[150px] truncate">{modelLabel}</span>
-            </ComposerMenu>
-          )}
-          {chatCapable && (
-            <ComposerMenu
-              label="Access level"
-              value={access}
-              onSelect={(id) => onAccessChange(id as ChatAccessLevel)}
-              options={ACCESS_LEVELS.map((level) => ({
-                id: level.id,
-                label: level.label,
-                description: level.description,
-              }))}
-              menuWidthClass="min-w-[260px]"
-            >
-              <AccessGlyph access={access} />
-              <span>{accessLevel?.label}</span>
-            </ComposerMenu>
-          )}
           {working && (
             <span
               data-testid="chat-working"
@@ -209,6 +172,72 @@ export function ChatComposer({
             </button>
           )}
         </div>
+      </div>
+      {/* Run controls live BELOW the input surface (issue #7): still part of
+          the composer block, but outside the rounded border. */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <ComposerMenu
+          label="Provider"
+          value={providerId}
+          onSelect={onProviderChange}
+          options={providers.map((provider) => ({
+            id: provider.id,
+            label: provider.name,
+            icon: <ProviderLogo providerId={provider.id} size={20} />,
+            disabled: !supportsChat(provider),
+            disabledHint: `${provider.name} is terminal-only for now`,
+            description: supportsChat(provider) ? undefined : "terminal only",
+          }))}
+        >
+          <ProviderLogo providerId={providerId} size={18} />
+          <span className="max-w-[130px] truncate">
+            {selected?.name ?? providerId}
+          </span>
+        </ComposerMenu>
+        {chatCapable && models.length > 0 && (
+          <ComposerMenu
+            label="Model"
+            value={model ?? ""}
+            onSelect={(id) => onModelChange(id || null)}
+            options={[
+              { id: "", label: "Default model" },
+              ...models.map((entry) => ({ id: entry.id, label: entry.label })),
+            ]}
+            menuWidthClass="min-w-[190px]"
+          >
+            <span className="max-w-[150px] truncate">{modelLabel}</span>
+          </ComposerMenu>
+        )}
+        {chatCapable && (
+          <ComposerMenu
+            label="Access level"
+            value={access}
+            onSelect={(id) => onAccessChange(id as ChatAccessLevel)}
+            options={ACCESS_LEVELS.map((level) => ({
+              id: level.id,
+              label: level.label,
+              description: level.description,
+            }))}
+            menuWidthClass="min-w-[260px]"
+          >
+            <AccessGlyph access={access} />
+            <span>{accessLevel?.label}</span>
+          </ComposerMenu>
+        )}
+        {thinkingLevels.length > 0 && (
+          <ComposerMenu
+            label="Thinking level"
+            value={thinking ?? ""}
+            onSelect={(id) => onThinkingChange(id || null)}
+            options={[
+              { id: "", label: "Default", description: "Let the CLI pick its effort." },
+              ...thinkingLevels.map((level) => ({ id: level.id, label: level.label })),
+            ]}
+            menuWidthClass="min-w-[170px]"
+          >
+            <span>{thinkingLabel}</span>
+          </ComposerMenu>
+        )}
       </div>
     </div>
   );

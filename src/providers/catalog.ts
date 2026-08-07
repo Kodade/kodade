@@ -23,6 +23,10 @@ import {
 // Each level maps to the CLI's own real flags in `accessArgs`.
 export type ChatAccessLevel = "plan" | "standard" | "full";
 
+// One thinking/reasoning-effort level a CLI accepts. `id` is the CLI's own
+// token; `label` is the composer's display text.
+export type ThinkingLevel = { id: string; label: string };
+
 export type ProviderStream = {
   // Which parser in src/agents/ reads this CLI's output.
   dialect: "claude" | "codex";
@@ -31,13 +35,21 @@ export type ProviderStream = {
   // Per-access-level argv, appended right after `args`.
   accessArgs: Record<ChatAccessLevel, readonly string[]>;
   // Appended to resume a prior thread. Order matters for subcommand CLIs:
-  // these land AFTER the base and model args (see engine.buildAgentArgs).
+  // these land AFTER the base, model, and thinking args (see
+  // engine.buildAgentArgs).
   resumeArgs?: readonly string[];
   // Appended when the user picked a model.
   modelArgs?: readonly string[];
+  // Appended when the user picked a thinking level ({level} substituted).
+  // Omit for a CLI with no verified per-invocation flag — the composer then
+  // never shows the thinking pill.
+  thinkingArgs?: readonly string[];
+  // Levels every model of this CLI accepts. A model entry may override with
+  // its own list (see thinkingLevelsFor).
+  thinkingLevels?: readonly ThinkingLevel[];
   // Models the composer offers. Omit when the CLI's current model names
   // aren't verified — the picker then shows only "Default".
-  models?: readonly { id: string; label: string }[];
+  models?: readonly { id: string; label: string; thinkingLevels?: readonly ThinkingLevel[] }[];
 };
 
 export const DEFAULT_ACCESS_LEVEL: ChatAccessLevel = "standard";
@@ -83,6 +95,31 @@ export type Provider = {
   // installed on the remote host as `kodade-local` to launch there.
   remote?: { bin: string; launch: string };
 };
+
+// Codex model-registry level lists (see the codex catalog entry's comment).
+const CODEX_LEVELS_THROUGH_MAX: readonly ThinkingLevel[] = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "xhigh", label: "XHigh" },
+  { id: "max", label: "Max" },
+];
+const CODEX_LEVELS_THROUGH_ULTRA: readonly ThinkingLevel[] = [
+  ...CODEX_LEVELS_THROUGH_MAX,
+  { id: "ultra", label: "Ultra" },
+];
+
+// The thinking levels the composer offers for one provider/model pick: the
+// model's own list when it has one, else the provider-wide list, else none —
+// an empty result hides the pill entirely.
+export function thinkingLevelsFor(
+  stream: ProviderStream | undefined,
+  modelId: string | null,
+): readonly ThinkingLevel[] {
+  if (!stream?.thinkingArgs) return [];
+  const model = modelId ? stream.models?.find((entry) => entry.id === modelId) : undefined;
+  return model?.thinkingLevels ?? stream.thinkingLevels ?? [];
+}
 
 // Codex, OpenCode's project file, and KödLocal all treat AGENTS.md as the
 // project instruction artifact. KödLocal intentionally follows Codex's global
@@ -158,6 +195,17 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["--resume", "{session}"],
       modelArgs: ["--model", "{model}"],
+      // Verified against claude 2.1.223 `--help`: "--effort <level>  Effort
+      // level for the current session (low, medium, high, xhigh, max)". The
+      // flag is session-wide, so every model offers the same list.
+      thinkingArgs: ["--effort", "{level}"],
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "xhigh", label: "XHigh" },
+        { id: "max", label: "Max" },
+      ],
       models: [
         { id: "claude-fable-5", label: "Fable 5" },
         { id: "claude-opus-5", label: "Opus 5" },
@@ -225,13 +273,27 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["resume", "{session}", "-"],
       modelArgs: ["--model", "{model}"],
+      // Codex has no dedicated effort flag; `-c <key=value>` config overrides
+      // are the documented mechanism (codex 0.146.1 `exec --help`), and
+      // `model_reasoning_effort` is the documented key. A bare value that
+      // isn't TOML is used as a literal string per the same help text.
+      thinkingArgs: ["-c", "model_reasoning_effort={level}"],
+      // Every model in the registry accepts at least these four; models that
+      // go higher say so on their own entry below.
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "xhigh", label: "XHigh" },
+      ],
       // Verified against the installed CLI's own model registry
-      // (~/.codex/models_cache.json, codex 0.145.0, fetched 2026-07-26) —
-      // slugs and display names verbatim, in the CLI's priority order.
+      // (~/.codex/models_cache.json, codex 0.146.1, checked 2026-08-07) —
+      // slugs, display names, and each model's supported_reasoning_levels
+      // verbatim, in the CLI's priority order.
       models: [
-        { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
-        { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" },
-        { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
+        { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", thinkingLevels: CODEX_LEVELS_THROUGH_ULTRA },
+        { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", thinkingLevels: CODEX_LEVELS_THROUGH_ULTRA },
+        { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", thinkingLevels: CODEX_LEVELS_THROUGH_MAX },
         { id: "gpt-5.5", label: "GPT-5.5" },
         { id: "gpt-5.4", label: "GPT-5.4" },
         { id: "gpt-5.4-mini", label: "GPT-5.4-Mini" },

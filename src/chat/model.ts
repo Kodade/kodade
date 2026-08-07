@@ -57,6 +57,8 @@ export type ChatThread = {
   model: string | null;
   // Permission posture each turn spawns with (see catalog.ACCESS_LEVELS).
   access: ChatAccessLevel;
+  // Thinking level id (catalog thinkingLevels); null runs the CLI's default.
+  thinking: string | null;
   status: ChatThreadStatus;
   // Set when the last run failed on authentication, so the pane can keep
   // offering the login terminal after the run settles.
@@ -77,6 +79,7 @@ export type PersistedChatThread = {
   resumeId: string | null;
   model: string | null;
   access: ChatAccessLevel;
+  thinking: string | null;
   entries: ChatEntry[];
   updatedAt: number;
 };
@@ -142,6 +145,7 @@ export function newThread(
     resumeId: null,
     model: null,
     access: DEFAULT_ACCESS_LEVEL,
+    thinking: null,
     status: "idle",
     needsLogin: false,
     updatedAt: now,
@@ -158,6 +162,7 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
     resumeId: thread.resumeId,
     model: thread.model,
     access: thread.access,
+    thinking: thread.thinking,
     // Runtime-only streaming state never reaches disk.
     entries: thread.entries
       .slice(-MAX_THREAD_ENTRIES)
@@ -199,6 +204,8 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
       doc.access === "plan" || doc.access === "standard" || doc.access === "full"
         ? doc.access
         : DEFAULT_ACCESS_LEVEL,
+    // Documents predating thinking levels run the CLI's default effort.
+    thinking: typeof doc.thinking === "string" ? doc.thinking : null,
     entries: entries.slice(-MAX_THREAD_ENTRIES),
     updatedAt: typeof doc.updatedAt === "number" ? doc.updatedAt : 0,
   };

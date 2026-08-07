@@ -396,6 +396,56 @@ describe("argv comes from the catalog, not the adapters", () => {
       buildAgentArgs(stream, { prompt: "", cwd: "", resumeId: null, model: null }),
     ).toEqual([...stream.args, ...stream.accessArgs.standard]);
   });
+
+  it("claude places the thinking level after the model and before resume", () => {
+    // `--effort <level>` verified against claude 2.1.223 --help.
+    const args = adapterFor("claude")!.spawn({
+      prompt: "again",
+      cwd: "/repo",
+      resumeId: "sess-1",
+      model: "claude-opus-5",
+      thinking: "xhigh",
+    }).args;
+    expect(args.join(" ")).toContain("--model claude-opus-5 --effort xhigh --resume sess-1");
+  });
+
+  it("codex passes thinking as a -c override, still ahead of resume", () => {
+    // `-c model_reasoning_effort=<level>` verified against codex 0.146.1.
+    const args = adapterFor("codex")!.spawn({
+      prompt: "again",
+      cwd: "/repo",
+      resumeId: "thread-1",
+      model: "gpt-5.6-sol",
+      thinking: "ultra",
+    }).args;
+    expect(args.join(" ")).toContain(
+      "--model gpt-5.6-sol -c model_reasoning_effort=ultra resume thread-1 -",
+    );
+  });
+
+  it("drops a thinking level the chosen model does not offer", () => {
+    // gpt-5.5's registry entry tops out at xhigh; a stale "ultra" (from a
+    // model switch or hand-edited document) must not reach the CLI.
+    const args = adapterFor("codex")!.spawn({
+      prompt: "x",
+      cwd: "/repo",
+      model: "gpt-5.5",
+      thinking: "ultra",
+    }).args;
+    expect(args).not.toContain("-c");
+    expect(
+      adapterFor("codex")!.spawn({ prompt: "x", cwd: "/repo", model: "gpt-5.5", thinking: "xhigh" })
+        .args,
+    ).toContain("model_reasoning_effort=xhigh");
+  });
+
+  it("no thinking pick means no thinking args at all", () => {
+    for (const id of chatProviderIds()) {
+      const args = adapterFor(id)!.spawn({ prompt: "x", cwd: "/repo" }).args;
+      expect(args).not.toContain("--effort");
+      expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
+    }
+  });
 });
 
 describe("providers without a verified stream have no adapter", () => {

@@ -54,6 +54,9 @@ export type AgentRunRequest = {
   model?: string | null;
   // The user's per-thread permission posture; omitted means the default level.
   access?: ChatAccessLevel | null;
+  // Thinking level id (catalog thinkingLevels); null/omitted runs the CLI's
+  // default effort.
+  thinking?: string | null;
 };
 
 // The argv handed to `agent_start`. Rust resolves `bin` through the login shell
