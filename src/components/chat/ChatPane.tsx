@@ -19,6 +19,7 @@ import {
   providersStore,
 } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
+import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
 import { isChatSession } from "../../store/projects";
@@ -180,6 +181,12 @@ export function ChatPane({
                 }
                 onSend={(text) => {
                   setAttachments([]);
+                  // Captured BEFORE send: only the FIRST message titles the
+                  // thread, so later turns never re-push a stale title over a
+                  // manual rename.
+                  const firstMessage = !thread.entries.some(
+                    (entry) => entry.kind === "message",
+                  );
                   void chatThreadsStore
                     .getState()
                     .send(thread.id, withAttachments(text, attachments))
@@ -189,8 +196,16 @@ export function ChatPane({
                       // leaves the chat store, and it stops at the projects
                       // store — renameSession emits no Activity fact, so
                       // KödMem never sees it.
+                      if (!firstMessage) return;
+                      const session = projectsStore
+                        .getState()
+                        .sessions.find((entry) => entry.id === thread.id);
+                      // A manual rename locks the name; never overwrite it.
+                      if (session?.nameLocked) return;
                       const title = chatThreadsStore.getState().threads[thread.id]?.title;
-                      if (title) projectsStore.getState().renameSession(thread.id, title);
+                      if (title && title !== DEFAULT_TITLE) {
+                        projectsStore.getState().renameSession(thread.id, title);
+                      }
                     });
                 }}
                 onCancel={() => void chatThreadsStore.getState().cancel(thread.id)}

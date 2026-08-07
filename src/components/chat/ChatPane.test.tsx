@@ -177,6 +177,50 @@ describe("ChatPane", () => {
     );
   });
 
+  it("auto-titles the session from the first prompt, never over a manual rename", async () => {
+    const { host, root, projectsStore, chatThreadsStore, projectId } = await mount();
+    mounted = root;
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+    });
+
+    const send = async (text: string) => {
+      const textarea = host.querySelector("textarea")!;
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!;
+        setter.call(textarea, text);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+    };
+
+    // First prompt renames the session to a short topic, not the raw line.
+    await send("Please help me fix the login form validation");
+    const named = projectsStore.getState().sessions.find((s) => s.id === threadId)!;
+    expect(named.name).toBe("login form validation");
+
+    // A manually renamed (locked) thread is never overwritten by auto-titling.
+    let lockedId = "";
+    await act(async () => {
+      lockedId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(lockedId, projectId, "claude");
+      projectsStore.getState().renameSession(lockedId, "My thread");
+    });
+    await send("Please help me fix the login form validation");
+    const locked = projectsStore.getState().sessions.find((s) => s.id === lockedId)!;
+    expect(locked.name).toBe("My thread");
+  });
+
   it("renders a streaming answer and a tool card, then settles", async () => {
     const { host, root, projectsStore, chatThreadsStore, agent, projectId } =
       await mount();
