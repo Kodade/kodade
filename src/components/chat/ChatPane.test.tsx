@@ -1,37 +1,57 @@
 // ChatPane render + composer behaviour, driven by real (mock-backed) stores.
-// The terminal split is asserted structurally: the point is that the EXISTING
-// terminal machinery is what gets mounted, not a reimplementation.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockAgentIpc, MockStorage } from "../../ipc/mock";
 import { createChatStore } from "../../chat/store";
-import { createProjectsStore } from "../../store/projects";
+import { createActivityModule } from "../../activity/activity";
+import { createProjectsStore, isChatSession } from "../../store/projects";
 import { createProvidersStore } from "../../providers/store";
+import { filesStore } from "../../store/appStore";
+import { projectWorkspaceView } from "../ProjectsSidebar";
 import { ChatPane } from "./ChatPane";
 
-// The split mounts the real TerminalPane, which owns registry hosts outside
-// React. Stub it so this suite tests the pane's own behaviour, not xterm.
-vi.mock("../TerminalPane", () => ({
-  TerminalPane: () => <div data-testid="stub-terminal-pane" />,
-}));
-
 function fakeRegistry() {
+  const hosts = new Map<string, HTMLElement>();
   return {
-    open: () => undefined,
-    ready: async () => undefined,
-    close: async () => undefined,
-    write: async () => undefined,
+    open: vi.fn((id: string) => {
+      const host = document.createElement("div");
+      host.dataset.terminalSessionId = id;
+      hosts.set(id, host);
+    }),
+    ready: vi.fn(async () => undefined),
+    close: vi.fn(async (id: string) => {
+      hosts.get(id)?.remove();
+      hosts.delete(id);
+    }),
+    write: vi.fn(async () => undefined),
+    sync: vi.fn(
+      (
+        container: HTMLElement,
+        visible: string | string[] | null,
+      ) => {
+        for (const host of hosts.values()) {
+          if (host.parentElement !== container) container.appendChild(host);
+        }
+        const visibleIds = new Set(
+          Array.isArray(visible) ? visible : visible ? [visible] : [],
+        );
+        for (const [id, host] of hosts) {
+          host.style.display = visibleIds.has(id) ? "" : "none";
+        }
+      },
+    ),
   };
 }
 
 async function mount() {
   const storage = new MockStorage();
   const agent = new MockAgentIpc();
+  const terminalRegistry = fakeRegistry();
   const projectsStore = createProjectsStore({
     storage,
-    registry: fakeRegistry(),
+    registry: terminalRegistry,
     newId: (() => {
       let n = 0;
       return () => `s-${++n}`;
@@ -63,10 +83,20 @@ async function mount() {
         projectsStore={projectsStore}
         chatThreadsStore={chatThreadsStore}
         providers={providers}
+        terminalRegistry={terminalRegistry}
       />,
     );
   });
-  return { host, root, projectsStore, chatThreadsStore, agent, storage, projectId };
+  return {
+    host,
+    root,
+    projectsStore,
+    chatThreadsStore,
+    agent,
+    storage,
+    projectId,
+    terminalRegistry,
+  };
 }
 
 let mounted: Root | null = null;
@@ -82,7 +112,7 @@ describe("ChatPane", () => {
     const { host, root } = await mount();
     mounted = root;
 
-    expect(host.querySelector('[data-testid="stub-terminal-pane"]')).not.toBeNull();
+    expect(host.querySelector("[data-terminal-layout]")).not.toBeNull();
     expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
     expect(host.textContent).not.toContain("Send a message to start the conversation.");
     expect(
@@ -214,6 +244,54 @@ describe("ChatPane", () => {
     expect(host.querySelector('[data-testid="chat-working"]')).toBeNull();
   });
 
+  it("opens assistant links in the editor browser tab without leaving KödChat", async () => {
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } =
+      await mount();
+    mounted = root;
+    filesStore.setState({
+      rootPath: "/repos/chat-link-test",
+      openTabs: [],
+      activeTab: null,
+    });
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+      await chatThreadsStore.getState().send(threadId, "open the release");
+    });
+    const runId = agent.starts[0].id;
+    const url = "https://github.com/Kodade/kodade/releases/tag/v1.4.14";
+
+    await act(async () => {
+      agent.emit(
+        runId,
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_link",
+            role: "assistant",
+            content: [{ type: "text", text: `[Open the release](${url})` }],
+          },
+        }),
+      );
+      agent.emit(runId, JSON.stringify({ type: "result", is_error: false }));
+      agent.exit(runId, 0, "");
+    });
+
+    const link = host.querySelector<HTMLAnchorElement>(
+      '[data-chat-role="assistant"] a',
+    )!;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    await act(async () => {
+      expect(link.dispatchEvent(click)).toBe(false);
+    });
+
+    expect(filesStore.getState().activeTab).toEqual({ kind: "browser", url });
+    expect(host.textContent).toContain("KödChat");
+    expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
+  });
+
   it("offers a login terminal on an auth failure", async () => {
     const { host, root, projectsStore, chatThreadsStore, agent, projectId } =
       await mount();
@@ -266,12 +344,27 @@ describe("ChatPane", () => {
     expect(chatThreadsStore.getState().threads[threadId].model).toBe("gpt-5.6-sol");
   });
 
-  it("the header toggle opens and closes the terminal split", async () => {
-    const { host, root, projectsStore, chatThreadsStore, projectId } =
-      await mount();
+  it("opens one thread-owned terminal without leaving the chat or adding a workspace card", async () => {
+    const {
+      host,
+      root,
+      projectsStore,
+      chatThreadsStore,
+      projectId,
+      terminalRegistry,
+    } = await mount();
     mounted = root;
+    const initialTerminal = projectsStore
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
     await act(async () => {
-      const threadId = projectsStore
+      await projectsStore.getState().closeSession(initialTerminal.id);
+    });
+    terminalRegistry.open.mockClear();
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore
         .getState()
         .addChatThread(projectId, "claude")!;
       await chatThreadsStore
@@ -288,8 +381,38 @@ describe("ChatPane", () => {
 
     const split = host.querySelector('[data-testid="chat-terminal-split"]');
     expect(split).not.toBeNull();
-    // It mounts the EXISTING terminal pane rather than a second implementation.
-    expect(split!.querySelector('[data-testid="stub-terminal-pane"]')).not.toBeNull();
+    expect(host.textContent).toContain("Send a message to start the conversation.");
+    expect(split!.querySelector("[data-terminal-leaf-id]")).not.toBeNull();
+    expect(split!.textContent).not.toContain("No terminal is open");
+    expect(split!.textContent).not.toContain("New terminal");
+
+    const state = projectsStore.getState();
+    const terminal = state.sessions.find((session) => !isChatSession(session));
+    expect(terminal).toMatchObject({ projectId, workspaceId: threadId });
+    expect(state.activeSessionByProject[projectId]).toBe(threadId);
+    expect(terminalRegistry.open).toHaveBeenCalledWith(terminal!.id, "/repos/alpha");
+
+    const activity = createActivityModule({ now: () => 0 });
+    activity.observe({
+      type: "project-added",
+      at: 0,
+      projectId,
+      projectName: "alpha",
+    });
+    for (const session of state.sessions) {
+      activity.observe({
+        type: "session-created",
+        at: 0,
+        projectId,
+        sessionId: session.id,
+        name: session.name,
+      });
+    }
+    expect(
+      projectWorkspaceView(activity, state.sessions, 0).groups.flatMap(
+        (group) => group.sessions,
+      ),
+    ).toHaveLength(0);
 
     const hide = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Hide terminal"]',
@@ -297,5 +420,15 @@ describe("ChatPane", () => {
     expect(hide.textContent).toContain("Hide terminal");
     await act(async () => hide.click());
     expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
+
+    await act(async () => toggle.click());
+    expect(projectsStore.getState().sessions).toHaveLength(2);
+    expect(terminalRegistry.open).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await projectsStore.getState().closeWorkspace(threadId);
+    });
+    expect(projectsStore.getState().sessions).toHaveLength(0);
+    expect(terminalRegistry.close).toHaveBeenCalledWith(terminal!.id);
   });
 });

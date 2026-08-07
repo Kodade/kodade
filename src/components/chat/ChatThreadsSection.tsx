@@ -3,8 +3,9 @@
 // with new-chat, close-chat, and the project actions (color, remove) that used
 // to live in the separate zero-session "Projects" section.
 //
-// PTY workspaces are untouched: their status-grouped cards still render below
-// this section, and closing a chat thread never touches a terminal.
+// Standalone PTY workspaces are untouched: their status-grouped cards still
+// render below this section. A terminal embedded in a chat closes with that
+// thread because it is part of the same workspace.
 
 import { useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
@@ -93,9 +94,9 @@ export function ChatThreadsSection({
                           .activateSession(project.id, session.id);
                       }}
                       onClose={() => {
-                        // closeSession on a chat thread drops the session and
-                        // (via the app wiring) the transcript document too.
-                        void projectsStore.getState().closeSession(session.id);
+                        // This drops the chat, its transcript (via app wiring),
+                        // and any terminal embedded in the thread workspace.
+                        void projectsStore.getState().closeWorkspace(session.id);
                       }}
                     />
                   ))}

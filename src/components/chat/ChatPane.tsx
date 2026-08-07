@@ -1,18 +1,23 @@
 // KödChat: the workspace's primary agent surface (panel 2 in App.tsx).
 //
 // The terminal is not gone — it moved. A header toggle opens a horizontal
-// split at the bottom that hosts the EXISTING TerminalPane unchanged, so the
-// registry keeps owning its xterm hosts and a live shell is never reparented.
+// split at the bottom and scopes the existing TerminalPane to this chat thread,
+// so the registry keeps owning its xterm hosts without changing the sidebar.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { Pane } from "../Pane";
 import { KodadeMark, KodadeWordmark } from "../KodadeBrand";
-import { TerminalPane } from "../TerminalPane";
+import { TerminalPane, type TerminalDisplayRegistry } from "../TerminalPane";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTranscript } from "./ChatTranscript";
-import { appStore, chatStore, providersStore } from "../../store/appStore";
+import {
+  appStore,
+  chatStore,
+  filesStore,
+  providersStore,
+} from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
@@ -33,10 +38,12 @@ export function ChatPane({
   projectsStore = appStore,
   chatThreadsStore = chatStore,
   providers = providersStore,
+  terminalRegistry,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   chatThreadsStore?: StoreApi<ChatState>;
   providers?: StoreApi<ProvidersState>;
+  terminalRegistry?: TerminalDisplayRegistry;
 } = {}) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Files dropped on the pane, waiting to ride along with the next message.
@@ -86,11 +93,39 @@ export function ChatPane({
 
   const title = thread ? `KödChat — ${thread.title}` : "KödChat";
 
+  const toggleTerminal = () => {
+    if (terminalOpen) {
+      setTerminalOpen(false);
+      return;
+    }
+
+    if (activeProjectId && threadId) {
+      const state = projectsStore.getState();
+      const existing = state.sessions.find(
+        (session) =>
+          session.projectId === activeProjectId &&
+          !isChatSession(session) &&
+          session.workspaceId === threadId,
+      );
+      if (!existing) state.addTerminal(activeProjectId, threadId);
+      // addTerminal selects the new PTY by default. This terminal is embedded
+      // in the thread, so keep the chat selected and visible above it.
+      projectsStore.getState().setActiveSession(activeProjectId, threadId);
+    }
+
+    setTerminalOpen(true);
+  };
+
   // A terminal row is a distinct project child, not a chat with a terminal
   // attached. Selecting it should therefore use the full work pane for the
   // terminal instead of leaving an empty KödChat surface above it.
   if (activeSession && !isChatSession(activeSession)) {
-    return <TerminalPane projectsStore={projectsStore} />;
+    return (
+      <TerminalPane
+        projectsStore={projectsStore}
+        terminalRegistry={terminalRegistry}
+      />
+    );
   }
 
   return (
@@ -98,7 +133,7 @@ export function ChatPane({
       title={title}
       className="bg-bg"
       headerAction={
-        <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((v) => !v)} />
+        <TerminalToggle open={terminalOpen} onToggle={toggleTerminal} />
       }
     >
       <div className="flex h-full min-h-0 flex-col">
@@ -114,6 +149,10 @@ export function ChatPane({
               <div className="min-h-0 flex-1">
                 <ChatTranscript
                   thread={thread}
+                  onOpenLink={(url) => {
+                    filesStore.getState().openBrowserTab();
+                    filesStore.getState().setBrowserUrl(url);
+                  }}
                   onOpenLoginTerminal={() => {
                     setTerminalOpen(true);
                     void openLoginTerminal(projectsStore, thread.providerId);
@@ -160,14 +199,17 @@ export function ChatPane({
           )}
         </div>
         {terminalOpen && (
-          // The full terminal system, unchanged, in the bottom half. Mounting
-          // the real TerminalPane keeps the session registry the sole owner of
-          // every xterm host — nothing here rebuilds or reparents one.
+          // The full terminal system, scoped to this thread, in the bottom
+          // half. The registry remains the sole owner of every xterm host.
           <div
             data-testid="chat-terminal-split"
             className="h-1/2 min-h-0 shrink-0 border-t border-border"
           >
-            <TerminalPane />
+            <TerminalPane
+              projectsStore={projectsStore}
+              terminalRegistry={terminalRegistry}
+              workspaceId={threadId ?? undefined}
+            />
           </div>
         )}
       </div>
