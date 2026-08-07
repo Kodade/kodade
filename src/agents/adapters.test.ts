@@ -7,7 +7,7 @@ import { PROVIDERS } from "../providers/catalog";
 import { adapterFor, chatProviderIds } from "./registry";
 import type { AgentStreamEvent } from "./contract";
 import { buildAgentArgs, looksLikeAuthFailure } from "./engine";
-import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN } from "./fixtures";
+import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN, GROK_TOOL_TURN } from "./fixtures";
 
 function drain(
   providerId: string,
@@ -257,6 +257,125 @@ describe("codex dialect", () => {
   });
 });
 
+describe("grok dialect", () => {
+  const events = drain("grok", GROK_TOOL_TURN);
+
+  it("captures the resumable session id from the end frame", () => {
+    expect(events.find((e) => e.type === "session")).toEqual({
+      type: "session",
+      sessionId: "019fde14-62ad-7311-bb01-5bd073af3f66",
+    });
+  });
+
+  it("assembles delta-only text into per-message completes at boundaries", () => {
+    const complete = events.filter((e) => e.type === "message-complete");
+    expect(complete).toHaveLength(2);
+    expect(complete[0]).toMatchObject({
+      messageId: "msg-1",
+      message: {
+        role: "assistant",
+        content: "I'll read `hello.txt` and pull out the secret number.",
+      },
+    });
+    expect(complete[1]).toMatchObject({
+      messageId: "msg-2",
+      message: { role: "assistant", content: "**4217**" },
+    });
+    // Deltas share the id of the message they later complete into.
+    const deltas = events.filter((e) => e.type === "message-delta");
+    expect(deltas[0]).toMatchObject({ messageId: "msg-1", text: "I'll" });
+    expect(deltas.at(-1)).toMatchObject({ messageId: "msg-2", text: "**" });
+  });
+
+  it("surfaces thinking separately from the answer", () => {
+    const thinking = events.filter((e) => e.type === "thinking-complete");
+    expect(thinking).toHaveLength(2);
+    expect(thinking[1]).toMatchObject({
+      messageId: "thinking-2",
+      text: "The file contains the secret number 4217.",
+    });
+    expect(events.filter((e) => e.type === "thinking-delta").length).toBeGreaterThan(0);
+  });
+
+  it("pairs a tool call with its terminal update by call id", () => {
+    const started = events.find((e) => e.type === "tool-call-started");
+    const completed = events.find((e) => e.type === "tool-call-completed");
+    expect(started).toEqual({
+      type: "tool-call-started",
+      callId: "call-de276e3a-54fd-4fa0-8aab-5d4c0a1a4bdf-0",
+      call: {
+        tool: "read_file",
+        args: { target_file: "/private/tmp/grok-smoke/hello.txt" },
+      },
+    });
+    expect(completed).toEqual({
+      type: "tool-call-completed",
+      callId: "call-de276e3a-54fd-4fa0-8aab-5d4c0a1a4bdf-0",
+      outcome: { status: "executed", result: "1→Ködade fixture secret: 4217\n" },
+    });
+  });
+
+  it("ends with exactly one done carrying usage", () => {
+    const done = events.filter((e) => e.type === "done");
+    expect(done).toHaveLength(1);
+    expect(done[0]).toEqual({
+      type: "done",
+      finishReason: "end_turn",
+      usage: { promptTokens: 16043, completionTokens: 83, totalTokens: 16126 },
+    });
+  });
+
+  it("reports a non-zero command exit as a failed tool outcome", () => {
+    // Real capture: a failing command still updates with status "completed";
+    // the failure lives in rawOutput.exit_code.
+    const failed = drain("grok", [
+      JSON.stringify({
+        type: "tool_call",
+        toolCallId: "call-9",
+        toolName: "run_terminal_command",
+        rawInput: { command: "ls /nonexistent-kodade-dir" },
+      }),
+      JSON.stringify({
+        type: "tool_call_update",
+        toolCallId: "call-9",
+        status: "completed",
+        content: [],
+        rawOutput: { type: "Bash", exit_code: 2 },
+      }),
+    ]);
+    expect(failed.find((e) => e.type === "tool-call-completed")).toEqual({
+      type: "tool-call-completed",
+      callId: "call-9",
+      outcome: { status: "error", result: "exited with status 2" },
+    });
+  });
+
+  it("maps todo_write onto a plan block, skipping merge entries without text", () => {
+    const planned = drain("grok", [
+      JSON.stringify({
+        type: "tool_call",
+        toolCallId: "call-plan",
+        toolName: "todo_write",
+        rawInput: {
+          todos: [
+            { id: "1", content: "Run the failing command", status: "in_progress" },
+            { id: "2", content: "Report the result", status: "pending" },
+            { id: "3", status: "completed" },
+          ],
+          merge: false,
+        },
+      }),
+    ]);
+    expect(planned.find((e) => e.type === "plan")).toEqual({
+      type: "plan",
+      items: [
+        { text: "Run the failing command", status: "in-progress" },
+        { text: "Report the result", status: "pending" },
+      ],
+    });
+  });
+});
+
 describe("run termination is uniform across dialects", () => {
   it("a crash with no terminal frame still produces one error and one done", () => {
     for (const id of chatProviderIds()) {
@@ -354,18 +473,54 @@ describe("argv comes from the catalog, not the adapters", () => {
     ]);
   });
 
+  it("grok keeps the stdin prompt file and resumes with the session id", () => {
+    const adapter = adapterFor("grok")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo" })).toEqual({
+      bin: "grok",
+      args: [
+        "--prompt-file",
+        "/dev/stdin",
+        "--output-format",
+        "streaming-json",
+        "--permission-mode",
+        "acceptEdits",
+      ],
+      stdin: "hi",
+    });
+    expect(
+      adapter.spawn({ prompt: "again", cwd: "/repo", resumeId: "sess-1", model: "grok-4.5" })
+        .args,
+    ).toEqual([
+      "--prompt-file",
+      "/dev/stdin",
+      "--output-format",
+      "streaming-json",
+      "--permission-mode",
+      "acceptEdits",
+      "--model",
+      "grok-4.5",
+      "--resume",
+      "sess-1",
+    ]);
+  });
+
   it("access levels map to each CLI's own posture flags", () => {
     const claude = adapterFor("claude")!;
     const codex = adapterFor("codex")!;
+    const grok = adapterFor("grok")!;
     expect(claude.spawn({ prompt: "x", cwd: "/repo", access: "plan" }).args).toContain("plan");
     expect(codex.spawn({ prompt: "x", cwd: "/repo", access: "plan" }).args).toContain(
       "read-only",
     );
+    expect(grok.spawn({ prompt: "x", cwd: "/repo", access: "plan" }).args).toContain("plan");
     expect(claude.spawn({ prompt: "x", cwd: "/repo", access: "full" }).args).toContain(
       "--dangerously-skip-permissions",
     );
     expect(codex.spawn({ prompt: "x", cwd: "/repo", access: "full" }).args).toContain(
       "--dangerously-bypass-approvals-and-sandbox",
+    );
+    expect(grok.spawn({ prompt: "x", cwd: "/repo", access: "full" }).args).toContain(
+      "bypassPermissions",
     );
   });
 
@@ -380,14 +535,17 @@ describe("argv comes from the catalog, not the adapters", () => {
     for (const access of [undefined, "plan", "standard"] as const) {
       const claude = adapterFor("claude")!.spawn({ prompt: "x", cwd: "/repo", access }).args;
       const codex = adapterFor("codex")!.spawn({ prompt: "x", cwd: "/repo", access }).args;
-      for (const args of [claude, codex]) {
+      const grok = adapterFor("grok")!.spawn({ prompt: "x", cwd: "/repo", access }).args;
+      for (const args of [claude, codex, grok]) {
         for (const flag of banned) expect(args).not.toContain(flag);
       }
     }
     const claudeDefault = adapterFor("claude")!.spawn({ prompt: "x", cwd: "/repo" }).args;
     const codexDefault = adapterFor("codex")!.spawn({ prompt: "x", cwd: "/repo" }).args;
+    const grokDefault = adapterFor("grok")!.spawn({ prompt: "x", cwd: "/repo" }).args;
     expect(claudeDefault).toContain("acceptEdits");
     expect(codexDefault).toContain("workspace-write");
+    expect(grokDefault).toContain("acceptEdits");
   });
 
   it("templates are only substituted when the caller supplied a value", () => {
@@ -449,12 +607,12 @@ describe("argv comes from the catalog, not the adapters", () => {
 });
 
 describe("providers without a verified stream have no adapter", () => {
-  it("grok, opencode, ollama and KödLocal are terminal-only for now", () => {
-    for (const id of ["grok", "opencode", "ollama", "kodade-local"]) {
+  it("opencode, ollama and KödLocal are terminal-only for now", () => {
+    for (const id of ["opencode", "ollama", "kodade-local"]) {
       expect(providerOf(id).stream).toBeUndefined();
       expect(adapterFor(id)).toBeNull();
     }
-    expect(chatProviderIds()).toEqual(["claude", "codex"]);
+    expect(chatProviderIds()).toEqual(["claude", "codex", "grok"]);
   });
 
   it("an unknown provider id is null, not a throw", () => {

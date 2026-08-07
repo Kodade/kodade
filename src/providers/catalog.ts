@@ -29,7 +29,7 @@ export type ThinkingLevel = { id: string; label: string };
 
 export type ProviderStream = {
   // Which parser in src/agents/ reads this CLI's output.
-  dialect: "claude" | "codex";
+  dialect: "claude" | "codex" | "grok";
   // Base argv for a fresh turn.
   args: readonly string[];
   // Per-access-level argv, appended right after `args`.
@@ -311,6 +311,29 @@ export const PROVIDERS: Provider[] = [
     bin: "grok",
     launch: "grok",
     install: "https://docs.x.ai/build",
+    // Verified against the shipped CLI (grok 0.2.118). `--output-format
+    // streaming-json` emits the ACP update stream headlessly; the prompt is
+    // piped through `--prompt-file /dev/stdin` because `-p` only takes the
+    // prompt as an argument (a bare `-` is read literally). `--resume <id>`
+    // continues the session id the stream's `end` frame reported.
+    stream: {
+      dialect: "grok",
+      args: ["--prompt-file", "/dev/stdin", "--output-format", "streaming-json"],
+      // grok's own permission modes line up with the three levels; acceptEdits
+      // was verified to run terminal commands headlessly without prompting, so
+      // no extra allowlist is needed here.
+      accessArgs: {
+        plan: ["--permission-mode", "plan"],
+        standard: ["--permission-mode", "acceptEdits"],
+        full: ["--permission-mode", "bypassPermissions"],
+      },
+      resumeArgs: ["--resume", "{session}"],
+      modelArgs: ["--model", "{model}"],
+      // Verified against the installed CLI's own model registry
+      // (~/.grok/models_cache.json, grok 0.2.118, fetched 2026-08-07) — the
+      // account exposes a single model today.
+      models: [{ id: "grok-4.5", label: "Grok 4.5" }],
+    },
     // Grok Build reads project AGENTS.md and retains GROK.md compatibility.
     // Its native skills root is `.grok/skills`; Claude-compatible roots and
     // the global `.agents/skills` standard are also documented discovery paths.
@@ -440,9 +463,9 @@ export function availableProviders(
 
 export const AVAILABLE_PROVIDERS = availableProviders();
 
-// True when KödChat can drive this provider headlessly. Grok Build, OpenCode,
-// Ollama, and KödLocal are launchable in a terminal today but expose no
-// verified structured stream, so chat says so instead of guessing at flags.
+// True when KödChat can drive this provider headlessly. OpenCode, Ollama, and
+// KödLocal are launchable in a terminal today but expose no verified
+// structured stream, so chat says so instead of guessing at flags.
 export function supportsChat(provider: Provider): boolean {
   return provider.stream !== undefined;
 }

@@ -5,6 +5,7 @@
 import { AVAILABLE_PROVIDERS, type Provider } from "../providers/catalog";
 import { createClaudeAdapter } from "./claude";
 import { createCodexAdapter } from "./codex";
+import { createGrokAdapter } from "./grok";
 import type { AgentStreamAdapter } from "./contract";
 
 // The adapter for a provider, or null when it has no verified headless stream.
@@ -16,6 +17,8 @@ export function adapterForProvider(provider: Provider): AgentStreamAdapter | nul
       return createClaudeAdapter(provider, stream);
     case "codex":
       return createCodexAdapter(provider, stream);
+    case "grok":
+      return createGrokAdapter(provider, stream);
     default:
       return null;
   }

@@ -268,7 +268,7 @@ describe("failures", () => {
   it("explains that a provider without an adapter is terminal-only", async () => {
     const { agent, store } = setup();
     await store.getState().start();
-    await openThread(store, "grok");
+    await openThread(store, "ollama");
     await store.getState().send("t1", "hi");
 
     expect(agent.starts).toHaveLength(0);
