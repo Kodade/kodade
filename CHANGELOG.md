@@ -27,27 +27,7 @@
   tool host.
 - Removed internal planning, research, and release-evidence documents and added
   a public-source privacy check to prevent them from being recommitted.
-
-### Release verification
-
-| Check | Result |
-| --- | --- |
-| Source and packaging | Version consistency, TypeScript, public-source verification, and dependency-license verification passed (78 JavaScript packages and 347 Rust crates). |
-| Automated tests | 1,944 frontend tests, 3 dependency-license script tests, and 4 public-boundary tests passed. |
-| Rust | Formatting, Clippy, and test suites passed with both default and no-default feature sets. |
-| macOS artifact | Apple Silicon DMG built for macOS 13+, signed with Developer ID, and accepted by Apple in both notarization stages. |
-| Mounted-image audit | App and helper signatures, stapled tickets, Gatekeeper assessment, public payload, and read-only volume checks passed. |
-| Windows | Not built or validated for this release. |
-
-Artifact: `kodade_1.4.15_aarch64.dmg`
-
-SHA-256: `a05738a32916876dacb6830c1adfd1c63cd9445f7f7623c10bcc5e9ec83f4b6b`
-
-Apple notarization submissions:
-`fb0425ed-b8e2-4772-a94b-f90d058937ba` and
-`55702afc-2ffe-4a99-a192-963595aacf65` (accepted).
-
-Stable publication remains gated on an owner-installed-app acceptance pass.
+- Stable publication awaits owner-installed-app acceptance.
 
 ## 1.4.14 - 2026-08-02
 
