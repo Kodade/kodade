@@ -311,17 +311,14 @@ export const PROVIDERS: Provider[] = [
     bin: "grok",
     launch: "grok",
     install: "https://docs.x.ai/build",
-    // Verified against the shipped CLI (grok 0.2.118). `--output-format
-    // streaming-json` emits the ACP update stream headlessly; the prompt is
-    // piped through `--prompt-file /dev/stdin` because `-p` only takes the
-    // prompt as an argument (a bare `-` is read literally). `--resume <id>`
-    // continues the session id the stream's `end` frame reported.
+    // `--output-format streaming-json` emits a structured stream; the prompt
+    // is piped through `--prompt-file /dev/stdin`, and `--resume <id>`
+    // continues the session id reported by the stream's `end` frame.
     stream: {
       dialect: "grok",
       args: ["--prompt-file", "/dev/stdin", "--output-format", "streaming-json"],
-      // grok's own permission modes line up with the three levels; acceptEdits
-      // was verified to run terminal commands headlessly without prompting, so
-      // no extra allowlist is needed here.
+      // Grok's permission modes map to the three access levels; no extra
+      // allowlist is needed here.
       accessArgs: {
         plan: ["--permission-mode", "plan"],
         standard: ["--permission-mode", "acceptEdits"],
@@ -329,9 +326,7 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["--resume", "{session}"],
       modelArgs: ["--model", "{model}"],
-      // Verified against the installed CLI's own model registry
-      // (~/.grok/models_cache.json, grok 0.2.118, fetched 2026-08-07) — the
-      // account exposes a single model today.
+      // Grok Build exposes this chat model.
       models: [{ id: "grok-4.5", label: "Grok 4.5" }],
     },
     // Grok Build reads project AGENTS.md and retains GROK.md compatibility.

@@ -8,9 +8,8 @@
 // synthetic message id, and a boundary (tool call, kind switch, end) flushes
 // the buffer as the authoritative `*-complete` event.
 //
-// Verified against the shipped CLI (grok 0.2.118; see
-// src/agents/fixtures/grok-tool-turn.jsonl, captured from a real run). Flags
-// live in providers/catalog.ts, not here.
+// The fixture preserves this stream shape. Flags live in providers/catalog.ts,
+// not here.
 
 import type { Provider, ProviderStream } from "../providers/catalog";
 import type {

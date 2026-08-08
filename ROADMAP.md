@@ -6,7 +6,7 @@ This file states the public product boundary.
 ## Supported
 
 - macOS Apple Silicon on macOS 13 or newer
-- KödChat with Claude Code and Codex
+- KödChat with Claude Code, Codex, and Grok Build
 - Native terminals, projects, files, and editor
 - KödMem, KödMCP, KödHarness, and KödSkills
 - Embedded browser and GitHub desktop panes

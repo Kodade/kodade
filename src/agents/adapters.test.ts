@@ -263,7 +263,7 @@ describe("grok dialect", () => {
   it("captures the resumable session id from the end frame", () => {
     expect(events.find((e) => e.type === "session")).toEqual({
       type: "session",
-      sessionId: "019fde14-62ad-7311-bb01-5bd073af3f66",
+      sessionId: "fixture-session-1",
     });
   });
 
@@ -274,7 +274,7 @@ describe("grok dialect", () => {
       messageId: "msg-1",
       message: {
         role: "assistant",
-        content: "I'll read `hello.txt` and pull out the secret number.",
+        content: "I'll read `fixture.txt` and the sample value.",
       },
     });
     expect(complete[1]).toMatchObject({
@@ -292,7 +292,7 @@ describe("grok dialect", () => {
     expect(thinking).toHaveLength(2);
     expect(thinking[1]).toMatchObject({
       messageId: "thinking-2",
-      text: "The file contains the secret number 4217.",
+      text: "The file contains the sample value 4217.",
     });
     expect(events.filter((e) => e.type === "thinking-delta").length).toBeGreaterThan(0);
   });
@@ -302,16 +302,16 @@ describe("grok dialect", () => {
     const completed = events.find((e) => e.type === "tool-call-completed");
     expect(started).toEqual({
       type: "tool-call-started",
-      callId: "call-de276e3a-54fd-4fa0-8aab-5d4c0a1a4bdf-0",
+      callId: "call-fixture-read-1",
       call: {
         tool: "read_file",
-        args: { target_file: "/private/tmp/grok-smoke/hello.txt" },
+        args: { target_file: "/fixture/hello.txt" },
       },
     });
     expect(completed).toEqual({
       type: "tool-call-completed",
-      callId: "call-de276e3a-54fd-4fa0-8aab-5d4c0a1a4bdf-0",
-      outcome: { status: "executed", result: "1→Ködade fixture secret: 4217\n" },
+      callId: "call-fixture-read-1",
+      outcome: { status: "executed", result: "1→Fixture sample value: 4217\n" },
     });
   });
 
@@ -321,13 +321,13 @@ describe("grok dialect", () => {
     expect(done[0]).toEqual({
       type: "done",
       finishReason: "end_turn",
-      usage: { promptTokens: 16043, completionTokens: 83, totalTokens: 16126 },
+      usage: { promptTokens: 12, completionTokens: 5, totalTokens: 17 },
     });
   });
 
   it("reports a non-zero command exit as a failed tool outcome", () => {
-    // Real capture: a failing command still updates with status "completed";
-    // the failure lives in rawOutput.exit_code.
+    // A failing command can update with status "completed"; the failure lives
+    // in rawOutput.exit_code.
     const failed = drain("grok", [
       JSON.stringify({
         type: "tool_call",

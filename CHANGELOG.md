@@ -14,8 +14,7 @@
   (claude --effort; codex model_reasoning_effort).
 - Added a collapse toggle for the right files sidebar, mirroring the projects
   sidebar's rail, persisted across restarts, with a Mod+Shift+B shortcut.
-- Removed the account settings tab while plans are not offered; license and
-  entitlement plumbing is unchanged.
+- Removed the account settings tab.
 - Fixed KödChat terminals so Show terminal immediately opens a thread-owned
   split without replacing the chat or adding a workspace card.
 - Opened assistant links in the editor's browser tab instead of navigating the
