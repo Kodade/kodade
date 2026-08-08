@@ -140,3 +140,23 @@ describe("the thinking-level pill", () => {
     expect(labels.some((entry) => entry?.includes("Ultra"))).toBe(true);
   });
 });
+
+describe("Ollama composer semantics", () => {
+  it("shows dynamic local models and hides agent access controls", () => {
+    const { host, root } = mount({
+      providerId: "ollama",
+      ollama: {
+        status: "ready",
+        models: [{ id: "qwen3:8b", label: "qwen3:8b" }],
+        message: null,
+      },
+    });
+    mounted = root;
+    expect(host.querySelector('[data-testid="ollama-chat-notice"]')?.textContent).toContain(
+      "no filesystem access, tools, or server-side sessions",
+    );
+    expect(host.querySelector('button[aria-label="Model"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Access level"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Thinking level"]')).toBeNull();
+  });
+});

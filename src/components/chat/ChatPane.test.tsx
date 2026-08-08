@@ -619,13 +619,13 @@ describe("ChatPane", () => {
         (option) => option.textContent?.includes(label),
       );
 
-    // Provider menu: options carry the brand badge and terminal-only providers
-    // are listed but not selectable.
+    // Provider menu: options carry the brand badge; Ollama is a first-class
+    // local HTTP chat provider, while genuinely terminal-only entries stay disabled.
     const providerTrigger = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Provider"]',
     )!;
     await act(async () => providerTrigger.click());
-    expect(optionByLabel("Ollama")?.disabled).toBe(true);
+    expect(optionByLabel("Ollama")?.disabled).toBe(false);
     await act(async () => optionByLabel("Codex")?.click());
     expect(chatThreadsStore.getState().threads[threadId].providerId).toBe("codex");
 

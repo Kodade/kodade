@@ -93,6 +93,7 @@ const AUTH_PATTERNS = [
   /\bunauthorized\b/i,
   /\b401\b/,
   /\binvalid api key\b/i,
+  /\bapi key\b.*\bmissing\b/i,
   /\bapi key (?:not found|is required|missing)\b/i,
   /\b(?:oauth |access |refresh )?token (?:has )?expired\b/i,
   /\bcredentials? (?:not found|missing|invalid)\b/i,

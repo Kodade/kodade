@@ -1,0 +1,7 @@
+{"type":"step_start","timestamp":0,"sessionID":"ses_fixture","part":{"id":"prt_step_1","sessionID":"ses_fixture","type":"step-start"}}
+{"type":"reasoning","timestamp":0,"sessionID":"ses_fixture","part":{"id":"prt_reasoning_1","sessionID":"ses_fixture","type":"reasoning","text":"I should inspect the fixture before answering.","time":{"start":0,"end":1}}}
+{"type":"tool_use","timestamp":0,"sessionID":"ses_fixture","part":{"id":"prt_tool_1","sessionID":"ses_fixture","type":"tool","callID":"call_fixture_read","tool":"read","state":{"status":"completed","input":{"filePath":"/fixture/note.txt"},"output":"fixture-ok\n"}}}
+{"type":"step_finish","timestamp":0,"sessionID":"ses_fixture","part":{"id":"prt_step_2","sessionID":"ses_fixture","type":"step-finish","tokens":{"input":12,"output":4}}}
+{"type":"text","timestamp":0,"sessionID":"ses_fixture","part":{"id":"prt_text_1","sessionID":"ses_fixture","type":"text","text":"fixture-ok","time":{"start":0,"end":1}}}
+not JSON emitted by a noisy plugin
+{"type":"error","timestamp":0,"sessionID":"ses_auth_fixture","error":{"name":"ProviderAuthError","data":{"providerID":"openrouter","message":"OpenRouter API key is missing."}}}

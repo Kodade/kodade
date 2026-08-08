@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { availableSettingsSections } from "../components/settings/registry";
 import { externalUrls, local, ssh, vox } from "../ipc/transport";
-import { AVAILABLE_PROVIDERS } from "../providers/catalog";
+import { AVAILABLE_PROVIDERS, supportsChat } from "../providers/catalog";
 import { BINDINGS } from "../shortcuts/bindings";
 import { RELEASE_MANIFEST } from "./manifest";
 
@@ -31,6 +31,16 @@ describe("compiled public surface", () => {
     expect(BINDINGS.map((binding) => binding.id)).not.toEqual(
       expect.arrayContaining(["push-to-talk", "push-to-talk-command"]),
     );
+  });
+
+  it("keeps the OpenCode and local Ollama chat providers in the public profile", () => {
+    const providers = AVAILABLE_PROVIDERS;
+    expect(providers.find((provider) => provider.id === "opencode")).toMatchObject({
+      stream: { dialect: "opencode" },
+    });
+    const ollama = providers.find((provider) => provider.id === "ollama");
+    expect(ollama).toMatchObject({ chat: { kind: "ollama" } });
+    expect(supportsChat(ollama!)).toBe(true);
   });
 
   it("rejects every development IPC group before native execution", async () => {

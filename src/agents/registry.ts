@@ -2,10 +2,11 @@
 // `stream` block in providers/catalog.ts plus (only if its output shape is
 // genuinely new) one dialect file here.
 
-import { AVAILABLE_PROVIDERS, type Provider } from "../providers/catalog";
+import { AVAILABLE_PROVIDERS, supportsChat, type Provider } from "../providers/catalog";
 import { createClaudeAdapter } from "./claude";
 import { createCodexAdapter } from "./codex";
 import { createGrokAdapter } from "./grok";
+import { createOpenCodeAdapter } from "./opencode";
 import type { AgentStreamAdapter } from "./contract";
 
 // The adapter for a provider, or null when it has no verified headless stream.
@@ -19,6 +20,8 @@ export function adapterForProvider(provider: Provider): AgentStreamAdapter | nul
       return createCodexAdapter(provider, stream);
     case "grok":
       return createGrokAdapter(provider, stream);
+    case "opencode":
+      return createOpenCodeAdapter(provider, stream);
     default:
       return null;
   }
@@ -34,6 +37,14 @@ export function adapterFor(providerId: string): AgentStreamAdapter | null {
 // Provider ids KödChat can drive, in catalog order — the composer's picker uses
 // this to decide which entries are selectable.
 export function chatProviderIds(): string[] {
+  return AVAILABLE_PROVIDERS.filter(supportsChat).map(
+    (provider) => provider.id,
+  );
+}
+
+// CLI-only subset for the process adapter suite. Ollama is chat-capable via
+// local HTTP and therefore has no child-process parser.
+export function streamProviderIds(): string[] {
   return AVAILABLE_PROVIDERS.filter((provider) => provider.stream).map(
     (provider) => provider.id,
   );

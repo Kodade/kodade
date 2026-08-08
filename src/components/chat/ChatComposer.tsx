@@ -8,7 +8,13 @@
 
 import type { KeyboardEvent } from "react";
 import type { ChatAccessLevel, Provider } from "../../providers/catalog";
-import { ACCESS_LEVELS, supportsChat, thinkingLevelsFor } from "../../providers/catalog";
+import {
+  ACCESS_LEVELS,
+  isOllamaChat,
+  supportsChat,
+  thinkingLevelsFor,
+} from "../../providers/catalog";
+import type { OllamaModel } from "../../chat/ollama";
 import { ComposerMenu } from "./ComposerMenu";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -22,6 +28,7 @@ export function ChatComposer({
   draft,
   working,
   disabled,
+  ollama,
   onProviderChange,
   onModelChange,
   onAccessChange,
@@ -40,6 +47,11 @@ export function ChatComposer({
   draft: string;
   working: boolean;
   disabled?: boolean;
+  ollama?: {
+    status: "idle" | "loading" | "ready" | "unavailable";
+    models: OllamaModel[];
+    message: string | null;
+  };
   onProviderChange(providerId: string): void;
   onModelChange(model: string | null): void;
   onAccessChange(access: ChatAccessLevel): void;
@@ -51,15 +63,18 @@ export function ChatComposer({
 }) {
   const selected = providers.find((provider) => provider.id === providerId);
   const chatCapable = selected ? supportsChat(selected) : false;
-  const models = selected?.stream?.models ?? [];
+  const ollamaChat = isOllamaChat(selected);
+  const models = ollamaChat ? (ollama?.models ?? []) : (selected?.stream?.models ?? []);
   // Empty when this provider/model has no verified thinking flag — the pill
   // simply doesn't render then.
   const thinkingLevels = chatCapable ? thinkingLevelsFor(selected?.stream, model) : [];
+  const providerReady = !ollamaChat || ollama?.status === "ready";
   const canSend =
     !working &&
     !disabled &&
     chatCapable &&
-    (draft.trim().length > 0 || attachments.length > 0);
+    providerReady &&
+    (draft.trim().length > 0 || (!ollamaChat && attachments.length > 0));
 
   const send = () => {
     if (!canSend) return;
@@ -75,7 +90,8 @@ export function ChatComposer({
   const accessLevel = ACCESS_LEVELS.find((level) => level.id === access);
   // "" is the menu id for "let the CLI pick" — a null model on the thread.
   const modelLabel =
-    models.find((entry) => entry.id === model)?.label ?? "Default model";
+    models.find((entry) => entry.id === model)?.label ??
+    (ollamaChat ? models[0]?.label ?? "Choose a local model" : "Default model");
   // Null (or a level the current model no longer offers) shows the neutral
   // chip label; engine.buildAgentArgs drops a stale level the same way.
   const thinkingLabel =
@@ -89,8 +105,16 @@ export function ChatComposer({
           use it.
         </p>
       )}
+      {ollamaChat && (
+        <p className="mb-2 text-[11px] text-text-dim" data-testid="ollama-chat-notice">
+          {ollama?.message ??
+            (ollama?.status === "loading"
+              ? "Checking local Ollama models…"
+              : "Local chat only — no filesystem access, tools, or server-side sessions.")}
+        </p>
+      )}
       <div className="rounded-xl border border-border bg-surface focus-within:border-accent/70">
-        {attachments.length > 0 && (
+        {!ollamaChat && attachments.length > 0 && (
           <ul
             className="flex flex-wrap gap-1.5 px-3 pt-2.5"
             aria-label="Attached files"
@@ -121,7 +145,9 @@ export function ChatComposer({
           disabled={disabled}
           rows={3}
           aria-label="Message"
-          placeholder="Ask the agent to do something… (drop files to attach)"
+          placeholder={
+            ollamaChat ? "Ask your local model…" : "Ask the agent to do something… (drop files to attach)"
+          }
           className="w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-sm text-text placeholder:text-text-dim focus:outline-none disabled:opacity-50"
         />
         <div className="flex items-center gap-1.5 px-2 pb-2">
@@ -196,13 +222,13 @@ export function ChatComposer({
             {selected?.name ?? providerId}
           </span>
         </ComposerMenu>
-        {chatCapable && models.length > 0 && (
+        {chatCapable && (models.length > 0 || ollamaChat) && (
           <ComposerMenu
             label="Model"
             value={model ?? ""}
             onSelect={(id) => onModelChange(id || null)}
             options={[
-              { id: "", label: "Default model" },
+              { id: "", label: ollamaChat ? "Default local model" : "Default model" },
               ...models.map((entry) => ({ id: entry.id, label: entry.label })),
             ]}
             menuWidthClass="min-w-[190px]"
@@ -210,7 +236,7 @@ export function ChatComposer({
             <span className="max-w-[150px] truncate">{modelLabel}</span>
           </ComposerMenu>
         )}
-        {chatCapable && (
+        {chatCapable && !ollamaChat && (
           <ComposerMenu
             label="Access level"
             value={access}

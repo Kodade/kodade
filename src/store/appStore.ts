@@ -26,6 +26,7 @@ import { createActivityModule } from "../activity/activity";
 import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
+import { createOllamaChatRuntime } from "../chat/ollama";
 import { createProvidersStore } from "../providers/store";
 import { ensureBrowserAgentSetup } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
@@ -582,6 +583,8 @@ function isInCodeMirror(node: Node | null): boolean {
 // The activity hooks below are the privacy boundary in practice: they forward
 // ids and a fixed status reason, so the sidebar can show working/needs-you
 // without any transcript text ever reaching the Activity module or KödMem.
+export const ollamaChatRuntime = createOllamaChatRuntime();
+
 export const chatStore = createChatStore({
   agent: tauriAgent,
   storage: tauriStorage,
@@ -593,6 +596,7 @@ export const chatStore = createChatStore({
     entitlements.hasFeature(FEATURES.sshPro)
       ? remoteTargetForProjectId(appStore.getState().remoteTargets, projectId)
       : null,
+  ollama: ollamaChatRuntime,
   activity: {
     streamed: (projectId, threadId) =>
       activityAdapters.terminalOutput(projectId, threadId),
@@ -724,6 +728,10 @@ export async function initApp(): Promise<void> {
     .catch((error) => {
       console.error("kodade: unable to listen for KödChat run events", error);
     });
+  // Ollama's availability is its loopback HTTP service, not whether a CLI
+  // binary happens to be on PATH. This is safe in public builds and gives the
+  // Settings/composer an actionable local start/install state.
+  void chatStore.getState().refreshOllama();
   if (isTauriRuntime()) {
     void tauriBrowser
       .onAgentActivate((event) => {

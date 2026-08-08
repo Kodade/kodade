@@ -11,6 +11,7 @@
 
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { ChatAccessLevel } from "../providers/catalog";
+import type { ChatMessage } from "../local/backend";
 import type { AgentStreamAdapter, AgentStreamEvent } from "../agents/contract";
 import { adapterFor } from "../agents/registry";
 import type { AgentIpc, StorageIpc, Unlisten } from "../ipc/contract";
@@ -26,6 +27,11 @@ import {
   type ChatEntry,
   type ChatThread,
 } from "./model";
+import {
+  OLLAMA_UNAVAILABLE_MESSAGE,
+  type OllamaChatRuntime,
+  type OllamaModel,
+} from "./ollama";
 
 // Metadata-only hooks. Nothing here carries message, tool, or output text.
 export type ChatActivityHooks = {
@@ -45,6 +51,9 @@ export type ChatDeps = {
   // the provider argv; this store wraps it in a direct OpenSSH spawn.
   remoteTarget?(projectId: string): RemoteTarget | null;
   adapters?: (providerId: string) => AgentStreamAdapter | null;
+  // Ollama is a public, local HTTP chat provider. It never enters KödLocal's
+  // tool loop and intentionally has no native server-side session.
+  ollama?: OllamaChatRuntime;
   newId?: () => string;
   now?: () => number;
   activity?: ChatActivityHooks;
@@ -60,6 +69,11 @@ export type ChatState = {
   // Threads whose transcript document has been read (or created), so opening a
   // thread twice doesn't re-read the disk.
   loaded: Record<string, boolean>;
+  ollama: {
+    status: "idle" | "loading" | "ready" | "unavailable";
+    models: OllamaModel[];
+    message: string | null;
+  };
 
   // Begin listening for run events. Idempotent; returns a teardown.
   start(): Promise<Unlisten>;
@@ -72,6 +86,7 @@ export type ChatState = {
   setAccess(threadId: string, access: ChatAccessLevel): void;
   // The thread's thinking level (null = the CLI's default effort).
   setThinking(threadId: string, thinking: string | null): void;
+  refreshOllama(): Promise<void>;
   // Send one user message and run a turn. Resolves once the run has STARTED —
   // the answer arrives through the event stream.
   send(threadId: string, text: string): Promise<void>;
@@ -102,7 +117,8 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   // its parser, and the id of the assistant entry deltas are appending to.
   type Run = {
     runId: string;
-    parser: ReturnType<AgentStreamAdapter["createParser"]>;
+    parser?: ReturnType<AgentStreamAdapter["createParser"]>;
+    abort?: () => void;
     // Adapter messageId → transcript entry id, so a multi-message turn renders
     // as separate bubbles and a `message-complete` replaces the right one.
     messageEntries: Map<string, string>;
@@ -334,6 +350,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) return; // a stale/cancelled turn
+      if (!run.parser) return;
       for (const event of run.parser.line(line)) applyEvent(threadId, run, event);
       persistDebounced(threadId);
     };
@@ -342,7 +359,9 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) return;
-      for (const event of run.parser.end(code, stderr)) applyEvent(threadId, run, event);
+      if (run.parser) {
+        for (const event of run.parser.end(code, stderr)) applyEvent(threadId, run, event);
+      }
       // `end` always yields a `done`, but settle defensively in case a future
       // adapter forgets: a thread must never be stuck "working".
       settle(threadId, run);
@@ -351,6 +370,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     return {
       threads: {},
       loaded: {},
+      ollama: { status: "idle", models: [], message: null },
 
       async start(): Promise<Unlisten> {
         const offEvent = await deps.agent.onEvent((event) => onLine(event.id, event.line));
@@ -372,6 +392,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             },
           }));
         }
+        if (providerId === "ollama") void get().refreshOllama();
         if (get().loaded[threadId]) return;
         set((state) => ({ loaded: { ...state.loaded, [threadId]: true } }));
         let raw: string | null = null;
@@ -406,6 +427,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               // readable transcript.
               { ...thread, providerId, resumeId: null, model: null, thinking: null },
         );
+        if (providerId === "ollama") void get().refreshOllama();
         persistDebounced(threadId);
       },
 
@@ -430,11 +452,87 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         persistDebounced(threadId);
       },
 
+      async refreshOllama() {
+        if (!deps.ollama) return;
+        set((state) => ({ ollama: { ...state.ollama, status: "loading", message: null } }));
+        try {
+          const models = await deps.ollama.listModels();
+          set({
+            ollama: {
+              status: "ready",
+              models,
+              message: models.length ? null : "Ollama is running, but no local models are installed yet.",
+            },
+          });
+        } catch (error) {
+          set({
+            ollama: {
+              status: "unavailable",
+              models: [],
+              message:
+                error instanceof Error && error.message
+                  ? error.message
+                  : OLLAMA_UNAVAILABLE_MESSAGE,
+            },
+          });
+        }
+      },
+
       async send(threadId: string, text: string) {
         const prompt = text.trim();
         if (!prompt) return;
         const thread = get().threads[threadId];
         if (!thread || runs.has(threadId)) return;
+
+        if (thread.providerId === "ollama") {
+          const runtime = deps.ollama;
+          if (!runtime) {
+            appendEntry(threadId, { kind: "error", id: newId(), message: OLLAMA_UNAVAILABLE_MESSAGE });
+            void persistNow(threadId);
+            return;
+          }
+          if (get().ollama.status !== "ready") await get().refreshOllama();
+          const current = get().threads[threadId];
+          if (!current) return;
+          const model = current.model ?? get().ollama.models[0]?.id;
+          if (!model) {
+            appendEntry(threadId, {
+              kind: "error",
+              id: newId(),
+              message: get().ollama.message ?? "Choose or install an Ollama model, then try again.",
+            });
+            void persistNow(threadId);
+            return;
+          }
+          if (current.model !== model) patch(threadId, (entry) => ({ ...entry, model }));
+          const turn = (turns.get(threadId) ?? 0) + 1;
+          turns.set(threadId, turn);
+          const runId = `${threadId}#${turn}`;
+          const controller = new AbortController();
+          const run: Run = {
+            runId,
+            abort: () => controller.abort(),
+            messageEntries: new Map(),
+            thinkingEntries: new Map(),
+            toolEntries: new Map(),
+            turn,
+          };
+          runs.set(threadId, run);
+          runByRunId.set(runId, threadId);
+          const firstMessage = !current.entries.some((entry) => entry.kind === "message");
+          appendEntry(threadId, { kind: "message", id: newId(), role: "user", text: prompt });
+          patch(threadId, (entry) => ({
+            ...entry,
+            status: "working",
+            needsLogin: false,
+            title: firstMessage ? titleFromMessage(prompt) : entry.title,
+          }));
+          deps.activity?.attention?.(current.projectId, threadId, null);
+          deps.activity?.streamed?.(current.projectId, threadId);
+          void persistNow(threadId);
+          void streamOllama({ threadId, run, runtime, model, controller });
+          return;
+        }
 
         const adapter = adapters(thread.providerId);
         if (!adapter) {
@@ -511,14 +609,19 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       async cancel(threadId: string) {
         const run = runs.get(threadId);
         if (!run) return;
-        try {
-          await deps.agent.cancel({ id: run.runId });
-        } catch (error) {
-          console.error(`kodade: KödChat cancel failed (${threadId}):`, error);
+        if (run.abort) {
+          run.abort();
+        } else {
+          try {
+            await deps.agent.cancel({ id: run.runId });
+          } catch (error) {
+            console.error(`kodade: KödChat cancel failed (${threadId}):`, error);
+          }
         }
         // The exit event still arrives and settles the thread; note the stop so
         // a cancelled turn doesn't look like it simply produced nothing.
         appendEntry(threadId, { kind: "error", id: newId(), message: "Stopped." });
+        if (run.abort) settle(threadId, run);
       },
 
       async removeThread(threadId: string) {
@@ -531,10 +634,14 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         if (run) {
           runs.delete(threadId);
           runByRunId.delete(run.runId);
-          try {
-            await deps.agent.cancel({ id: run.runId });
-          } catch {
-            // Already gone: removal must still complete.
+          if (run.abort) {
+            run.abort();
+          } else {
+            try {
+              await deps.agent.cancel({ id: run.runId });
+            } catch {
+              // Already gone: removal must still complete.
+            }
           }
         }
         turns.delete(threadId);
@@ -561,6 +668,53 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         await persistNow(threadId);
       },
     };
+
+    async function streamOllama(input: {
+      threadId: string;
+      run: Run;
+      runtime: OllamaChatRuntime;
+      model: string;
+      controller: AbortController;
+    }) {
+      const thread = get().threads[input.threadId];
+      if (!thread) return;
+      const messages: ChatMessage[] = thread.entries
+        .filter((entry): entry is Extract<ChatEntry, { kind: "message" }> => entry.kind === "message")
+        .filter((entry) => entry.role === "user" || entry.role === "assistant")
+        .map((entry) => ({ role: entry.role, content: entry.text }));
+      try {
+        for await (const delta of input.runtime.chat({
+          model: input.model,
+          messages,
+          signal: input.controller.signal,
+        })) {
+          if (runs.get(input.threadId)?.runId !== input.run.runId) return;
+          if (delta.reasoning) {
+            applyEvent(input.threadId, input.run, {
+              type: "thinking-delta",
+              messageId: `ollama-thinking-${input.run.runId}`,
+              text: delta.reasoning,
+            });
+          }
+          if (delta.content) {
+            applyEvent(input.threadId, input.run, {
+              type: "message-delta",
+              messageId: `ollama-message-${input.run.runId}`,
+              text: delta.content,
+            });
+          }
+        }
+      } catch (error) {
+        if (!input.controller.signal.aborted && runs.get(input.threadId)?.runId === input.run.runId) {
+          applyEvent(input.threadId, input.run, {
+            type: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } finally {
+        if (runs.get(input.threadId)?.runId === input.run.runId) settle(input.threadId, input.run);
+      }
+    }
   });
 
   return store;

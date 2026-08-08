@@ -29,7 +29,7 @@ export type ThinkingLevel = { id: string; label: string };
 
 export type ProviderStream = {
   // Which parser in src/agents/ reads this CLI's output.
-  dialect: "claude" | "codex" | "grok";
+  dialect: "claude" | "codex" | "grok" | "opencode";
   // Base argv for a fresh turn.
   args: readonly string[];
   // Per-access-level argv, appended right after `args`.
@@ -85,6 +85,9 @@ export type Provider = {
   install: string; // where to get it, shown when it's missing
   // KödChat (issue #163): omit for a CLI with no structured headless mode.
   stream?: ProviderStream;
+  // A non-CLI KödChat transport. Kept explicit so a local HTTP provider never
+  // gets mistaken for an agent with filesystem or tool permission.
+  chat?: { kind: "ollama" };
   // KödHarness (M10): where this CLI keeps its instruction files, skills,
   // subagents, and MCP registrations. Optional — a CLI kodade can launch but
   // doesn't yet inspect simply omits it. Stored as separator-free templates
@@ -364,6 +367,23 @@ export const PROVIDERS: Provider[] = [
     bin: "opencode",
     launch: "opencode",
     install: "https://opencode.ai",
+    // Verified against OpenCode 1.18.5: `opencode run --format json` accepts
+    // piped stdin, reports raw JSON events, and resumes with `--session`.
+    // Its built-in `plan` agent is read-only by permission policy; `build` is
+    // the normal editing agent. `--auto` only approves permissions not
+    // explicitly denied by the user's existing OpenCode config — Ködade never
+    // writes or loosens that config.
+    stream: {
+      dialect: "opencode",
+      args: ["run", "--format", "json", "--thinking"],
+      accessArgs: {
+        plan: ["--agent", "plan"],
+        standard: ["--agent", "build"],
+        full: ["--agent", "build", "--auto"],
+      },
+      resumeArgs: ["--session", "{session}"],
+      modelArgs: ["--model", "{model}"],
+    },
     // OpenCode: instructions in AGENTS.md (global ~/.config/opencode/AGENTS.md,
     // project <project>/AGENTS.md — the same file codex reads, so a shared
     // project AGENTS.md row is expected in the matrix) and MCP servers under
@@ -426,6 +446,7 @@ export const PROVIDERS: Provider[] = [
     // Bare `ollama` is the safe launch — the user picks a model themselves.
     launch: "ollama",
     install: "https://ollama.com/download",
+    chat: { kind: "ollama" },
   },
   {
     id: "kodade-local",
@@ -454,11 +475,15 @@ export function availableProviders(
 
 export const AVAILABLE_PROVIDERS = availableProviders();
 
-// True when KödChat can drive this provider headlessly. OpenCode, Ollama, and
-// KödLocal are launchable in a terminal today but expose no verified
-// structured stream, so chat says so instead of guessing at flags.
+// True when KödChat can drive this provider headlessly. Ollama is added through
+// the local HTTP chat transport rather than a CLI stream, so it is intentionally
+// absent here; KödLocal remains development-only.
 export function supportsChat(provider: Provider): boolean {
-  return provider.stream !== undefined;
+  return provider.stream !== undefined || provider.chat !== undefined;
+}
+
+export function isOllamaChat(provider: Provider | undefined): boolean {
+  return provider?.chat?.kind === "ollama";
 }
 
 // Trim raw `--version` stdout to a short token for the chip. CLIs print wildly

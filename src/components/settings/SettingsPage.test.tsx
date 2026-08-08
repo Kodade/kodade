@@ -592,10 +592,9 @@ describe("settings page", () => {
     expect(appStore.getState().chatProvider).toBe("codex");
   });
 
-  it("ignores a provider KödChat cannot drive", async () => {
+  it("accepts Ollama as a chat-capable default provider", async () => {
     appStore.setState({ chatProvider: "claude" });
     appStore.getState().setChatProvider("ollama");
-    // Rejected: the preference can never leave the composer unusable.
-    expect(appStore.getState().chatProvider).toBe("claude");
+    expect(appStore.getState().chatProvider).toBe("ollama");
   });
 });

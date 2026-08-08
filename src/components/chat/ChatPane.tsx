@@ -32,7 +32,7 @@ import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
 import { isChatSession } from "../../store/projects";
 import type { ProvidersState } from "../../providers/store";
-import { AVAILABLE_PROVIDERS } from "../../providers/catalog";
+import { AVAILABLE_PROVIDERS, isOllamaChat } from "../../providers/catalog";
 import { buildRemoteProgramLaunch } from "../../ssh/command";
 import {
   remoteSessionBase,
@@ -73,6 +73,7 @@ export function ChatPane({
     s.activeProjectId ? (s.activeSessionByProject[s.activeProjectId] ?? null) : null,
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
+  const ollama = useStore(chatThreadsStore, (s) => s.ollama);
   const catalog = useStore(providers, (s) => s.providers);
   const summaryProjectRoot = useStore(workingTree, (s) => s.projectRoot);
   const workingTreeSummary = useStore(workingTree, (s) => s.summary);
@@ -232,6 +233,7 @@ export function ChatPane({
                 model={thread.model}
                 access={thread.access}
                 thinking={thread.thinking}
+                ollama={ollama}
                 attachments={attachments}
                 draft={drafts[thread.id] ?? ""}
                 working={thread.status === "working"}
@@ -264,7 +266,12 @@ export function ChatPane({
                   );
                   void chatThreadsStore
                     .getState()
-                    .send(thread.id, withAttachments(text, attachments))
+                    .send(
+                      thread.id,
+                      isOllamaChat(providerList.find((provider) => provider.id === thread.providerId))
+                        ? text
+                        : withAttachments(text, attachments),
+                    )
                     .then(() => {
                       // The first user message becomes the thread's sidebar
                       // name. This is the only place transcript-derived text

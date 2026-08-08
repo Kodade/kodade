@@ -7,6 +7,7 @@ import { MockAgentIpc, MockStorage } from "../ipc/mock";
 import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN } from "../agents/fixtures";
 import { chatDocName, parsePersistedThread, titleFromMessage } from "./model";
 import { createChatStore, type ChatDeps } from "./store";
+import type { OllamaChatRuntime } from "./ollama";
 
 function setup(overrides: Partial<ChatDeps> = {}) {
   const agent = new MockAgentIpc();
@@ -265,16 +266,61 @@ describe("failures", () => {
     expect(agent.starts).toHaveLength(2);
   });
 
-  it("explains that a provider without an adapter is terminal-only", async () => {
-    const { agent, store } = setup();
+  it("streams Ollama over local HTTP with persisted client-side history and no agent process", async () => {
+    const calls: Array<{ model: string; messages: Array<{ role: string; content: string }>; signal: AbortSignal }> = [];
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return [{ id: "qwen3:8b", label: "qwen3:8b" }];
+      },
+      async *chat(input) {
+        calls.push(input);
+        yield { reasoning: "checking" };
+        yield { content: "local answer" };
+      },
+    };
+    const { agent, store } = setup({ ollama });
     await store.getState().start();
     await openThread(store, "ollama");
     await store.getState().send("t1", "hi");
 
+    await vi.waitFor(() => expect(store.getState().threads.t1.status).toBe("idle"));
+    expect(agent.starts).toHaveLength(0);
+    expect(calls).toEqual([
+      {
+        model: "qwen3:8b",
+        messages: [{ role: "user", content: "hi" }],
+        signal: expect.any(AbortSignal),
+      },
+    ]);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "thinking", text: "checking" }),
+        expect.objectContaining({ kind: "message", role: "assistant", text: "local answer" }),
+      ]),
+    );
+    await store.getState().send("t1", "again");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.messages).toEqual([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "local answer" },
+      { role: "user", content: "again" },
+    ]);
+  });
+
+  it("shows the actionable local-service state when Ollama is unavailable", async () => {
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        throw new Error("Ollama is not running on this Mac. Install Ollama, start it, then pull a model.");
+      },
+      async *chat() {},
+    };
+    const { agent, store } = setup({ ollama });
+    await openThread(store, "ollama");
+    await store.getState().send("t1", "hi");
     expect(agent.starts).toHaveLength(0);
     expect(store.getState().threads.t1.entries.at(-1)).toMatchObject({
       kind: "error",
-      message: expect.stringContaining("not yet supported in KödChat"),
+      message: expect.stringContaining("Ollama is not running"),
     });
   });
 
@@ -288,6 +334,30 @@ describe("failures", () => {
     expect(agent.cancels).toEqual([{ id: "t1#1" }]);
     agent.exit("t1#1", 143, "");
     expect(store.getState().threads.t1.status).not.toBe("working");
+  });
+
+  it("aborts an Ollama stream directly without trying to cancel a child process", async () => {
+    let aborted = false;
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return [{ id: "qwen3:8b", label: "qwen3:8b" }];
+      },
+      async *chat(input) {
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          });
+        });
+      },
+    };
+    const { agent, store } = setup({ ollama });
+    await openThread(store, "ollama");
+    await store.getState().send("t1", "hi");
+    await store.getState().cancel("t1");
+    expect(aborted).toBe(true);
+    expect(agent.cancels).toHaveLength(0);
+    expect(store.getState().threads.t1.status).toBe("idle");
   });
 });
 

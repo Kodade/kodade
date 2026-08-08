@@ -53,6 +53,10 @@ export type ChatDelta = {
   model?: string;
   role?: string;
   content?: string;
+  // OpenAI-compatible servers such as Ollama may stream reasoning separately
+  // from visible content. Keeping it generic lets chat-only providers reuse
+  // this transport without borrowing KödLocal's tool runtime.
+  reasoning?: string;
   toolCalls?: ToolCallDelta[];
   finishReason?: string;
   // modeld includes this on its final streaming delta so terminal and manager
@@ -160,9 +164,11 @@ type OpenAIChunk = {
   model?: string;
   error?: { message?: string } | string;
   choices?: Array<{
-    delta?: {
+      delta?: {
       role?: string;
-      content?: string | null;
+        content?: string | null;
+        reasoning_content?: string | null;
+        reasoning?: string | null;
       tool_calls?: ToolCallDelta[];
     };
     finish_reason?: string | null;
@@ -514,6 +520,9 @@ export class OpenAIHttpBackend implements InferenceBackend {
       ...(chunk.model === undefined ? {} : { model: chunk.model }),
       ...(delta.role === undefined ? {} : { role: delta.role }),
       ...(delta.content == null ? {} : { content: delta.content }),
+      ...(delta.reasoning_content == null && delta.reasoning == null
+        ? {}
+        : { reasoning: delta.reasoning_content ?? delta.reasoning! }),
       ...(delta.tool_calls === undefined ? {} : { toolCalls: delta.tool_calls }),
       ...(choice.finish_reason == null ? {} : { finishReason: choice.finish_reason }),
       ...(chunk.kod?.tokens_per_second === undefined
