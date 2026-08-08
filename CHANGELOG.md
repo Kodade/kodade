@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.1 - 2026-08-08
+
 - Added OpenCode as a first-class KödChat provider with native session resume,
   structured reasoning/tool output, access modes, and project-scoped dynamic
   model discovery that always retains the CLI-configured Default.
@@ -12,6 +14,10 @@
   bounded arguments and results available through Details.
 - Added GitHub issue/pull-request link icons and a current-working-tree Edited
   files card that opens the existing KödPR review beside KödChat.
+- Made KödChat's thread-owned terminal split vertically resizable while
+  preserving the chat and terminal across thread switches.
+- Removed the terminal work/status shelf so terminal PTYs are created only by
+  the explicit Show terminal action and remain owned by their KödChat thread.
 
 ## 1.4.15 - 2026-08-08
 
@@ -40,7 +46,8 @@
   tool host.
 - Removed internal planning, research, and release-evidence documents and added
   a public-source privacy check to prevent them from being recommitted.
-- Stable publication awaits owner-installed-app acceptance.
+- Published as the stable Apple Silicon release after owner-installed
+  acceptance, including Grok Build validation.
 
 ## 1.4.14 - 2026-08-02
 
