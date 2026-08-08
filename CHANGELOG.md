@@ -7,6 +7,8 @@
 - Added Grok Build as a chat-capable KödChat agent through the grok CLI's
   structured headless stream, with session resume, model selection, and
   permission-mode access levels.
+- Preserved the login-shell PATH when KödChat launches provider CLIs so Grok
+  Build can find secondary runtimes such as Node.js in the packaged macOS app.
 - Isolated unsent composer drafts per KödChat thread so switching conversations
   preserves each draft without leaking it into another thread.
 - Auto-titled KödChat threads: new threads read "New chat" and take a short
