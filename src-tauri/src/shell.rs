@@ -17,6 +17,9 @@ const RESOLVE_OUTPUT_CAP: u64 = 64 * 1024;
 #[cfg(unix)]
 const POSIX_RESOLVE_AND_PATH_PROBE: &str =
     "resolved=$(command -v \"$1\") || exit 1; printf '\\0%s\\0%s\\0' \"$resolved\" \"$PATH\"";
+#[cfg(unix)]
+const FISH_RESOLVE_AND_PATH_PROBE: &str =
+    "set -l resolved (command -v \"$argv[1]\"); or exit 1; printf '\\0%s\\0%s\\0' \"$resolved\" \"$PATH\"";
 #[cfg(any(windows, test))]
 const WINDOWS_EXTENSIONS: &[&str] = &[".exe", ".cmd"];
 
@@ -165,10 +168,21 @@ impl ShellEnvironment {
 
         #[cfg(unix)]
         if self.kind == ShellKind::Posix {
-            let mut args = self.command_args(POSIX_RESOLVE_AND_PATH_PROBE);
-            // POSIX `sh -c` assigns the first extra argument to $0 and the
-            // second to $1, keeping `bin` out of the command string.
-            args.push("kodade-resolve".into());
+            let fish = self
+                .executable
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.eq_ignore_ascii_case("fish"));
+            let mut args = self.command_args(if fish {
+                FISH_RESOLVE_AND_PATH_PROBE
+            } else {
+                POSIX_RESOLVE_AND_PATH_PROBE
+            });
+            // Fish puts every post-command argument in $argv. POSIX shells
+            // assign the first to $0, so give them a fixed label before `bin`.
+            if !fish {
+                args.push("kodade-resolve".into());
+            }
             args.push(bin.into());
             let output = run_shell_args(self, &args, RESOLVE_OUTPUT_CAP)?;
             return parse_posix_resolve_and_path(&output);
@@ -645,6 +659,29 @@ mod tests {
         output.pop();
         assert!(parse_posix_resolve_and_path(&output).is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fish_login_shell_resolves_an_executable_with_its_profile_path() {
+        let Some(fish) = std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|directory| directory.join("fish"))
+            .find(|candidate| candidate.is_file())
+        else {
+            eprintln!("fish is not installed; deterministic probe parsing remains covered");
+            return;
+        };
+        let shell = ShellEnvironment::new(fish, ShellKind::Posix, "/".into());
+
+        let (executable, profile_path) = shell
+            .resolve_executable_with_login_path("fish")
+            .expect("Fish should accept Ködade's fixed login-shell probe");
+
+        assert!(executable.is_absolute());
+        assert!(executable.is_file());
+        assert!(profile_path.is_some_and(|path| !path.is_empty()));
     }
 
     #[cfg(unix)]
