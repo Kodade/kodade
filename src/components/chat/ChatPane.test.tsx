@@ -177,6 +177,64 @@ describe("ChatPane", () => {
     );
   });
 
+  it("keeps unsent drafts isolated when switching chat threads", async () => {
+    const { host, root, projectsStore, chatThreadsStore, projectId } = await mount();
+    mounted = root;
+
+    const type = async (value: string) => {
+      const textarea = host.querySelector("textarea")!;
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!;
+        setter.call(textarea, value);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+
+    let firstThreadId = "";
+    let secondThreadId = "";
+    await act(async () => {
+      firstThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(firstThreadId, projectId, "claude");
+    });
+    await type("draft for the first thread");
+
+    await act(async () => {
+      secondThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(secondThreadId, projectId, "claude");
+    });
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("");
+
+    await type("draft for the second thread");
+    await act(async () => {
+      projectsStore.getState().setActiveSession(projectId, firstThreadId);
+    });
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+      "draft for the first thread",
+    );
+
+    await act(async () => {
+      projectsStore.getState().setActiveSession(projectId, secondThreadId);
+    });
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+      "draft for the second thread",
+    );
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click();
+    });
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("");
+
+    await act(async () => {
+      projectsStore.getState().setActiveSession(projectId, firstThreadId);
+    });
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+      "draft for the first thread",
+    );
+  });
+
   it("auto-titles the session from the first prompt, never over a manual rename", async () => {
     const { host, root, projectsStore, chatThreadsStore, projectId } = await mount();
     mounted = root;
