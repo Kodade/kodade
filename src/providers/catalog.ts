@@ -286,10 +286,6 @@ export const PROVIDERS: Provider[] = [
         { id: "high", label: "High" },
         { id: "xhigh", label: "XHigh" },
       ],
-      // Verified against the installed CLI's own model registry
-      // (~/.codex/models_cache.json, codex 0.146.1, checked 2026-08-07) —
-      // slugs, display names, and each model's supported_reasoning_levels
-      // verbatim, in the CLI's priority order.
       models: [
         { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", thinkingLevels: CODEX_LEVELS_THROUGH_ULTRA },
         { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", thinkingLevels: CODEX_LEVELS_THROUGH_ULTRA },
