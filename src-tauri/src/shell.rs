@@ -14,6 +14,9 @@ use crate::process_tree::{prepare_spawn, terminate_child, ProcessTree};
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLVE_OUTPUT_CAP: u64 = 64 * 1024;
+#[cfg(unix)]
+const POSIX_RESOLVE_AND_PATH_PROBE: &str =
+    "resolved=$(command -v \"$1\") || exit 1; printf '\\0%s\\0%s\\0' \"$resolved\" \"$PATH\"";
 #[cfg(any(windows, test))]
 const WINDOWS_EXTENSIONS: &[&str] = &[".exe", ".cmd"];
 
@@ -40,7 +43,7 @@ impl ShellEnvironment {
         {
             select_windows_shell(
                 find_windows_executable,
-                std::env::var_os("ComSpec").map(PathBuf::from),
+                windows_env_value("ComSpec").map(PathBuf::from),
                 windows_home(),
             )
         }
@@ -148,6 +151,33 @@ impl ShellEnvironment {
             resolved
         }
     }
+
+    // Resolve a headless provider and capture only the PATH from that exact
+    // login-shell invocation. The provider name is positional data; the probe
+    // text is fixed, bounded, and cannot be extended with caller shell text.
+    pub fn resolve_executable_with_login_path(
+        &self,
+        bin: &str,
+    ) -> Option<(PathBuf, Option<OsString>)> {
+        if !is_safe_bin(bin) {
+            return None;
+        }
+
+        #[cfg(unix)]
+        if self.kind == ShellKind::Posix {
+            let mut args = self.command_args(POSIX_RESOLVE_AND_PATH_PROBE);
+            // POSIX `sh -c` assigns the first extra argument to $0 and the
+            // second to $1, keeping `bin` out of the command string.
+            args.push("kodade-resolve".into());
+            args.push(bin.into());
+            let output = run_shell_args(self, &args, RESOLVE_OUTPUT_CAP)?;
+            return parse_posix_resolve_and_path(&output);
+        }
+
+        // Keep the established PowerShell/cmd lookup and child environment on
+        // Windows. The packaged-app PATH mismatch addressed here is POSIX-only.
+        self.resolve_executable(bin).map(|path| (path, None))
+    }
 }
 
 fn powershell_resolve_command(bin: &str) -> String {
@@ -173,8 +203,15 @@ pub(crate) fn run_shell_command(
     command: &str,
     output_cap: u64,
 ) -> Option<String> {
+    let output = run_shell_args(shell, &shell.command_args(command), output_cap)?;
+    let output = String::from_utf8_lossy(&output);
+    let trimmed = output.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn run_shell_args(shell: &ShellEnvironment, args: &[OsString], output_cap: u64) -> Option<Vec<u8>> {
     let mut cmd = Command::new(shell.executable());
-    cmd.args(shell.command_args(command))
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -190,8 +227,10 @@ pub(crate) fn run_shell_command(
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = stdout.take(output_cap).read_to_end(&mut buf);
-        let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
+        let _ = stdout
+            .take(output_cap.saturating_add(1))
+            .read_to_end(&mut buf);
+        let _ = tx.send(buf);
     });
 
     let status = match wait_timeout(&mut child, RESOLVE_TIMEOUT) {
@@ -206,8 +245,30 @@ pub(crate) fn run_shell_command(
         return None;
     }
     let output = rx.recv_timeout(Duration::from_secs(2)).ok()?;
-    let trimmed = output.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    ((output.len() as u64) <= output_cap).then_some(output)
+}
+
+#[cfg(unix)]
+fn parse_posix_resolve_and_path(output: &[u8]) -> Option<(PathBuf, Option<OsString>)> {
+    use std::os::unix::ffi::OsStringExt;
+
+    // Profile output may precede the probe. Read only the final three NUL
+    // delimiters emitted by the fixed command: executable, PATH, terminator.
+    let end = output.iter().rposition(|byte| *byte == 0)?;
+    let path_start = output[..end].iter().rposition(|byte| *byte == 0)?;
+    let executable_start = output[..path_start].iter().rposition(|byte| *byte == 0)?;
+    let executable = PathBuf::from(OsString::from_vec(
+        output[executable_start + 1..path_start].to_vec(),
+    ));
+    let path = OsString::from_vec(output[path_start + 1..end].to_vec());
+    if !executable.is_absolute()
+        || !executable.is_file()
+        || !supported_resolved_path(&executable)
+        || path.is_empty()
+    {
+        return None;
+    }
+    Some((executable, Some(path)))
 }
 
 fn existing_absolute_line(output: &str) -> Option<PathBuf> {
@@ -282,11 +343,28 @@ fn find_windows_executable(bin: &str) -> Option<PathBuf> {
     if !is_safe_bin(bin) {
         return None;
     }
-    let dirs = std::env::var_os("PATH")
+    let dirs = windows_env_value("PATH")
         .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default();
-    let extensions = windows_extensions(std::env::var_os("PATHEXT").as_deref());
+    let extensions = windows_extensions(windows_env_value("PATHEXT").as_deref());
     resolve_in_dirs(bin, &dirs, &extensions)
+}
+
+#[cfg(windows)]
+fn windows_env_value(name: &str) -> Option<OsString> {
+    windows_env_value_from(std::env::vars_os(), name)
+}
+
+#[cfg(any(windows, test))]
+fn windows_env_value_from(
+    variables: impl IntoIterator<Item = (OsString, OsString)>,
+    name: &str,
+) -> Option<OsString> {
+    variables.into_iter().find_map(|(key, value)| {
+        key.to_string_lossy()
+            .eq_ignore_ascii_case(name)
+            .then_some(value)
+    })
 }
 
 #[cfg(any(windows, test))]
@@ -395,6 +473,15 @@ mod tests {
         let selected = select_windows_shell(|_| None, Some(cmd.clone()), home);
         assert_eq!(selected.executable(), cmd);
         assert_eq!(selected.kind(), ShellKind::Cmd);
+    }
+
+    #[test]
+    fn windows_environment_lookup_accepts_path_key_casing() {
+        let variables = vec![(OsString::from("Path"), OsString::from("profile-bin"))];
+        assert_eq!(
+            windows_env_value_from(variables, "PATH"),
+            Some(OsString::from("profile-bin"))
+        );
     }
 
     #[test]
@@ -534,5 +621,37 @@ mod tests {
             windows_extensions(Some(OsStr::new(".EXE"))),
             vec![".exe".to_string(), ".cmd".to_string()]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_profile_probe_parses_chatter_and_rejects_truncation() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = temp_dir("paired-profile-probe");
+        let executable = root.join("provider");
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        let profile_path = b"/profile/bin:/usr/bin";
+        let mut output = b"profile chatter\n\0".to_vec();
+        output.extend_from_slice(executable.as_os_str().as_bytes());
+        output.push(0);
+        output.extend_from_slice(profile_path);
+        output.push(0);
+
+        let (parsed_executable, parsed_path) = parse_posix_resolve_and_path(&output).unwrap();
+        assert_eq!(parsed_executable, executable);
+        assert_eq!(parsed_path.unwrap().as_bytes(), profile_path);
+
+        output.pop();
+        assert!(parse_posix_resolve_and_path(&output).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_shell_capture_rejects_output_above_the_cap() {
+        let shell = ShellEnvironment::new("/bin/sh".into(), ShellKind::Posix, "/".into());
+        let args = shell.command_args("printf 12345");
+        assert!(run_shell_args(&shell, &args, 4).is_none());
     }
 }
