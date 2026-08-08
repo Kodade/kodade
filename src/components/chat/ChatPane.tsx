@@ -49,6 +49,8 @@ export function ChatPane({
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Files dropped on the pane, waiting to ride along with the next message.
   const [attachments, setAttachments] = useState<string[]>([]);
+  // Composer drafts are transient, but owned by the thread they belong to.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const dropRegion = useRef<HTMLDivElement | null>(null);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
   const sessions = useStore(projectsStore, (s) => s.sessions);
@@ -167,6 +169,7 @@ export function ChatPane({
                 access={thread.access}
                 thinking={thread.thinking}
                 attachments={attachments}
+                draft={drafts[thread.id] ?? ""}
                 working={thread.status === "working"}
                 onProviderChange={(id) =>
                   chatThreadsStore.getState().setProvider(thread.id, id)
@@ -183,8 +186,12 @@ export function ChatPane({
                 onRemoveAttachment={(path) =>
                   setAttachments((current) => current.filter((entry) => entry !== path))
                 }
+                onDraftChange={(draft) =>
+                  setDrafts((current) => ({ ...current, [thread.id]: draft }))
+                }
                 onSend={(text) => {
                   setAttachments([]);
+                  setDrafts((current) => ({ ...current, [thread.id]: "" }));
                   // Captured BEFORE send: only the FIRST message titles the
                   // thread, so later turns never re-push a stale title over a
                   // manual rename.

@@ -37,12 +37,14 @@ function mount(overrides: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
         access="standard"
         thinking={null}
         attachments={[]}
+        draft=""
         working={false}
         onProviderChange={() => undefined}
         onModelChange={() => undefined}
         onAccessChange={() => undefined}
         onThinkingChange={() => undefined}
         onRemoveAttachment={() => undefined}
+        onDraftChange={() => undefined}
         onSend={() => undefined}
         onCancel={() => undefined}
         {...overrides}

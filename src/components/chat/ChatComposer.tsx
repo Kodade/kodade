@@ -6,7 +6,7 @@
 // Enter sends, Shift+Enter starts a new line — the convention every chat
 // surface uses, and the one thing users try first.
 
-import { useState, type KeyboardEvent } from "react";
+import type { KeyboardEvent } from "react";
 import type { ChatAccessLevel, Provider } from "../../providers/catalog";
 import { ACCESS_LEVELS, supportsChat, thinkingLevelsFor } from "../../providers/catalog";
 import { ComposerMenu } from "./ComposerMenu";
@@ -19,6 +19,7 @@ export function ChatComposer({
   access,
   thinking,
   attachments,
+  draft,
   working,
   disabled,
   onProviderChange,
@@ -26,6 +27,7 @@ export function ChatComposer({
   onAccessChange,
   onThinkingChange,
   onRemoveAttachment,
+  onDraftChange,
   onSend,
   onCancel,
 }: {
@@ -35,6 +37,7 @@ export function ChatComposer({
   access: ChatAccessLevel;
   thinking: string | null;
   attachments: string[];
+  draft: string;
   working: boolean;
   disabled?: boolean;
   onProviderChange(providerId: string): void;
@@ -42,10 +45,10 @@ export function ChatComposer({
   onAccessChange(access: ChatAccessLevel): void;
   onThinkingChange(thinking: string | null): void;
   onRemoveAttachment(path: string): void;
+  onDraftChange(draft: string): void;
   onSend(text: string): void;
   onCancel(): void;
 }) {
-  const [draft, setDraft] = useState("");
   const selected = providers.find((provider) => provider.id === providerId);
   const chatCapable = selected ? supportsChat(selected) : false;
   const models = selected?.stream?.models ?? [];
@@ -61,7 +64,6 @@ export function ChatComposer({
   const send = () => {
     if (!canSend) return;
     onSend(draft);
-    setDraft("");
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -114,7 +116,7 @@ export function ChatComposer({
         )}
         <textarea
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onKeyDown}
           disabled={disabled}
           rows={3}
