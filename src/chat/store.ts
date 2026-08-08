@@ -766,7 +766,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           if (get().ollama.status !== "ready") await get().refreshOllama();
           const current = get().threads[threadId];
           if (!current) return;
-          const model = current.model ?? get().ollama.models[0]?.id;
+          const availableModels = get().ollama.models;
+          const selectedModelAvailable =
+            current.model !== null &&
+            availableModels.some((candidate) => candidate.id === current.model);
+          const model = selectedModelAvailable
+            ? current.model!
+            : availableModels[0]?.id;
           if (!model) {
             appendEntry(threadId, {
               kind: "error",
@@ -776,7 +782,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             void persistNow(threadId);
             return;
           }
-          if (current.model !== model) patch(threadId, (entry) => ({ ...entry, model }));
+          const conversationId =
+            current.model !== null && current.model !== model
+              ? current.conversationId + 1
+              : current.conversationId;
+          if (current.model !== model) {
+            patch(threadId, (entry) => ({ ...entry, model, conversationId }));
+          }
           const turn = (turns.get(threadId) ?? 0) + 1;
           turns.set(threadId, turn);
           const runId = `${threadId}#${turn}`;
@@ -787,7 +799,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             messageEntries: new Map(),
             thinkingEntries: new Map(),
             toolEntries: new Map(),
-            conversationId: current.conversationId,
+            conversationId,
             turn,
           };
           runs.set(threadId, run);
@@ -798,7 +810,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             id: newId(),
             role: "user",
             text: prompt,
-            conversationId: current.conversationId,
+            conversationId,
           });
           patch(threadId, (entry) => ({
             ...entry,

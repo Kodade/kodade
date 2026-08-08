@@ -644,6 +644,51 @@ describe("failures", () => {
     });
   });
 
+  it("falls back to an available model with fresh history after a mid-turn refresh", async () => {
+    let models = [
+      { id: "qwen3:8b", label: "qwen3:8b" },
+      { id: "llama3:8b", label: "llama3:8b" },
+    ];
+    let releaseFirst: (() => void) | null = null;
+    const calls: Array<{
+      model: string;
+      messages: Array<{ role: string; content: string }>;
+    }> = [];
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return models;
+      },
+      async *chat(input) {
+        calls.push({ model: input.model, messages: input.messages });
+        if (calls.length === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        yield { content: `${input.model} answer` };
+      },
+    };
+    const { store } = setup({ ollama });
+    await openThread(store, "ollama");
+    await vi.waitFor(() => expect(store.getState().ollama.status).toBe("ready"));
+    store.getState().setModel("t1", "qwen3:8b");
+    await store.getState().send("t1", "first");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    models = [{ id: "llama3:8b", label: "llama3:8b" }];
+    await store.getState().refreshOllama();
+    expect(store.getState().threads.t1.model).toBe("qwen3:8b");
+    releaseFirst!();
+    await vi.waitFor(() => expect(store.getState().threads.t1.status).toBe("idle"));
+
+    await store.getState().send("t1", "after refresh");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toEqual({
+      model: "llama3:8b",
+      messages: [{ role: "user", content: "after refresh" }],
+    });
+  });
+
   it("cancel kills the run and the exit still settles the thread", async () => {
     const { agent, store } = setup();
     await store.getState().start();

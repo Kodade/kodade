@@ -300,6 +300,13 @@ export function ChatPane({
                 onRefreshOllama={() =>
                   void chatThreadsStore.getState().refreshOllama()
                 }
+                onRefreshProviderModels={() =>
+                  activeProjectId
+                    ? void chatThreadsStore
+                        .getState()
+                        .refreshProviderModels(thread.providerId, activeProjectId)
+                    : undefined
+                }
               />
             </>
           )}

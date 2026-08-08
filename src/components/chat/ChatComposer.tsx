@@ -40,6 +40,7 @@ export function ChatComposer({
   onSend,
   onCancel,
   onRefreshOllama,
+  onRefreshProviderModels,
 }: {
   providers: Provider[];
   providerId: string;
@@ -65,6 +66,7 @@ export function ChatComposer({
   onSend(text: string): void;
   onCancel(): void;
   onRefreshOllama?(): void;
+  onRefreshProviderModels?(): void;
 }) {
   const selected = providers.find((provider) => provider.id === providerId);
   const chatCapable = selected ? supportsChat(selected) : false;
@@ -132,7 +134,8 @@ export function ChatComposer({
             <button
               type="button"
               onClick={onRefreshOllama}
-              className="shrink-0 rounded border border-border px-2 py-1 text-text hover:bg-surface-hover"
+              disabled={working}
+              className="shrink-0 rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
             >
               refresh models
             </button>
@@ -140,12 +143,27 @@ export function ChatComposer({
         </div>
       )}
       {discoversModels && providerModels && providerModels.status !== "idle" && (
-        <p className="mb-2 text-[11px] text-text-dim" data-testid="provider-model-notice">
-          {providerModels?.message ??
-            (providerModels?.status === "loading"
-              ? `Loading ${selected?.name ?? providerId} models…`
-              : `${models.length} model${models.length === 1 ? "" : "s"} available.`)}
-        </p>
+        <div
+          className="mb-2 flex items-center justify-between gap-2 text-[11px] text-text-dim"
+          data-testid="provider-model-notice"
+        >
+          <span>
+            {providerModels.message ??
+              (providerModels.status === "loading"
+                ? `Loading ${selected?.name ?? providerId} models…`
+                : `${models.length} model${models.length === 1 ? "" : "s"} available.`)}
+          </span>
+          {providerModels.status !== "loading" && onRefreshProviderModels && (
+            <button
+              type="button"
+              onClick={onRefreshProviderModels}
+              disabled={working}
+              className="shrink-0 rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
+            >
+              refresh models
+            </button>
+          )}
+        </div>
       )}
       <div className="rounded-xl border border-border bg-surface focus-within:border-accent/70">
         {!ollamaChat && attachments.length > 0 && (

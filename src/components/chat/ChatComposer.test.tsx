@@ -240,6 +240,26 @@ describe("dynamic OpenCode models", () => {
     ]);
   });
 
+  it("retries unavailable discovery without remounting", () => {
+    const onRefreshProviderModels = vi.fn();
+    const { host, root } = mount({
+      providerId: "opencode",
+      providerModels: {
+        status: "unavailable",
+        models: [],
+        message: "OpenCode model discovery failed. Default remains available.",
+      },
+      onRefreshProviderModels,
+    });
+    mounted = root;
+
+    const refresh = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "refresh models",
+    );
+    act(() => refresh?.click());
+    expect(onRefreshProviderModels).toHaveBeenCalledOnce();
+  });
+
   it("locks provider and model controls while a turn is working", () => {
     const { host, root } = mount({
       providerId: "opencode",
