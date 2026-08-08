@@ -219,7 +219,9 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
           <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-text-dim">
             <span>{count}</span>
             <span>{state}</span>
-            {failures > 0 && <span className="text-red-400">{failures} failed</span>}
+            {failures > 0 && (
+              <span className="text-[var(--kd-error)]">{failures} failed</span>
+            )}
             {denied > 0 && <span className="text-[var(--kd-warning)]">{denied} denied</span>}
           </p>
         </div>
@@ -265,11 +267,17 @@ function activityLabel(entries: ToolEntry[]): string {
 function toolLabel(entry: ToolEntry): string {
   const args = entry.call.args;
   const tool = entry.call.tool.toLowerCase();
-  const path = stringArg(args, "file_path") ?? stringArg(args, "path");
-  const query = stringArg(args, "query");
+  const path =
+    stringArg(args, "file_path") ??
+    stringArg(args, "filePath") ??
+    stringArg(args, "path");
+  const query = stringArg(args, "query") ?? stringArg(args, "pattern");
   const command = stringArg(args, "command");
   if (tool === "read" || tool === "read_file") return path ? `Read ${path}` : "Read a file";
-  if (tool.includes("search")) return query ? `Searched ${query}` : "Searched the web";
+  if (tool.includes("search") || tool.includes("grep") || tool.includes("find")) {
+    if (query) return `Searched ${query}${path ? ` in ${path}` : ""}`;
+    return path ? `Searched ${path}` : "Searched";
+  }
   if (tool === "shell" || tool.includes("command") || tool === "bash") {
     return command ? `Ran ${shorten(command)}` : "Ran a command";
   }

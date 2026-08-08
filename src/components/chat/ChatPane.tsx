@@ -19,8 +19,10 @@ import {
   filesStore,
   providersStore,
   reviewStore as defaultReviewStore,
+  workingTreeSummaryStore as defaultWorkingTreeSummaryStore,
 } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
+import type { WorkingTreeSummaryState } from "../../chat/working-tree";
 import type { ReviewState } from "../../store/review";
 import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
@@ -43,12 +45,14 @@ export function ChatPane({
   chatThreadsStore = chatStore,
   providers = providersStore,
   review = defaultReviewStore,
+  workingTree = defaultWorkingTreeSummaryStore,
   terminalRegistry,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   chatThreadsStore?: StoreApi<ChatState>;
   providers?: StoreApi<ProvidersState>;
   review?: StoreApi<ReviewState>;
+  workingTree?: StoreApi<WorkingTreeSummaryState>;
   terminalRegistry?: TerminalDisplayRegistry;
 } = {}) {
   // Terminal visibility belongs to the chat that owns the PTY. Switching
@@ -67,11 +71,11 @@ export function ChatPane({
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
   const catalog = useStore(providers, (s) => s.providers);
-  const reviewProjectRoot = useStore(review, (s) => s.projectRoot);
-  const reviewTotals = useStore(review, (s) => s.totals);
-  const reviewLoading = useStore(review, (s) => s.loading);
-  const reviewLoaded = useStore(review, (s) => s.loaded);
-  const reviewError = useStore(review, (s) => s.error);
+  const summaryProjectRoot = useStore(workingTree, (s) => s.projectRoot);
+  const workingTreeSummary = useStore(workingTree, (s) => s.summary);
+  const summaryLoading = useStore(workingTree, (s) => s.loading);
+  const summaryLoaded = useStore(workingTree, (s) => s.loaded);
+  const summaryError = useStore(workingTree, (s) => s.error);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const owningChat =
@@ -108,26 +112,25 @@ export function ChatPane({
       .openThread(threadId, activeProjectId, providerForSession(activeChat));
   }, [activeChat, activeProjectId, chatThreadsStore, threadId]);
 
-  // KödPR owns the current working-tree diff. Once a turn has settled, refresh
-  // that same read-only source and show only a positive, healthy result. This
-  // deliberately reports the workspace's current diff, not agent attribution.
+  // Once a turn settles, refresh KödChat's dedicated read-only projection.
+  // This reports the workspace's current diff, not agent attribution, and
+  // cannot disturb whichever branch/PR scope the user left open in KödPR.
   useEffect(() => {
     if (!thread || thread.status !== "idle" || thread.entries.length === 0) return;
     const root = filesStore.getState().rootPath;
     if (!root) return;
-    const reviewState = review.getState();
-    if (reviewState.scope.kind === "worktree") void reviewState.load(root);
-    else void reviewState.setScope({ kind: "worktree" });
-  }, [review, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
+    void workingTree.getState().load(root);
+  }, [workingTree, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
 
   const currentWorkingTree =
     !!thread &&
     thread.status === "idle" &&
-    reviewProjectRoot === filesStore.getState().rootPath &&
-    reviewLoaded &&
-    !reviewLoading &&
-    !reviewError &&
-    reviewTotals.files > 0;
+    summaryProjectRoot === filesStore.getState().rootPath &&
+    summaryLoaded &&
+    !summaryLoading &&
+    !summaryError &&
+    !!workingTreeSummary &&
+    workingTreeSummary.files > 0;
 
   const providerList = useMemo(
     () => (catalog.length > 0 ? catalog : AVAILABLE_PROVIDERS),
@@ -211,10 +214,15 @@ export function ChatPane({
               </div>
               {currentWorkingTree && (
                 <EditedFilesCard
-                  files={reviewTotals.files}
-                  adds={reviewTotals.adds}
-                  dels={reviewTotals.dels}
-                  onReview={() => filesStore.getState().openReviewTab()}
+                  files={workingTreeSummary.files}
+                  adds={workingTreeSummary.adds}
+                  dels={workingTreeSummary.dels}
+                  onReview={() => {
+                    const root = filesStore.getState().rootPath;
+                    if (!root) return;
+                    void review.getState().openWorktree(root);
+                    filesStore.getState().openReviewTab();
+                  }}
                 />
               )}
               <ChatComposer
@@ -347,32 +355,34 @@ function EditedFilesCard({
   onReview(): void;
 }) {
   return (
-    <div
+    <button
+      type="button"
       data-testid="chat-edited-files"
-      className="mx-3 mb-2 rounded-md border border-border bg-surface px-3 py-2 text-xs"
+      onClick={onReview}
+      aria-label="Review current working-tree changes"
+      className="group mx-3 mb-2 flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-left text-xs hover:bg-surface-hover focus:outline-none focus:ring-1 focus:ring-accent"
     >
-      <div className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={onReview}
-          aria-label="Review current working-tree changes"
-          className="min-w-0 text-left focus:outline-none focus:ring-1 focus:ring-accent"
-        >
-          <p className="text-text">Edited {files} file{files === 1 ? "" : "s"}</p>
-          <p className="mt-0.5 text-[11px] text-text-dim">
-            Current working tree · <span className="text-green-400">+{adds}</span>{" "}
-            <span className="text-red-400">−{dels}</span>
-          </p>
-        </button>
-        <button
-          type="button"
-          onClick={onReview}
-          className="shrink-0 rounded border border-border px-2 py-1 text-[11px] text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
-        >
-          Review
-        </button>
-      </div>
-    </div>
+      <span data-testid="chat-edited-files-copy" className="min-w-0">
+        <span className="block text-text">
+          Edited {files} file{files === 1 ? "" : "s"}
+        </span>
+        <span className="mt-0.5 block text-[11px] text-text-dim">
+          Current working tree ·{" "}
+          <span data-testid="chat-additions" className="text-[var(--kd-success)]">
+            +{adds}
+          </span>{" "}
+          <span data-testid="chat-deletions" className="text-[var(--kd-error)]">
+            −{dels}
+          </span>
+        </span>
+      </span>
+      <span
+        data-testid="chat-review-affordance"
+        className="shrink-0 rounded border border-border px-2 py-1 text-[11px] text-text-dim group-hover:text-text"
+      >
+        Review
+      </span>
+    </button>
   );
 }
 

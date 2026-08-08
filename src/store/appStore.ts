@@ -43,6 +43,7 @@ import { setComboOverrides } from "../shortcuts/bindings";
 import { createFilesStore } from "./files";
 import { createHarnessStore } from "./harness";
 import { createReviewStore } from "./review";
+import { createWorkingTreeSummaryStore } from "../chat/working-tree";
 import { createSshStore } from "./ssh";
 import { createRemoteFilesStore } from "./remoteFiles";
 import { routeFileDrop } from "./drop-routing";
@@ -388,6 +389,10 @@ export const filesStore = createFilesStore({
     remoteFilesStore.getState().clearListing({ host, path }),
 });
 export const githubStore = createGithubStore(tauriGithub);
+// KödChat reads only this narrow working-tree projection after a completed
+// turn. It stays separate from KödPR so a passive chat refresh cannot switch
+// the user's selected branch/PR review scope.
+export const workingTreeSummaryStore = createWorkingTreeSummaryStore(tauriGit);
 // KödHarness (M10c): the full roster of CLIs kodade knows how to inspect.
 // Every adapter always scans (so the free-tier lock row can honestly name
 // "codex and grok also detected") — entitlements gate what the pane RENDERS,

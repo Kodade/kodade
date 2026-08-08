@@ -85,7 +85,21 @@ describe("ChatTranscript", () => {
     expect(summaries[0].textContent).toContain("1 denied");
     expect(summaries[0].textContent).toContain("Searched adapter");
     expect(summaries[0].textContent).toContain("Opened kodade.com");
+    expect(summaries[0].querySelector(".text-\\[var\\(--kd-error\\)\\]")).not.toBeNull();
     expect(summaries[1].textContent).toContain("Read README.md");
+  });
+
+  it("summarizes common Grep, find, and camelCase target variants", async () => {
+    const host = await render([
+      { kind: "tool", id: "1", call: { tool: "Read", args: { filePath: "src/camel.ts" } }, outcome: { status: "executed", result: "ok" } },
+      { kind: "tool", id: "2", call: { tool: "Grep", args: { pattern: "needle", path: "src" } }, outcome: { status: "executed", result: "match" } },
+      { kind: "tool", id: "3", call: { tool: "find_files", args: { query: "*.tsx", path: "src/components" } }, outcome: { status: "executed", result: "match" } },
+    ]);
+
+    const summary = host.querySelector('[data-testid="chat-tool-activity"]')!;
+    expect(summary.textContent).toContain("Read src/camel.ts");
+    expect(summary.textContent).toContain("Searched needle in src");
+    expect(summary.textContent).toContain("Searched *.tsx in src/components");
   });
 
   it("decorates only GitHub issue and pull-request links in KödChat", async () => {

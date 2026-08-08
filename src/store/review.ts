@@ -138,6 +138,9 @@ export type ReviewState = {
   // Re-run the current projectRoot's list load (fs-watch / tab activation).
   // No-op when nothing has been loaded yet.
   refresh(): Promise<void>;
+  // Deliberately open the requested project's working-tree review. Unlike
+  // setScope(), this never reloads the previously selected project's root.
+  openWorktree(projectRoot: string): Promise<void>;
   // Switch scope (worktree <-> branch) and reload the current project under it.
   setScope(scope: ReviewScope): Promise<void>;
   // Expand/collapse a row. On first expand of a non-binary file, lazily loads
@@ -592,6 +595,16 @@ export function createReviewStore(deps: ReviewDeps) {
         const root = get().projectRoot;
         if (!root) return;
         await get().load(root);
+      },
+
+      async openWorktree(projectRoot) {
+        set({
+          scope: { kind: "worktree" },
+          branchBase: null,
+          headBranch: null,
+          error: null,
+        });
+        await get().load(projectRoot);
       },
 
       async setScope(scope) {
