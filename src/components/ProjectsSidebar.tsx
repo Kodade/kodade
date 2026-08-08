@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { Pane } from "./Pane";
-import { activityModule, appStore, themeStore } from "../store/appStore";
+import { appStore, themeStore } from "../store/appStore";
 import {
   isChatSession,
   type Project,
@@ -18,7 +18,6 @@ import {
   REMOTE_SESSION_PREFIX,
 } from "../ssh/model";
 import { labelFor } from "../shortcuts/bindings";
-import { AgentLaunchMenu } from "./AgentLaunchMenu";
 import { ProjectTile } from "./ProjectTile";
 import { RemoteHostsSection } from "./RemoteHostsSection";
 import { SettingsEntry } from "./settings/SettingsEntry";
@@ -49,6 +48,9 @@ type FullWorkspaceSidebarProps = {
   lead?: ReactNode;
   supplemental?: ReactNode;
   footer?: ReactNode;
+  // The former terminal work shelf is retained only as an injectable legacy
+  // seam for its isolated projection tests. The production sidebar is chat-only.
+  showTerminalShelf?: boolean;
   // Store-connected agent quick-launch button, injected past the pure seam.
   launcher?: ReactNode;
 };
@@ -62,6 +64,7 @@ export function FullWorkspaceSidebar({
   supplemental,
   footer,
   launcher,
+  showTerminalShelf = true,
 }: FullWorkspaceSidebarProps) {
   const [query, setQuery] = useState("");
 
@@ -80,15 +83,22 @@ export function FullWorkspaceSidebar({
         actions={actions}
         launcher={launcher}
       />
-      <WorkspaceWorkList
-        view={view}
-        projects={projects}
-        appearance={appearance}
-        actions={actions}
-        query={query}
-        lead={lead}
-        supplemental={supplemental}
-      />
+      {showTerminalShelf ? (
+        <WorkspaceWorkList
+          view={view}
+          projects={projects}
+          appearance={appearance}
+          actions={actions}
+          query={query}
+          lead={lead}
+          supplemental={supplemental}
+        />
+      ) : (
+        <div data-workspace-scroll className="min-h-0 flex-1 overflow-y-auto">
+          {lead}
+          {supplemental}
+        </div>
+      )}
       {footer}
     </nav>
   );
@@ -357,16 +367,14 @@ export function ProjectsSidebar() {
           }}
         />
       ) : (
-        <FullWorkspaceProjection
-          activity={activityModule}
-          sessions={sessions}
+        <FullWorkspaceSidebar
+          view={{ reducedMotion: false, groups: [] }}
           projects={projects}
           appearance={appearance}
           activeProjectId={activeProjectId}
           actions={actions}
-          launcher={<AgentLaunchMenu />}
-          // KödChat is the sidebar's project list and leads the scroller; the
-          // PTY workspace cards render below it, untouched.
+          showTerminalShelf={false}
+          // KödChat is the sidebar's only local project list.
           lead={<ChatThreadsSection />}
           supplemental={
             RELEASE_MANIFEST.features.ssh ? <SidebarRemoteSection /> : null
@@ -387,7 +395,7 @@ export function ProjectsSidebar() {
 }
 
 // Remote host management lives in Settings → SSH (the canonical surface). The
-// The sidebar's Remote section is the saved remote-project tree. Plain/ad-hoc
+// sidebar's Remote section is the saved remote-project tree. Plain/ad-hoc
 // SSH sessions remain ordinary workspace cards; host discovery and connection
 // management live in Settings → SSH.
 function SidebarRemoteSection() {

@@ -44,6 +44,27 @@ describe("voiceCommandActions.submit (M9f)", () => {
   });
 });
 
+describe("voiceCommandActions.newSession", () => {
+  afterEach(() => {
+    appStore.setState(originalTargetState);
+  });
+
+  it("does not create a hidden terminal outside KödChat's explicit Show terminal control", () => {
+    appStore.setState({
+      projects: [{ id: "project-x", name: "Project", path: "/project" }],
+      sessions: [{ id: "chat-x", projectId: "project-x", kind: "chat", name: "claude 1" }],
+      activeProjectId: "project-x",
+      activeSessionByProject: { "project-x": "chat-x" },
+    });
+
+    voiceCommandActions.newSession();
+
+    expect(appStore.getState().sessions).toEqual([
+      { id: "chat-x", projectId: "project-x", kind: "chat", name: "claude 1" },
+    ]);
+  });
+});
+
 describe("resolveVoiceTarget — KödWhisper terminal fallback", () => {
   afterEach(() => {
     appStore.setState(originalTargetState);

@@ -52,6 +52,7 @@ async function mount() {
   const projectsStore = createProjectsStore({
     storage,
     registry: terminalRegistry,
+    autoStartTerminal: false,
     newId: (() => {
       let n = 0;
       return () => `s-${++n}`;
@@ -108,16 +109,14 @@ afterEach(() => {
 });
 
 describe("ChatPane", () => {
-  it("shows a selected terminal as the full workspace instead of an empty chat", async () => {
+  it("keeps a newly selected project free of a terminal until a chat requests one", async () => {
     const { host, root } = await mount();
     mounted = root;
 
-    expect(host.querySelector("[data-terminal-layout]")).not.toBeNull();
+    expect(host.querySelector("[data-terminal-layout]")).toBeNull();
     expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
-    expect(host.textContent).not.toContain("Send a message to start the conversation.");
-    expect(
-      host.querySelector('button[aria-label="Show terminal"]'),
-    ).toBeNull();
+    expect(host.textContent).toContain("Send a message to start the conversation.");
+    expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
   });
 
   it("shows the empty state until a message is sent", async () => {
@@ -458,10 +457,12 @@ describe("ChatPane", () => {
     mounted = root;
     const initialTerminal = projectsStore
       .getState()
-      .sessions.find((session) => !isChatSession(session))!;
-    await act(async () => {
-      await projectsStore.getState().closeSession(initialTerminal.id);
-    });
+      .sessions.find((session) => !isChatSession(session));
+    if (initialTerminal) {
+      await act(async () => {
+        await projectsStore.getState().closeSession(initialTerminal.id);
+      });
+    }
     terminalRegistry.open.mockClear();
 
     let threadId = "";
@@ -483,6 +484,11 @@ describe("ChatPane", () => {
 
     const split = host.querySelector('[data-testid="chat-terminal-split"]');
     expect(split).not.toBeNull();
+    const resizeHandle = host.querySelector<HTMLElement>(
+      '[data-testid="chat-terminal-resize-handle"]',
+    );
+    expect(resizeHandle?.getAttribute("role")).toBe("separator");
+    expect(resizeHandle?.getAttribute("aria-orientation")).toBe("horizontal");
     expect(host.textContent).toContain("Send a message to start the conversation.");
     expect(split!.querySelector("[data-terminal-leaf-id]")).not.toBeNull();
     expect(split!.textContent).not.toContain("No terminal is open");
@@ -532,5 +538,52 @@ describe("ChatPane", () => {
     });
     expect(projectsStore.getState().sessions).toHaveLength(0);
     expect(terminalRegistry.close).toHaveBeenCalledWith(terminal!.id);
+  });
+
+  it("keeps an opened terminal inside its owning chat when switching threads", async () => {
+    const {
+      host,
+      root,
+      projectsStore,
+      chatThreadsStore,
+      projectId,
+      terminalRegistry,
+    } = await mount();
+    mounted = root;
+
+    const initialTerminal = projectsStore
+      .getState()
+      .sessions.find((session) => !isChatSession(session));
+    if (initialTerminal) {
+      await act(async () => {
+        await projectsStore.getState().closeSession(initialTerminal.id);
+      });
+    }
+    terminalRegistry.open.mockClear();
+
+    let firstThreadId = "";
+    let secondThreadId = "";
+    await act(async () => {
+      firstThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(firstThreadId, projectId, "claude");
+    });
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('button[aria-label="Show terminal"]')?.click(),
+    );
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).not.toBeNull();
+
+    await act(async () => {
+      secondThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(secondThreadId, projectId, "claude");
+    });
+
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
+    expect(
+      projectsStore
+        .getState()
+        .sessions.filter((session) => !isChatSession(session)),
+    ).toHaveLength(1);
+    expect(terminalRegistry.open).toHaveBeenCalledTimes(1);
   });
 });

@@ -2611,12 +2611,16 @@ describe("remote SSH session revive (#121)", () => {
 });
 
 describe("chat threads are sessions without a PTY (KödChat, #163)", () => {
-  it("addChatThread creates a session but never opens a terminal", async () => {
-    const { store, opens } = makeStore();
+  it("adding a project and chat creates no terminal until the chat explicitly opens one", async () => {
+    const { store, opens } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
     await store.getState().addProject("/repos/alpha");
     const projectId = store.getState().projects[0].id;
-    // The project's first terminal is a real PTY session.
-    expect(opens).toHaveLength(1);
+    expect(opens).toHaveLength(0);
 
     const threadId = store.getState().addChatThread(projectId, "claude");
     expect(threadId).not.toBeNull();
@@ -2624,9 +2628,31 @@ describe("chat threads are sessions without a PTY (KödChat, #163)", () => {
     expect(thread.kind).toBe("chat");
     expect(thread.name).toBe("claude 1");
     // The load-bearing assertion: no registry host was opened for the thread.
-    expect(opens).toHaveLength(1);
+    expect(opens).toHaveLength(0);
     // It still becomes the project's selected session, like any other.
     expect(store.getState().activeSessionByProject[projectId]).toBe(threadId);
+  });
+
+  it("launches a local provider into the selected chat without replacing the chat selection", async () => {
+    const { store, opens, writes } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const threadId = store.getState().addChatThread(projectId, "claude")!;
+
+    await store.getState().launchInSession("claude", "claude");
+
+    const terminal = store
+      .getState()
+      .sessions.find((session) => session.kind !== "chat")!;
+    expect(terminal.workspaceId).toBe(threadId);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(threadId);
+    expect(opens).toEqual([{ id: terminal.id, cwd: "/repos/alpha" }]);
+    expect(writes).toEqual([{ id: terminal.id, data: "claude\r" }]);
   });
 
   it("closing a chat thread never touches the registry", async () => {

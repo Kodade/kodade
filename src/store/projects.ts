@@ -144,6 +144,9 @@ export type StoreDeps = {
   // Runtime entitlement seam for pinned remote projects. Persistence still
   // retains pins while access is unavailable; activation/execution stays shut.
   canUseRemote?: () => boolean;
+  // Legacy store consumers can opt into the old root-terminal behavior. The
+  // desktop app disables it so entering a project remains chat-first.
+  autoStartTerminal?: boolean;
 };
 
 // One persisted terminal-session identity: enough to recreate local sessions
@@ -733,11 +736,13 @@ export function createProjectsStore(deps: StoreDeps) {
         ...(meta.remote ? { remote: true } : {}),
         ...(meta.kind === "chat" ? { kind: "chat" as const } : {}),
       }));
+      const selected =
+        [...revived].reverse().find((session) => isChatSession(session)) ?? revived.at(-1)!;
       set((s) => ({
         sessions: [...s.sessions, ...revived],
         activeSessionByProject: {
           ...s.activeSessionByProject,
-          [project.id]: revived[revived.length - 1].id,
+          [project.id]: selected.id,
         },
       }));
       for (const session of revived) {
@@ -759,11 +764,10 @@ export function createProjectsStore(deps: StoreDeps) {
       }
     };
 
-    // Open a first terminal for a project that has none (cwd = project root).
-    // Persisted sessions (a reload) are revived with their saved ids — consumed
-    // one-shot here; otherwise a fresh session is created as before.
-    // The return value keeps callers from emitting the new session's selection
-    // twice: creation emits it as part of its lifecycle.
+    // Revive a project's persisted sessions when it becomes active. A project
+    // with no saved sessions stays empty until the user starts a KödChat thread
+    // or explicitly opens that thread's terminal; navigation never starts a
+    // background shell on its own.
     const ensureSession = (projectId: string): boolean => {
       if (get().sessions.some((s) => s.projectId === projectId)) return false;
       const pending = pendingSessions.get(projectId);
@@ -776,7 +780,15 @@ export function createProjectsStore(deps: StoreDeps) {
       // Remote SSH processes die with the app. Reviving their identities would
       // boot local shells mislabeled `ssh <host>`, so skip them. If every saved
       // session was remote, fall through to a fresh, plainly named shell.
-      const revivable = pending?.filter((s) => !s.remote || s.kind === "chat");
+      const chatIds = new Set(
+        pending?.filter((session) => session.kind === "chat").map((session) => session.id),
+      );
+      const revivable = pending?.filter((session) =>
+        deps.autoStartTerminal === false
+          ? session.kind === "chat" ||
+            (!session.remote && !!session.workspaceId && chatIds.has(session.workspaceId))
+          : !session.remote || session.kind === "chat",
+      );
       if (revivable && revivable.length > 0 && (project || remoteTarget)) {
         reviveSessions(
           project ?? {
@@ -792,7 +804,7 @@ export function createProjectsStore(deps: StoreDeps) {
       // Selecting a remote project is navigation, not permission to open an
       // SSH connection. Its first terminal/chat is created by an explicit
       // action in the Remote tree.
-      if (remoteTarget) return false;
+      if (remoteTarget || deps.autoStartTerminal === false) return false;
       get().addSession(projectId);
       return true;
     };
@@ -1349,10 +1361,9 @@ export function createProjectsStore(deps: StoreDeps) {
         return get().addSession(projectId, base, root.workspaceId ?? root.id);
       },
 
-      // Launch a CLI in the active project: open a fresh session named after
-      // the provider (e.g. "claude 1"), then type the command + Enter into its
-      // PTY. The CLI's own login flow runs in that terminal — kodade never
-      // proxies auth. No-op when there's no active project.
+      // Launch a CLI in the active project. The chat-first desktop app sends
+      // it to the selected thread's terminal; legacy callers keep their root
+      // session behavior until they opt out of auto-start terminals.
       async launchInSession(command: string, base: string) {
         const projectId = get().activeProjectId;
         if (!projectId) throw new Error("open a project first");
@@ -1367,14 +1378,41 @@ export function createProjectsStore(deps: StoreDeps) {
           remoteTarget && !command.startsWith("exec ")
             ? `exec ${command}`
             : command;
-        const sessionId = get().addSession(
-          projectId,
-          base,
-          undefined,
-          remoteTarget ? { remoteCommand } : undefined,
-        );
-        if (!sessionId) throw new Error("could not create a terminal session");
+        const selectedId = get().activeSessionByProject[projectId];
+        const selected = get().sessions.find((session) => session.id === selectedId);
+        const existingOwnedTerminal = selected && isChatSession(selected)
+          ? get().sessions.find(
+              (session) =>
+                session.projectId === projectId &&
+                !isChatSession(session) &&
+                session.workspaceId === selected.id,
+            )
+          : undefined;
+        const sessionId =
+          !remoteTarget && deps.autoStartTerminal === false
+            ? selected && isChatSession(selected)
+              ? (existingOwnedTerminal?.id ?? get().addTerminal(projectId, selected.id, base))
+              : null
+            : get().addSession(
+                projectId,
+                base,
+                undefined,
+                remoteTarget ? { remoteCommand } : undefined,
+              );
+        if (!sessionId) {
+          throw new Error(
+            selected && !isChatSession(selected)
+              ? "select a chat before starting an agent"
+              : "could not create a terminal session",
+          );
+        }
         if (remoteTarget) return;
+        // addTerminal selects its new PTY as part of its generic lifecycle.
+        // Keep a chat-owned launch on the chat so the shell remains embedded
+        // instead of replacing KödChat with a standalone terminal surface.
+        if (deps.autoStartTerminal === false && selected && isChatSession(selected)) {
+          get().setActiveSession(projectId, selected.id);
+        }
         await deps.registry.ready?.(sessionId);
         await deps.registry.write(sessionId, `${command}\r`);
       },

@@ -256,6 +256,31 @@ describe("ProjectsSidebar adaptive workspace seam", () => {
     ).toBe(false);
   });
 
+  it("renders chat projects and threads without terminal status shelves or cards", async () => {
+    const previousState = appStore.getState();
+    restoreAppStore = () => appStore.setState(previousState, true);
+    appStore.setState({
+      projects: [{ id: "kodade", name: "Kodade", path: "/repos/kodade" }],
+      sessions: [
+        { id: "chat", projectId: "kodade", kind: "chat", name: "claude 1" },
+        { id: "terminal", projectId: "kodade", workspaceId: "chat", name: "zsh 1" },
+      ],
+      activeProjectId: "kodade",
+      activeSessionByProject: { kodade: "chat" },
+      expandedProjects: { kodade: true },
+      sidebarMode: "full",
+    });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root?.render(<ProjectsSidebar />));
+
+    expect(container.querySelector('[data-testid="chat-threads"]')).not.toBeNull();
+    expect(container.querySelector('[data-workspace-group]')).toBeNull();
+    expect(container.querySelector('[data-workspace-session]')).toBeNull();
+    expect(container.querySelector('[aria-label^="Clear "]')).toBeNull();
+  });
+
   it("uses a zero-session project disclosure with natural traversal and Escape focus return", async () => {
     const previousState = appStore.getState();
     restoreAppStore = () => appStore.setState(previousState, true);
@@ -759,63 +784,6 @@ describe("ProjectsSidebar adaptive workspace seam", () => {
     expect(clear).not.toBeNull();
     await act(async () => clear?.click());
     expect(actions.clearSettledWorkspaces).toHaveBeenCalledWith(["settled"]);
-  });
-
-  it("clears the settled group through the store-backed sidebar", async () => {
-    const previousState = appStore.getState();
-    restoreAppStore = () => appStore.setState(previousState, true);
-    vi.useFakeTimers();
-    const project = {
-      id: "clear-settled",
-      name: "Clear settled",
-      path: "/repos/clear-settled",
-    };
-    vi.spyOn(registry, "open").mockResolvedValue(undefined);
-    vi.spyOn(registry, "close").mockResolvedValue(undefined);
-    activityModule.observe({
-      type: "project-added",
-      at: Date.now(),
-      projectId: project.id,
-      projectName: project.name,
-    });
-    restoreActivityModule = () =>
-      activityModule.observe({
-        type: "project-removed",
-        at: Date.now(),
-        projectId: project.id,
-      });
-    appStore.setState({
-      projects: [project],
-      sessions: [],
-      activeProjectId: project.id,
-      activeSessionByProject: {},
-      sidebarMode: "full",
-    });
-    appStore.getState().addSession(project.id);
-    appStore.getState().addSession(project.id);
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    root = createRoot(container);
-    await act(async () => root?.render(<ProjectsSidebar />));
-
-    const clear = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Clear 2 settled workspaces"]',
-    );
-    expect(clear).not.toBeNull();
-    await act(async () => {
-      clear?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(
-      appStore
-        .getState()
-        .sessions.filter((session) => session.projectId === project.id),
-    ).toEqual([]);
-    expect(
-      container.querySelector('[data-workspace-group="settled"]'),
-    ).toBeNull();
   });
 
   it("refreshes the full projection for live activity and recency boundaries without unchanged commits", async () => {
@@ -1429,68 +1397,6 @@ describe("ProjectsSidebar adaptive workspace seam", () => {
     expect(search?.value).toBe("codex");
     expect(container?.querySelector("#workspace-actions-working")).toBeNull();
     expect(document.activeElement).toBe(trigger);
-  });
-
-  it("projects a live shared activity update through the store-backed full sidebar", async () => {
-    const previousState = appStore.getState();
-    restoreAppStore = () => appStore.setState(previousState, true);
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));
-    const project = {
-      id: "store-backed-workspace",
-      name: "Store-backed workspace",
-      path: "/repos/store-backed-workspace",
-    };
-    vi.spyOn(registry, "open").mockResolvedValue(undefined);
-    vi.spyOn(registry, "close").mockResolvedValue(undefined);
-    vi.spyOn(tauriMemory, "resolveWorkspace").mockResolvedValue(null);
-    activityModule.observe({
-      type: "project-added",
-      at: Date.now(),
-      projectId: project.id,
-      projectName: project.name,
-    });
-    restoreActivityModule = () =>
-      activityModule.observe({
-        type: "project-removed",
-        at: Date.now(),
-        projectId: project.id,
-      });
-    appStore.setState({
-      projects: [project],
-      sessions: [],
-      activeProjectId: null,
-      activeSessionByProject: {},
-      sidebarMode: "full",
-    });
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    root = createRoot(container);
-    await act(async () => root?.render(<ProjectsSidebar />));
-
-    let sessionId: string | null = null;
-    await act(async () => {
-      sessionId = appStore.getState().addSession(project.id, "Live activity");
-    });
-    expect(sessionId).not.toBeNull();
-    expect(registry.open).toHaveBeenCalledWith(sessionId, project.path);
-    expect(
-      container.querySelector('section[aria-label^="Settled"]')?.textContent,
-    ).toContain("Store-backed workspace");
-
-    await act(async () => {
-      activityModule.observe({
-        type: "terminal-foreground",
-        at: Date.now(),
-        projectId: project.id,
-        sessionId: sessionId!,
-        process: "codex",
-      });
-      vi.advanceTimersByTime(1_000);
-    });
-    expect(
-      container.querySelector('section[aria-label^="Working"]')?.textContent,
-    ).toContain("codex · Store-backed workspace");
   });
 
   it("does not expose a new-session button for a zero-session project", async () => {

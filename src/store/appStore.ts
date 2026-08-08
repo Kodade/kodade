@@ -117,6 +117,7 @@ export const registry = new SessionRegistry(
 export const appStore = createProjectsStore({
   storage: tauriStorage,
   registry,
+  autoStartTerminal: false,
   canUseRemote: () =>
     RELEASE_MANIFEST.features.ssh &&
     entitlements.hasFeature(FEATURES.sshPro),
@@ -268,8 +269,8 @@ function activeProjectSessions() {
 export const voiceCommandActions = {
   sessionCount: () => activeProjectSessions().sessions.length,
   newSession: () => {
-    const projectId = appStore.getState().activeProjectId;
-    if (projectId) appStore.getState().addSession(projectId);
+    // A global command cannot reveal a ChatPane's thread-local split. Keep it
+    // unavailable rather than starting a shell the user cannot see.
   },
   switchTerminal: (index: number): boolean => {
     const { projectId, sessions } = activeProjectSessions();
@@ -531,8 +532,8 @@ export function installAppShortcuts(): () => void {
       toggleSidebar: () => appStore.getState().toggleSidebarMode(),
       toggleFiles: () => appStore.getState().toggleFilesPanel(),
       newSession: () => {
-        const projectId = appStore.getState().activeProjectId;
-        if (projectId) appStore.getState().addSession(projectId);
+        // See voiceCommandActions.newSession: terminal creation is explicit in
+        // the owning KödChat surface.
       },
       saveFile: () => void filesStore.getState().saveFile(),
       nextSession: () => appStore.getState().cycleSession(1),
