@@ -26,8 +26,9 @@ Windows support is under active development; Linux is planned.
 ## What Ködade does
 
 - **KödChat** provides a chat-first interface for Claude Code, Codex, and Grok
-  Build through their official CLIs, with a project terminal split that stays
-  attached to the current thread.
+  Build through their official CLIs, with compact work summaries, inline
+  edited-file review, and a resizable terminal split owned by the current
+  thread.
 - **Real terminals** use your login shell, PATH, authentication, configuration,
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.

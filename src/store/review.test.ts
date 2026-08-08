@@ -282,6 +282,35 @@ describe("createReviewStore", () => {
     await store.getState().load("/other");
     expect(store.getState().projectRoot).toBe("/other");
   });
+
+  it("opens worktree review directly on the requested project, not the prior scoped root", async () => {
+    const calls: { root: string; args: string[] }[] = [];
+    const git: GitIpc = {
+      async run(root, args) {
+        calls.push({ root, args });
+        return {
+          stdout: root === "/current" ? numstat([["4", "1", "current.ts"]]) : "",
+          stderr: "",
+        };
+      },
+    };
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    store.setState({
+      scope: { kind: "pr", number: 7 },
+      projectRoot: "/prior",
+    });
+
+    await store.getState().openWorktree("/current");
+
+    expect(store.getState()).toMatchObject({
+      scope: { kind: "worktree" },
+      projectRoot: "/current",
+      totals: { files: 1, adds: 4, dels: 1 },
+    });
+    expect(calls).toEqual([
+      { root: "/current", args: ["diff", "--numstat", "-z"] },
+    ]);
+  });
 });
 
 // A tiny in-memory stand-in for the reviewChecks persistence dep (the real

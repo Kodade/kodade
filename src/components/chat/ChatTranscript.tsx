@@ -1,5 +1,5 @@
 // The transcript half of KödChat: user bubbles, streaming assistant markdown,
-// collapsible thinking and tool cards, and the two failure cards.
+// collapsible thinking, compact tool activity, and the two failure cards.
 //
 // All styling is tokens-only so it re-skins with every app theme.
 
@@ -7,7 +7,6 @@ import { useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "../../markdown/render";
 import { rawAllowedAnchorHref } from "../../markdown/links";
 import type { ChatEntry, ChatThread } from "../../chat/model";
-import type { ToolOutcome } from "../../local/tools";
 
 export function ChatTranscript({
   thread,
@@ -46,14 +45,18 @@ export function ChatTranscript({
       className="flex h-full flex-col gap-3 overflow-y-auto px-3 py-3"
       data-testid="chat-transcript"
     >
-      {thread.entries.map((entry) => (
-        <TranscriptEntry
-          key={entry.id}
-          entry={entry}
-          onOpenLink={onOpenLink}
-          onOpenLoginTerminal={onOpenLoginTerminal}
-        />
-      ))}
+      {transcriptRows(thread.entries).map((row) =>
+        row.kind === "tools" ? (
+          <ToolActivitySummary key={row.entries[0].id} entries={row.entries} />
+        ) : (
+          <TranscriptEntry
+            key={row.entry.id}
+            entry={row.entry}
+            onOpenLink={onOpenLink}
+            onOpenLoginTerminal={onOpenLoginTerminal}
+          />
+        ),
+      )}
       <div ref={endRef} />
     </div>
   );
@@ -94,7 +97,9 @@ function TranscriptEntry({
         }}
         // Sanitized by renderMarkdown (markdown-it with html:false, then
         // DOMPurify) — the same boundary the editor preview uses.
-        dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.text) }}
+        dangerouslySetInnerHTML={{
+          __html: renderMarkdown(entry.text, { decorateGithubLinks: true }),
+        }}
       />
     );
   }
@@ -131,26 +136,8 @@ function TranscriptEntry({
     );
   }
 
-  if (entry.kind === "tool") {
-    const running = entry.outcome === null;
-    return (
-      <Collapsible
-        label={entry.call.tool}
-        badge={running ? "running" : outcomeBadge(entry.outcome!)}
-        tone={entry.outcome?.status === "error" ? "danger" : "dim"}
-        testId="chat-tool-card"
-      >
-        <pre className="mb-2 whitespace-pre-wrap break-words text-xs text-text-dim">
-          {formatArgs(entry.call.args)}
-        </pre>
-        {entry.outcome && (
-          <pre className="whitespace-pre-wrap break-words text-xs text-text">
-            {entry.outcome.result || "(no output)"}
-          </pre>
-        )}
-      </Collapsible>
-    );
-  }
+  // Tool entries are compacted by transcriptRows before reaching this branch.
+  if (entry.kind === "tool") return null;
 
   // An auth failure is the one error with a real remedy: log in through the
   // CLI's own flow, in a terminal. Kodade never proxies those credentials.
@@ -171,6 +158,171 @@ function TranscriptEntry({
       )}
     </div>
   );
+}
+
+type ToolEntry = Extract<ChatEntry, { kind: "tool" }>;
+type TranscriptRow =
+  | { kind: "entry"; entry: Exclude<ChatEntry, ToolEntry> }
+  | { kind: "tools"; entries: ToolEntry[] };
+
+// Tool activity is derived from persisted rows rather than stored as another
+// transcript shape. A text, thinking, plan, or error row ends the group.
+function transcriptRows(entries: ChatEntry[]): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+  let tools: ToolEntry[] = [];
+  const flushTools = () => {
+    if (tools.length > 0) rows.push({ kind: "tools", entries: tools });
+    tools = [];
+  };
+  for (const entry of entries) {
+    if (entry.kind === "tool") {
+      tools.push(entry);
+      continue;
+    }
+    flushTools();
+    rows.push({ kind: "entry", entry });
+  }
+  flushTools();
+  return rows;
+}
+
+function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
+  const [open, setOpen] = useState(false);
+  const running = entries.some((entry) => entry.outcome === null);
+  const failures = entries.filter((entry) => entry.outcome?.status === "error").length;
+  const denied = entries.filter((entry) => entry.outcome?.status === "denied").length;
+  const suggested = entries.filter((entry) => entry.outcome?.status === "suggested").length;
+  const state = running
+    ? "working"
+    : failures > 0
+      ? "failed"
+      : denied > 0
+        ? "needs approval"
+        : suggested > 0
+          ? "suggested"
+          : "completed";
+  const count = `${entries.length} action${entries.length === 1 ? "" : "s"}`;
+
+  return (
+    <section
+      data-testid="chat-tool-activity"
+      className="rounded-md border border-border bg-surface px-3 py-2 text-xs"
+    >
+      <div className="flex items-start gap-2">
+        <span
+          aria-hidden="true"
+          className={
+            running
+              ? "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent kd-dot-pulse"
+              : "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim"
+          }
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-text">{activityLabel(entries)}</p>
+          <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-text-dim">
+            <span>{count}</span>
+            <span>{state}</span>
+            {failures > 0 && (
+              <span className="text-[var(--kd-error)]">{failures} failed</span>
+            )}
+            {denied > 0 && <span className="text-[var(--kd-warning)]">{denied} denied</span>}
+          </p>
+        </div>
+        <button
+          type="button"
+          aria-label={open ? "Hide tool details" : "Show tool details"}
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+          className="shrink-0 text-[11px] text-text-dim hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          Details
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2 space-y-2 border-t border-border pt-2">
+          {entries.map((entry) => (
+            <div key={entry.id} className="rounded bg-bg px-2 py-1.5">
+              <p className="mb-1 font-medium text-text-dim">{toolLabel(entry)}</p>
+              <pre className="mb-1 whitespace-pre-wrap break-words text-xs text-text-dim">
+                {bound(formatArgs(entry.call.args))}
+              </pre>
+              {entry.outcome && (
+                <pre className="whitespace-pre-wrap break-words text-xs text-text">
+                  {bound(entry.outcome.result || "(no output)")}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function activityLabel(entries: ToolEntry[]): string {
+  const labels = entries.map(toolLabel);
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  if (labels.length === 3) return `${labels[0]}, ${labels[1]}, and ${labels[2]}`;
+  return `${labels.slice(0, 3).join(", ")}, and ${labels.length - 3} more`;
+}
+
+function toolLabel(entry: ToolEntry): string {
+  const args = entry.call.args;
+  const tool = entry.call.tool.toLowerCase();
+  const path =
+    stringArg(args, "file_path") ??
+    stringArg(args, "filePath") ??
+    stringArg(args, "target_file") ??
+    stringArg(args, "path");
+  const query = stringArg(args, "query") ?? stringArg(args, "pattern");
+  const command = stringArg(args, "command");
+  if (tool === "read" || tool === "read_file") return path ? `Read ${path}` : "Read a file";
+  if (tool.includes("search") || tool.includes("grep") || tool.includes("find")) {
+    if (query) return `Searched ${query}${path ? ` in ${path}` : ""}`;
+    return path ? `Searched ${path}` : "Searched";
+  }
+  if (tool === "shell" || tool.includes("command") || tool === "bash") {
+    return command ? `Ran ${shorten(command)}` : "Ran a command";
+  }
+  if (tool === "edit" || tool.includes("patch") || tool.includes("write")) {
+    const files = Array.isArray(args.files)
+      ? args.files.filter((file): file is string => typeof file === "string")
+      : [];
+    return files.length > 0
+      ? `Edited ${files.length} file${files.length === 1 ? "" : "s"}`
+      : path
+        ? `Edited ${path}`
+        : "Edited files";
+  }
+  if (tool.includes("browser") || tool.includes("web")) {
+    const url = stringArg(args, "url");
+    if (url) return `Opened ${hostName(url)}`;
+    return "Opened the browser";
+  }
+  return entry.call.tool;
+}
+
+function stringArg(args: Record<string, unknown>, key: string): string | null {
+  const value = args[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function shorten(value: string): string {
+  return value.length > 72 ? `${value.slice(0, 69)}…` : value;
+}
+
+function hostName(value: string): string {
+  try {
+    return new URL(value).host;
+  } catch {
+    return shorten(value);
+  }
+}
+
+const DETAIL_LIMIT = 1_600;
+function bound(value: string): string {
+  return value.length > DETAIL_LIMIT ? `${value.slice(0, DETAIL_LIMIT)}…` : value;
 }
 
 function Collapsible({
@@ -209,19 +361,6 @@ function Collapsible({
       {open && <div className="border-t border-border px-3 py-2">{children}</div>}
     </div>
   );
-}
-
-function outcomeBadge(outcome: ToolOutcome): string {
-  switch (outcome.status) {
-    case "error":
-      return "failed";
-    case "denied":
-      return "denied";
-    case "suggested":
-      return "suggested";
-    default:
-      return "done";
-  }
 }
 
 // Tool arguments are shown verbatim so a user can audit what an agent did.

@@ -18,8 +18,15 @@ import {
   chatStore,
   filesStore,
   providersStore,
+  reviewStore as defaultReviewStore,
+  workingTreeSummaryStore as defaultWorkingTreeSummaryStore,
 } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
+import type {
+  WorkingTreeSummary,
+  WorkingTreeSummaryState,
+} from "../../chat/working-tree";
+import type { ReviewState } from "../../store/review";
 import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
@@ -40,11 +47,15 @@ export function ChatPane({
   projectsStore = appStore,
   chatThreadsStore = chatStore,
   providers = providersStore,
+  review = defaultReviewStore,
+  workingTree = defaultWorkingTreeSummaryStore,
   terminalRegistry,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   chatThreadsStore?: StoreApi<ChatState>;
   providers?: StoreApi<ProvidersState>;
+  review?: StoreApi<ReviewState>;
+  workingTree?: StoreApi<WorkingTreeSummaryState>;
   terminalRegistry?: TerminalDisplayRegistry;
 } = {}) {
   // Terminal visibility belongs to the chat that owns the PTY. Switching
@@ -63,6 +74,11 @@ export function ChatPane({
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
   const catalog = useStore(providers, (s) => s.providers);
+  const summaryProjectRoot = useStore(workingTree, (s) => s.projectRoot);
+  const workingTreeSummary = useStore(workingTree, (s) => s.summary);
+  const summaryLoading = useStore(workingTree, (s) => s.loading);
+  const summaryLoaded = useStore(workingTree, (s) => s.loaded);
+  const summaryError = useStore(workingTree, (s) => s.error);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const owningChat =
@@ -98,6 +114,26 @@ export function ChatPane({
       .getState()
       .openThread(threadId, activeProjectId, providerForSession(activeChat));
   }, [activeChat, activeProjectId, chatThreadsStore, threadId]);
+
+  // Once a turn settles, refresh KödChat's dedicated read-only projection.
+  // This reports the workspace's current diff, not agent attribution, and
+  // cannot disturb whichever branch/PR scope the user left open in KödPR.
+  useEffect(() => {
+    if (!thread || thread.status !== "idle" || thread.entries.length === 0) return;
+    const root = filesStore.getState().rootPath;
+    if (!root) return;
+    void workingTree.getState().load(root);
+  }, [workingTree, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
+
+  const showWorkingTreeSummary =
+    !!thread &&
+    thread.status === "idle" &&
+    summaryProjectRoot === filesStore.getState().rootPath &&
+    summaryLoaded &&
+    !summaryLoading &&
+    !summaryError &&
+    !!workingTreeSummary &&
+    workingTreeSummary.files > 0;
 
   const providerList = useMemo(
     () => (catalog.length > 0 ? catalog : AVAILABLE_PROVIDERS),
@@ -179,6 +215,17 @@ export function ChatPane({
                   }}
                 />
               </div>
+              {showWorkingTreeSummary && (
+                <EditedFilesCard
+                  summary={workingTreeSummary}
+                  onReview={() => {
+                    const root = filesStore.getState().rootPath;
+                    if (!root) return;
+                    void review.getState().openWorktree(root);
+                    filesStore.getState().openReviewTab();
+                  }}
+                />
+              )}
               <ChatComposer
                 providers={providerList}
                 providerId={thread.providerId}
@@ -294,6 +341,45 @@ export function ChatPane({
         )}
       </div>
     </Pane>
+  );
+}
+
+function EditedFilesCard({
+  summary,
+  onReview,
+}: {
+  summary: WorkingTreeSummary;
+  onReview(): void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="chat-edited-files"
+      onClick={onReview}
+      aria-label="Review current working-tree changes"
+      className="group mx-3 mb-2 flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-left text-xs hover:bg-surface-hover focus:outline-none focus:ring-1 focus:ring-accent"
+    >
+      <span data-testid="chat-edited-files-copy" className="min-w-0">
+        <span className="block text-text">
+          Edited {summary.files} file{summary.files === 1 ? "" : "s"}
+        </span>
+        <span className="mt-0.5 block text-[11px] text-text-dim">
+          Current working tree ·{" "}
+          <span data-testid="chat-additions" className="text-[var(--kd-success)]">
+            +{summary.adds}
+          </span>{" "}
+          <span data-testid="chat-deletions" className="text-[var(--kd-error)]">
+            −{summary.dels}
+          </span>
+        </span>
+      </span>
+      <span
+        data-testid="chat-review-affordance"
+        className="shrink-0 rounded border border-border px-2 py-1 text-[11px] text-text-dim group-hover:text-text"
+      >
+        Review
+      </span>
+    </button>
   );
 }
 
