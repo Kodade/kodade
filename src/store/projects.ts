@@ -780,13 +780,9 @@ export function createProjectsStore(deps: StoreDeps) {
       // Remote SSH processes die with the app. Reviving their identities would
       // boot local shells mislabeled `ssh <host>`, so skip them. If every saved
       // session was remote, fall through to a fresh, plainly named shell.
-      const chatIds = new Set(
-        pending?.filter((session) => session.kind === "chat").map((session) => session.id),
-      );
       const revivable = pending?.filter((session) =>
         deps.autoStartTerminal === false
-          ? session.kind === "chat" ||
-            (!session.remote && !!session.workspaceId && chatIds.has(session.workspaceId))
+          ? session.kind === "chat"
           : !session.remote || session.kind === "chat",
       );
       if (revivable && revivable.length > 0 && (project || remoteTarget)) {
@@ -807,6 +803,37 @@ export function createProjectsStore(deps: StoreDeps) {
       if (remoteTarget || deps.autoStartTerminal === false) return false;
       get().addSession(projectId);
       return true;
+    };
+
+    // In the chat-first desktop runtime, a local PTY is a child of its chat,
+    // never a selectable root workspace. Normalize every generic selection
+    // path here so shortcuts and dormant callers cannot escape KödChat.
+    const selectableSessionId = (
+      projectId: string,
+      requestedId: string,
+    ): string | null => {
+      const state = get();
+      const requested = state.sessions.find(
+        (session) =>
+          session.id === requestedId && session.projectId === projectId,
+      );
+      if (!requested) return null;
+      if (
+        deps.autoStartTerminal !== false ||
+        remoteTargetForProjectId(state.remoteTargets, projectId) ||
+        isChatSession(requested)
+      ) {
+        return requested.id;
+      }
+      if (!requested.workspaceId) return null;
+      return (
+        state.sessions.find(
+          (session) =>
+            session.projectId === projectId &&
+            session.id === requested.workspaceId &&
+            isChatSession(session),
+        )?.id ?? null
+      );
     };
 
     return {
@@ -1258,6 +1285,20 @@ export function createProjectsStore(deps: StoreDeps) {
         if (!project && !remoteTarget) return null;
         if (remoteTarget && !canUseRemote()) return null;
         const chat = options?.kind === "chat";
+        if (
+          deps.autoStartTerminal === false &&
+          project &&
+          !chat &&
+          (!workspaceId ||
+            !sessions.some(
+              (session) =>
+                session.projectId === projectId &&
+                session.id === workspaceId &&
+                isChatSession(session),
+            ))
+        ) {
+          return null;
+        }
         const requestedBase = base ?? shellBase;
         const nameBase =
           remoteTarget && !chat && !isRemoteSessionName(requestedBase)
@@ -1498,16 +1539,12 @@ export function createProjectsStore(deps: StoreDeps) {
       },
 
       setActiveSession(projectId: string, sessionId: string) {
-        if (
-          !get().sessions.some(
-            (s) => s.id === sessionId && s.projectId === projectId,
-          )
-        )
-          return;
+        const selectableId = selectableSessionId(projectId, sessionId);
+        if (!selectableId) return;
         set((s) => ({
           activeSessionByProject: {
             ...s.activeSessionByProject,
-            [projectId]: sessionId,
+            [projectId]: selectableId,
           },
         }));
         emitSelectedSessionActivity(projectId);
@@ -1515,17 +1552,13 @@ export function createProjectsStore(deps: StoreDeps) {
 
       async activateSession(projectId: string, sessionId: string) {
         await hydrationSettled();
-        if (
-          !get().sessions.some(
-            (s) => s.id === sessionId && s.projectId === projectId,
-          )
-        )
-          return;
+        const selectableId = selectableSessionId(projectId, sessionId);
+        if (!selectableId) return;
         set((s) => ({
           activeProjectId: projectId,
           activeSessionByProject: {
             ...s.activeSessionByProject,
-            [projectId]: sessionId,
+            [projectId]: selectableId,
           },
           expandedProjects: { ...s.expandedProjects, [projectId]: true },
         }));
@@ -1536,10 +1569,20 @@ export function createProjectsStore(deps: StoreDeps) {
       // Move to the next/prev session within the active project, wrapping around.
       // Order follows sessions[] (creation order), which matches the sidebar.
       cycleSession(direction: 1 | -1) {
-        const { activeProjectId, sessions, activeSessionByProject } = get();
+        const {
+          activeProjectId,
+          activeSessionByProject,
+          remoteTargets,
+          sessions,
+        } = get();
         if (!activeProjectId) return;
+        const chatOnly =
+          deps.autoStartTerminal === false &&
+          !remoteTargetForProjectId(remoteTargets, activeProjectId);
         const projectSessions = sessions.filter(
-          (s) => s.projectId === activeProjectId,
+          (session) =>
+            session.projectId === activeProjectId &&
+            (!chatOnly || isChatSession(session)),
         );
         if (projectSessions.length < 2) return;
         const currentId = activeSessionByProject[activeProjectId];

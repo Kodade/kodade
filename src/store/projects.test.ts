@@ -1033,6 +1033,80 @@ describe("projects store", () => {
     expect(store.getState().activeSessionByProject[alpha.id]).toBe(ids[1]);
   });
 
+  it("cycleSession skips chat-owned terminals in the chat-first local runtime", async () => {
+    const { store } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const firstChatId = store.getState().addChatThread(projectId, "claude")!;
+    const terminalId = store.getState().addTerminal(projectId, firstChatId)!;
+    const secondChatId = store.getState().addChatThread(projectId, "codex")!;
+
+    store.getState().cycleSession(-1);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(firstChatId);
+    store.getState().cycleSession(1);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(secondChatId);
+    expect(store.getState().activeSessionByProject[projectId]).not.toBe(terminalId);
+  });
+
+  it("normalizes local chat-owned terminal selection back to its owning chat", async () => {
+    const { store } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const chatId = store.getState().addChatThread(projectId, "claude")!;
+    const terminalId = store.getState().addTerminal(projectId, chatId)!;
+
+    store.getState().setActiveSession(projectId, terminalId);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(chatId);
+
+    await store.getState().activateSession(projectId, terminalId);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(chatId);
+  });
+
+  it("rejects unowned local terminals in the chat-first runtime", async () => {
+    const { store, opens } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+
+    expect(store.getState().addSession(projectId)).toBeNull();
+    expect(store.getState().sessions).toEqual([]);
+    expect(opens).toEqual([]);
+  });
+
+  it("preserves terminal cycling for pinned remote projects", async () => {
+    const { store } = makeStore(
+      new MockStorage(),
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+    const target = { host: "box", path: "/srv/app" };
+    const projectId = remoteProjectId(target);
+    store.getState().pinRemoteTarget(target);
+    await store.getState().setActiveProject(projectId);
+    const firstTerminalId = store.getState().addSession(projectId)!;
+    const secondTerminalId = store.getState().addSession(projectId)!;
+
+    store.getState().cycleSession(1);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(firstTerminalId);
+    store.getState().cycleSession(-1);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(secondTerminalId);
+  });
+
   it("cycleSession is a no-op with fewer than two sessions or no active project", async () => {
     const { store } = makeStore();
     // No active project.
@@ -2611,6 +2685,34 @@ describe("remote SSH session revive (#121)", () => {
 });
 
 describe("chat threads are sessions without a PTY (KödChat, #163)", () => {
+  it("revives chat metadata without restarting its previously owned terminal", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [{ id: "project", name: "alpha", path: "/repos/alpha" }],
+      activeProjectId: "project",
+      sessions: {
+        project: [
+          { id: "chat", name: "claude 1", kind: "chat" },
+          { id: "terminal", name: "zsh 1", workspaceId: "chat" },
+        ],
+      },
+    } satisfies PersistedDoc);
+    const { store, opens } = makeStore(
+      storage,
+      undefined,
+      true,
+      { autoStartTerminal: false },
+    );
+
+    await store.getState().hydrate();
+
+    expect(store.getState().sessions).toEqual([
+      { id: "chat", projectId: "project", name: "claude 1", kind: "chat" },
+    ]);
+    expect(opens).toEqual([]);
+  });
+
   it("adding a project and chat creates no terminal until the chat explicitly opens one", async () => {
     const { store, opens } = makeStore(
       new MockStorage(),

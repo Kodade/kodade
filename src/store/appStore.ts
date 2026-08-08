@@ -46,7 +46,7 @@ import { createReviewStore } from "./review";
 import { createSshStore } from "./ssh";
 import { createRemoteFilesStore } from "./remoteFiles";
 import { routeFileDrop } from "./drop-routing";
-import { createProjectsStore } from "./projects";
+import { createProjectsStore, isChatSession } from "./projects";
 import { remoteTargetForProjectId } from "../ssh/model";
 import { createThemeStore } from "./theme";
 import { EDITOR_BROWSER_ID } from "../browser/constants";
@@ -250,15 +250,17 @@ function harvestFilesForRoot(root: string): string[] {
   return paths;
 }
 
-// Terminals of the active project, in sidebar order — the list "switch to
-// terminal N" indexes into (M9f).
+// Sessions eligible for global navigation. Local projects expose only chats;
+// pinned remote projects retain their standalone terminal workflow (M9f).
 function activeProjectSessions() {
   const state = appStore.getState();
   const projectId = state.activeProjectId;
   if (!projectId) return { projectId: null as string | null, sessions: [] };
+  const sessions = state.sessions.filter((session) => session.projectId === projectId);
+  const remoteProject = remoteTargetForProjectId(state.remoteTargets, projectId);
   return {
     projectId,
-    sessions: state.sessions.filter((s) => s.projectId === projectId),
+    sessions: remoteProject ? sessions : sessions.filter(isChatSession),
   };
 }
 
