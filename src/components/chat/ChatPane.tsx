@@ -18,8 +18,10 @@ import {
   chatStore,
   filesStore,
   providersStore,
+  reviewStore as defaultReviewStore,
 } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
+import type { ReviewState } from "../../store/review";
 import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
@@ -40,11 +42,13 @@ export function ChatPane({
   projectsStore = appStore,
   chatThreadsStore = chatStore,
   providers = providersStore,
+  review = defaultReviewStore,
   terminalRegistry,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   chatThreadsStore?: StoreApi<ChatState>;
   providers?: StoreApi<ProvidersState>;
+  review?: StoreApi<ReviewState>;
   terminalRegistry?: TerminalDisplayRegistry;
 } = {}) {
   // Terminal visibility belongs to the chat that owns the PTY. Switching
@@ -63,6 +67,11 @@ export function ChatPane({
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
   const catalog = useStore(providers, (s) => s.providers);
+  const reviewProjectRoot = useStore(review, (s) => s.projectRoot);
+  const reviewTotals = useStore(review, (s) => s.totals);
+  const reviewLoading = useStore(review, (s) => s.loading);
+  const reviewLoaded = useStore(review, (s) => s.loaded);
+  const reviewError = useStore(review, (s) => s.error);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const owningChat =
@@ -98,6 +107,27 @@ export function ChatPane({
       .getState()
       .openThread(threadId, activeProjectId, providerForSession(activeChat));
   }, [activeChat, activeProjectId, chatThreadsStore, threadId]);
+
+  // KödPR owns the current working-tree diff. Once a turn has settled, refresh
+  // that same read-only source and show only a positive, healthy result. This
+  // deliberately reports the workspace's current diff, not agent attribution.
+  useEffect(() => {
+    if (!thread || thread.status !== "idle" || thread.entries.length === 0) return;
+    const root = filesStore.getState().rootPath;
+    if (!root) return;
+    const reviewState = review.getState();
+    if (reviewState.scope.kind === "worktree") void reviewState.load(root);
+    else void reviewState.setScope({ kind: "worktree" });
+  }, [review, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
+
+  const currentWorkingTree =
+    !!thread &&
+    thread.status === "idle" &&
+    reviewProjectRoot === filesStore.getState().rootPath &&
+    reviewLoaded &&
+    !reviewLoading &&
+    !reviewError &&
+    reviewTotals.files > 0;
 
   const providerList = useMemo(
     () => (catalog.length > 0 ? catalog : AVAILABLE_PROVIDERS),
@@ -179,6 +209,14 @@ export function ChatPane({
                   }}
                 />
               </div>
+              {currentWorkingTree && (
+                <EditedFilesCard
+                  files={reviewTotals.files}
+                  adds={reviewTotals.adds}
+                  dels={reviewTotals.dels}
+                  onReview={() => filesStore.getState().openReviewTab()}
+                />
+              )}
               <ChatComposer
                 providers={providerList}
                 providerId={thread.providerId}
@@ -294,6 +332,47 @@ export function ChatPane({
         )}
       </div>
     </Pane>
+  );
+}
+
+function EditedFilesCard({
+  files,
+  adds,
+  dels,
+  onReview,
+}: {
+  files: number;
+  adds: number;
+  dels: number;
+  onReview(): void;
+}) {
+  return (
+    <div
+      data-testid="chat-edited-files"
+      className="mx-3 mb-2 rounded-md border border-border bg-surface px-3 py-2 text-xs"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onReview}
+          aria-label="Review current working-tree changes"
+          className="min-w-0 text-left focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          <p className="text-text">Edited {files} file{files === 1 ? "" : "s"}</p>
+          <p className="mt-0.5 text-[11px] text-text-dim">
+            Current working tree · <span className="text-green-400">+{adds}</span>{" "}
+            <span className="text-red-400">−{dels}</span>
+          </p>
+        </button>
+        <button
+          type="button"
+          onClick={onReview}
+          className="shrink-0 rounded border border-border px-2 py-1 text-[11px] text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          Review
+        </button>
+      </div>
+    </div>
   );
 }
 

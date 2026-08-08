@@ -8,6 +8,25 @@ const markdown = new MarkdownIt("commonmark", {
   linkify: true,
 }).enable(["table", "strikethrough"]);
 
+type MarkdownRenderOptions = {
+  // KödChat is the only surface that turns issue/PR references into GitHub
+  // affordances. Project Markdown remains ordinary Markdown.
+  decorateGithubLinks?: boolean;
+};
+
+type MarkdownEnvironment = MarkdownRenderOptions;
+
+const githubIssueOrPull = /^https:\/\/github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/\d+(?:[/?#].*)?$/i;
+
+markdown.renderer.rules.link_open = (tokens, index, options, env: MarkdownEnvironment, self) => {
+  const token = tokens[index];
+  const href = token.attrGet("href") ?? "";
+  if (env.decorateGithubLinks && githubIssueOrPull.test(href)) {
+    token.attrJoin("class", "markdown-github-link");
+  }
+  return self.renderToken(tokens, index, options);
+};
+
 // Images in project Markdown are untrusted network-capable content. Render a
 // link chip instead of an <img> so merely opening a file never fetches a remote
 // URL (including a service bound to localhost). The shared link-click path only
@@ -33,10 +52,10 @@ function imageName(src: string): string {
 
 // markdown-it is the CommonMark/table renderer; DOMPurify is the final safety
 // boundary before its output reaches React's HTML insertion point.
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(source: string, options: MarkdownRenderOptions = {}): string {
   // Keep a stable block wrapper: browsers (and happy-dom in tests) otherwise
   // repair a top-level table by dropping its table element during sanitization.
-  return DOMPurify.sanitize(`<div>${markdown.render(source)}</div>`, {
+  return DOMPurify.sanitize(`<div>${markdown.render(source, options)}</div>`, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["style", "script"],
   });

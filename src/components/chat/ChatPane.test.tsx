@@ -9,6 +9,8 @@ import { createActivityModule } from "../../activity/activity";
 import { createProjectsStore, isChatSession } from "../../store/projects";
 import { createProvidersStore } from "../../providers/store";
 import { filesStore } from "../../store/appStore";
+import { createReviewStore } from "../../store/review";
+import { MockGit } from "../../ipc/mock";
 import { projectWorkspaceView } from "../ProjectsSidebar";
 import { ChatPane } from "./ChatPane";
 
@@ -96,7 +98,7 @@ function mockResizableGeometry() {
   );
 }
 
-async function mount() {
+async function mount(review = createReviewStore({ git: new MockGit(), watch: { onChanged: async () => () => {} } })) {
   const storage = new MockStorage();
   const agent = new MockAgentIpc();
   const terminalRegistry = fakeRegistry();
@@ -136,6 +138,7 @@ async function mount() {
         chatThreadsStore={chatThreadsStore}
         providers={providers}
         terminalRegistry={terminalRegistry}
+        review={review}
       />,
     );
   });
@@ -148,6 +151,7 @@ async function mount() {
     storage,
     projectId,
     terminalRegistry,
+    review,
   };
 }
 
@@ -389,7 +393,7 @@ describe("ChatPane", () => {
       agent.exit(runId, 0, "");
     });
 
-    expect(host.querySelector('[data-testid="chat-tool-card"]')?.textContent).toContain(
+    expect(host.querySelector('[data-testid="chat-tool-activity"]')?.textContent).toContain(
       "Read",
     );
     const assistant = host.querySelector('[data-chat-role="assistant"]');
@@ -445,6 +449,81 @@ describe("ChatPane", () => {
     expect(filesStore.getState().activeTab).toEqual({ kind: "browser", url });
     expect(host.textContent).toContain("KödChat");
     expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
+  });
+
+  it("shows current working-tree edits after a completed turn and opens the existing review tab", async () => {
+    const git = new MockGit();
+    git.responses.set("diff --numstat -z", { stdout: ["3\t1\tsrc/a.ts", "2\t0\tsrc/b.ts", ""].join("\0"), stderr: "" });
+    const review = createReviewStore({ git, watch: { onChanged: async () => () => {} } });
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } = await mount(review);
+    mounted = root;
+    filesStore.setState({ rootPath: "/repos/alpha", openTabs: [], activeTab: null });
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+      await chatThreadsStore.getState().send(threadId, "make the edits");
+      agent.exit(agent.starts[0].id, 0, "");
+    });
+    for (let i = 0; i < 8; i++) await act(async () => await Promise.resolve());
+
+    const card = host.querySelector('[data-testid="chat-edited-files"]')!;
+    expect(card.textContent).toContain("Edited 2 files");
+    expect(card.textContent).toContain("+5");
+    expect(card.textContent).toContain("−1");
+    expect(card.textContent).toContain("Current working tree");
+
+    const reviewButton = card.querySelector<HTMLButtonElement>('button[aria-label="Review current working-tree changes"]')!;
+    act(() => reviewButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(filesStore.getState().activeTab).toEqual({ kind: "review" });
+    expect(git.calls.filter((args) => args.join(" ") === "diff --numstat -z")).toHaveLength(1);
+  });
+
+  it("keeps the edited-files card quiet for a clean or unreadable working tree", async () => {
+    const cleanGit = new MockGit();
+    cleanGit.responses.set("diff --numstat -z", { stdout: "", stderr: "" });
+    const review = createReviewStore({ git: cleanGit, watch: { onChanged: async () => () => {} } });
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } = await mount(review);
+    mounted = root;
+    filesStore.setState({ rootPath: "/repos/alpha", openTabs: [], activeTab: null });
+
+    await act(async () => {
+      const threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+      await chatThreadsStore.getState().send(threadId, "check it");
+      agent.exit(agent.starts[0].id, 0, "");
+    });
+    for (let i = 0; i < 8; i++) await act(async () => await Promise.resolve());
+    expect(host.querySelector('[data-testid="chat-edited-files"]')).toBeNull();
+  });
+
+  it("keeps a prior card from surviving a current working-tree read failure", async () => {
+    const git = new MockGit();
+    git.responses.set("diff --numstat -z", { stdout: "1\t0\tsrc/a.ts\0", stderr: "" });
+    const review = createReviewStore({ git, watch: { onChanged: async () => () => {} } });
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } = await mount(review);
+    mounted = root;
+    filesStore.setState({ rootPath: "/repos/alpha", openTabs: [], activeTab: null });
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+      await chatThreadsStore.getState().send(threadId, "make one edit");
+      agent.exit(agent.starts[0].id, 0, "");
+    });
+    for (let i = 0; i < 8; i++) await act(async () => await Promise.resolve());
+    expect(host.querySelector('[data-testid="chat-edited-files"]')).not.toBeNull();
+
+    git.responses.set("diff --numstat -z", new Error("not a git repository"));
+    await act(async () => {
+      await chatThreadsStore.getState().send(threadId, "try again");
+      agent.exit(agent.starts[1].id, 0, "");
+    });
+    for (let i = 0; i < 8; i++) await act(async () => await Promise.resolve());
+    expect(host.querySelector('[data-testid="chat-edited-files"]')).toBeNull();
+    expect(git.calls.filter((args) => args.join(" ") === "diff --numstat -z")).toHaveLength(2);
   });
 
   it("offers a login terminal on an auth failure", async () => {
