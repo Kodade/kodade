@@ -30,11 +30,18 @@ Windows support is under active development; Linux is planned.
   inline edited-file review, and a resizable terminal split owned by the
   current thread. OpenCode uses its official JSON run mode: Plan maps to its
   `plan` agent, Standard to `build`, and Full uses OpenCode's `--auto` behavior
-  without changing its configuration.
+  without changing its configuration. Its model picker reads the current
+  project's available catalog reported by the installed CLI through
+  `opencode models`, keeps a Default choice, and never ships a guessed model
+  list. Remote OpenCode chats remain Default-only because model catalogs are
+  host-specific.
 - **Ollama** is a local HTTP chat provider at `127.0.0.1:11434`: KödChat lists
   the models Ollama has installed and streams chat through its OpenAI-compatible
   endpoint. It is chat-only — it cannot read project files, call tools, or use
-  a server-side conversation session.
+  a server-side conversation session. History is persisted and replayed on the
+  client within the active provider/model conversation; switching either keeps
+  the visible transcript but starts fresh history. Its provider-neutral HTTP
+  transport is independent of the in-development KödLocal product surface.
 - **Real terminals** use your login shell, PATH, authentication, configuration,
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.

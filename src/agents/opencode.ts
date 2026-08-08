@@ -1,6 +1,6 @@
 // OpenCode `run --format json` dialect.
 //
-// OpenCode 1.18.5 emits completed parts rather than token fragments: `text`,
+// OpenCode 1.18.15 emits completed parts rather than token fragments: `text`,
 // `reasoning`, `tool_use`, and `step_finish` frames, all carrying `sessionID`.
 // The CLI itself owns permission policy and sessions; this adapter only maps
 // its documented JSON output into KödChat's neutral event vocabulary.
@@ -87,7 +87,16 @@ class OpenCodeParser implements AgentStreamParser {
         return [...events, ...this.toolEvents(record(value.part))];
       case "step_finish": {
         const next = usageOf(record(value.part));
-        if (next) this.usage = next;
+        if (next) {
+          this.usage = this.usage
+            ? {
+                promptTokens: this.usage.promptTokens + next.promptTokens,
+                completionTokens:
+                  this.usage.completionTokens + next.completionTokens,
+                totalTokens: this.usage.totalTokens + next.totalTokens,
+              }
+            : next;
+        }
         return events;
       }
       case "error":
@@ -136,7 +145,8 @@ function usageOf(part: Json | null) {
   if (!tokens) return null;
   const promptTokens = number(tokens.input) ?? number(tokens.input_tokens) ?? 0;
   const completionTokens = number(tokens.output) ?? number(tokens.output_tokens) ?? 0;
-  return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+  const totalTokens = number(tokens.total) ?? promptTokens + completionTokens;
+  return { promptTokens, completionTokens, totalTokens };
 }
 
 function number(value: unknown): number | null {

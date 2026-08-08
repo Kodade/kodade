@@ -10,8 +10,13 @@
 // contract KödMem and the sidebar have always had.
 
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { ChatAccessLevel } from "../providers/catalog";
-import type { ChatMessage } from "../local/backend";
+import {
+  AVAILABLE_PROVIDERS,
+  type ChatAccessLevel,
+  type Provider,
+  type ProviderModel,
+} from "../providers/catalog";
+import type { ChatMessage } from "../inference/backend";
 import type { AgentStreamAdapter, AgentStreamEvent } from "../agents/contract";
 import { adapterFor } from "../agents/registry";
 import type { AgentIpc, StorageIpc, Unlisten } from "../ipc/contract";
@@ -51,6 +56,7 @@ export type ChatDeps = {
   // the provider argv; this store wraps it in a direct OpenSSH spawn.
   remoteTarget?(projectId: string): RemoteTarget | null;
   adapters?: (providerId: string) => AgentStreamAdapter | null;
+  providers?: readonly Provider[];
   // Ollama is a public, local HTTP chat provider. It never enters KödLocal's
   // tool loop and intentionally has no native server-side session.
   ollama?: OllamaChatRuntime;
@@ -62,7 +68,24 @@ export type ChatDeps = {
   persistDebounceMs?: number;
   setTimeout?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
+  // A plugin-backed model command must never leave the picker loading forever.
+  modelDiscoveryTimeoutMs?: number;
+  modelDiscoverySetTimeout?: (
+    fn: () => void,
+    ms: number,
+  ) => ReturnType<typeof setTimeout>;
+  modelDiscoveryClearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
 };
+
+export type ProviderModelState = {
+  status: "idle" | "loading" | "ready" | "unavailable";
+  models: ProviderModel[];
+  message: string | null;
+};
+
+export function providerModelKey(providerId: string, projectId?: string): string {
+  return projectId ? `${projectId}::${providerId}` : providerId;
+}
 
 export type ChatState = {
   threads: Record<string, ChatThread>;
@@ -74,6 +97,9 @@ export type ChatState = {
     models: OllamaModel[];
     message: string | null;
   };
+  // Dynamic CLI catalogs keyed by local project + provider. Ollama keeps its
+  // separate service-health state because HTTP availability also gates send.
+  providerModels: Record<string, ProviderModelState>;
 
   // Begin listening for run events. Idempotent; returns a teardown.
   start(): Promise<Unlisten>;
@@ -87,6 +113,7 @@ export type ChatState = {
   // The thread's thinking level (null = the CLI's default effort).
   setThinking(threadId: string, thinking: string | null): void;
   refreshOllama(): Promise<void>;
+  refreshProviderModels(providerId: string, projectId?: string): Promise<void>;
   // Send one user message and run a turn. Resolves once the run has STARTED —
   // the answer arrives through the event stream.
   send(threadId: string, text: string): Promise<void>;
@@ -98,6 +125,36 @@ export type ChatState = {
 };
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 400;
+const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+const MAX_MODEL_DISCOVERY_LINES = 2_048;
+const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
+const MAX_DISCOVERED_MODELS = 512;
+
+// OpenCode model output is plugin-influenced. Keep only bounded, plausible
+// provider/model ids; logs, terminal decoration, duplicates, and oversized
+// entries never become picker options (and therefore never become argv).
+export function parseProviderModelLines(lines: readonly string[]): ProviderModel[] {
+  const models: ProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const raw of lines.slice(0, MAX_MODEL_DISCOVERY_LINES)) {
+    const id = raw
+      .slice(0, MAX_MODEL_DISCOVERY_LINE_LENGTH + 1)
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .trim();
+    if (
+      id.length === 0 ||
+      id.length > 255 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\/[A-Za-z0-9~][A-Za-z0-9._:@+~/-]{0,189}$/.test(id) ||
+      seen.has(id)
+    ) {
+      continue;
+    }
+    seen.add(id);
+    models.push({ id, label: id });
+    if (models.length === MAX_DISCOVERED_MODELS) break;
+  }
+  return models;
+}
 
 // `<threadId>#<turn>` — split back out when an event arrives.
 function threadIdOfRun(runId: string): string {
@@ -109,9 +166,16 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   const newId = deps.newId ?? (() => crypto.randomUUID());
   const now = deps.now ?? (() => Date.now());
   const adapters = deps.adapters ?? adapterFor;
+  const providers = deps.providers ?? AVAILABLE_PROVIDERS;
   const setTimer = deps.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimeout ?? ((handle) => clearTimeout(handle));
   const debounceMs = deps.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE_MS;
+  const modelDiscoveryTimeoutMs =
+    deps.modelDiscoveryTimeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
+  const setModelDiscoveryTimer =
+    deps.modelDiscoverySetTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearModelDiscoveryTimer =
+    deps.modelDiscoveryClearTimeout ?? ((handle) => clearTimeout(handle));
 
   // Live run bookkeeping, outside React state: the current run id per thread,
   // its parser, and the id of the assistant entry deltas are appending to.
@@ -124,11 +188,25 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     messageEntries: Map<string, string>;
     thinkingEntries: Map<string, string>;
     toolEntries: Map<string, string>;
+    conversationId: number;
     turn: number;
   };
   const runs = new Map<string, Run>();
   const runByRunId = new Map<string, string>(); // runId → threadId
   const turns = new Map<string, number>();
+  type ModelDiscoveryRun = {
+    providerId: string;
+    catalogKey: string;
+    token: number;
+    lines: string[];
+    timeout: ReturnType<typeof setTimeout>;
+    resolve(): void;
+  };
+  const modelDiscoveryRuns = new Map<string, ModelDiscoveryRun>();
+  const modelDiscoveryTokens = new Map<string, number>();
+  const modelRefreshes = new Map<string, Promise<void>>();
+  let modelDiscoverySequence = 0;
+  let ollamaRefreshToken = 0;
 
   // Per-thread debounced write handles, plus a chain so two writes for one
   // thread can never land out of order.
@@ -224,6 +302,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               id,
               role: "assistant",
               text: event.text,
+              conversationId: run.conversationId,
               streaming: true,
             });
           }
@@ -240,6 +319,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
                     id: entry.id,
                     role: "assistant",
                     text: event.message.content,
+                    conversationId: entry.conversationId ?? run.conversationId,
                   }
                 : entry,
             );
@@ -251,6 +331,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               id,
               role: "assistant",
               text: event.message.content,
+              conversationId: run.conversationId,
             });
           }
           deps.activity?.streamed?.(thread.projectId, threadId);
@@ -331,7 +412,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         status: thread.status === "error" ? "error" : "idle",
         entries: thread.entries.map((entry) =>
           entry.kind === "message" && entry.streaming
-            ? { kind: "message", id: entry.id, role: entry.role, text: entry.text }
+            ? {
+                kind: "message",
+                id: entry.id,
+                role: entry.role,
+                text: entry.text,
+                conversationId: entry.conversationId,
+              }
             : entry,
         ),
       }));
@@ -347,6 +434,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     };
 
     const onLine = (runId: string, line: string) => {
+      const discovery = modelDiscoveryRuns.get(runId);
+      if (discovery) {
+        if (discovery.lines.length < MAX_MODEL_DISCOVERY_LINES) {
+          discovery.lines.push(line.slice(0, MAX_MODEL_DISCOVERY_LINE_LENGTH + 1));
+        }
+        return;
+      }
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) return; // a stale/cancelled turn
@@ -356,6 +450,32 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     };
 
     const onExit = (runId: string, code: number | null, stderr: string) => {
+      const discovery = modelDiscoveryRuns.get(runId);
+      if (discovery) {
+        modelDiscoveryRuns.delete(runId);
+        clearModelDiscoveryTimer(discovery.timeout);
+        if (modelDiscoveryTokens.get(discovery.catalogKey) === discovery.token) {
+          const provider = providers.find((entry) => entry.id === discovery.providerId);
+          const models = code === 0 ? parseProviderModelLines(discovery.lines) : [];
+          set((state) => ({
+            providerModels: {
+              ...state.providerModels,
+              [discovery.catalogKey]: {
+                status: code === 0 ? "ready" : "unavailable",
+                models,
+                message:
+                  code === 0
+                    ? models.length
+                      ? null
+                      : `${provider?.name ?? discovery.providerId} returned no models. Default still uses its configured model.`
+                    : `Could not load ${provider?.name ?? discovery.providerId} models. Default still uses its configured model.`,
+              },
+            },
+          }));
+        }
+        discovery.resolve();
+        return;
+      }
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) return;
@@ -371,6 +491,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       threads: {},
       loaded: {},
       ollama: { status: "idle", models: [], message: null },
+      providerModels: {},
 
       async start(): Promise<Unlisten> {
         const offEvent = await deps.agent.onEvent((event) => onLine(event.id, event.line));
@@ -392,7 +513,10 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             },
           }));
         }
+        const remote = deps.remoteTarget?.(projectId) ?? null;
         if (providerId === "ollama") void get().refreshOllama();
+        else if (providerFor(providerId)?.stream?.modelDiscovery)
+          void get().refreshProviderModels(providerId, projectId);
         if (get().loaded[threadId]) return;
         set((state) => ({ loaded: { ...state.loaded, [threadId]: true } }));
         let raw: string | null = null;
@@ -405,19 +529,27 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         if (!raw) return;
         const doc = parsePersistedThread(raw);
         if (!doc) return;
+        const remoteDynamicModels =
+          !!remote && !!providerFor(doc.providerId)?.stream?.modelDiscovery;
         patch(threadId, (thread) => ({
           ...thread,
           providerId: doc.providerId,
           title: doc.title,
           resumeId: doc.resumeId,
-          model: doc.model,
+          conversationId: doc.conversationId,
+          model: remoteDynamicModels ? null : doc.model,
           access: doc.access,
           thinking: doc.thinking,
           entries: doc.entries,
         }));
+        if (doc.providerId === "ollama") void get().refreshOllama();
+        else if (providerFor(doc.providerId)?.stream?.modelDiscovery)
+          void get().refreshProviderModels(doc.providerId, projectId);
       },
 
       setProvider(threadId: string, providerId: string) {
+        if (runs.has(threadId)) return;
+        const projectId = get().threads[threadId]?.projectId;
         patch(threadId, (thread) =>
           thread.providerId === providerId
             ? thread
@@ -425,20 +557,41 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               // run its models or thinking levels), so switching provider
               // starts a fresh conversation on that CLI while keeping the
               // readable transcript.
-              { ...thread, providerId, resumeId: null, model: null, thinking: null },
+              {
+                ...thread,
+                providerId,
+                resumeId: null,
+                conversationId: thread.conversationId + 1,
+                model: null,
+                thinking: null,
+              },
         );
         if (providerId === "ollama") void get().refreshOllama();
+        else if (providerFor(providerId)?.stream?.modelDiscovery)
+          void get().refreshProviderModels(providerId, projectId);
         persistDebounced(threadId);
       },
 
       setModel(threadId: string, model: string | null) {
-        patch(threadId, (thread) =>
-          thread.model === model ? thread : { ...thread, model },
-        );
+        if (runs.has(threadId)) return;
+        patch(threadId, (thread) => {
+          if (thread.model === model) return thread;
+          return {
+            ...thread,
+            model,
+            // Ollama has no native session id. A new model therefore starts
+            // a fresh client-side conversation while the transcript remains.
+            conversationId:
+              thread.providerId === "ollama"
+                ? thread.conversationId + 1
+                : thread.conversationId,
+          };
+        });
         persistDebounced(threadId);
       },
 
       setAccess(threadId: string, access: ChatAccessLevel) {
+        if (runs.has(threadId)) return;
         patch(threadId, (thread) =>
           thread.access === access ? thread : { ...thread, access },
         );
@@ -446,6 +599,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setThinking(threadId: string, thinking: string | null) {
+        if (runs.has(threadId)) return;
         patch(threadId, (thread) =>
           thread.thinking === thinking ? thread : { ...thread, thinking },
         );
@@ -454,17 +608,44 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
 
       async refreshOllama() {
         if (!deps.ollama) return;
+        const refreshToken = ++ollamaRefreshToken;
         set((state) => ({ ollama: { ...state.ollama, status: "loading", message: null } }));
         try {
           const models = await deps.ollama.listModels();
-          set({
+          if (refreshToken !== ollamaRefreshToken) return;
+          const available = new Set(models.map((model) => model.id));
+          const staleThreadIds = Object.values(get().threads)
+            .filter(
+              (thread) =>
+                thread.providerId === "ollama" &&
+                thread.status !== "working" &&
+                thread.model !== null &&
+                !available.has(thread.model),
+            )
+            .map((thread) => thread.id);
+          set((state) => ({
             ollama: {
               status: "ready",
               models,
               message: models.length ? null : "Ollama is running, but no local models are installed yet.",
             },
-          });
+            threads: Object.fromEntries(
+              Object.entries(state.threads).map(([id, thread]) => [
+                id,
+                staleThreadIds.includes(id)
+                  ? {
+                      ...thread,
+                      model: null,
+                      conversationId: thread.conversationId + 1,
+                      updatedAt: now(),
+                    }
+                  : thread,
+              ]),
+            ),
+          }));
+          for (const threadId of staleThreadIds) persistDebounced(threadId);
         } catch (error) {
+          if (refreshToken !== ollamaRefreshToken) return;
           set({
             ollama: {
               status: "unavailable",
@@ -475,6 +656,97 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
                   : OLLAMA_UNAVAILABLE_MESSAGE,
             },
           });
+        }
+      },
+
+      async refreshProviderModels(providerId: string, projectId?: string) {
+        // Model ids are host-specific. Local discovery must never populate a
+        // remote thread's picker; remote OpenCode stays Default-only.
+        if (projectId && deps.remoteTarget?.(projectId)) return;
+        const provider = providerFor(providerId);
+        const discovery = provider?.stream?.modelDiscovery;
+        if (!provider || !discovery) return;
+        const catalogKey = providerModelKey(providerId, projectId);
+        const inFlight = modelRefreshes.get(catalogKey);
+        if (inFlight) return inFlight;
+
+        const token = (modelDiscoveryTokens.get(catalogKey) ?? 0) + 1;
+        modelDiscoveryTokens.set(catalogKey, token);
+        const runId = `provider-models:${providerId}#${++modelDiscoverySequence}`;
+        set((state) => ({
+          providerModels: {
+            ...state.providerModels,
+            [catalogKey]: {
+              status: "loading",
+              models: state.providerModels[catalogKey]?.models ?? [],
+              message: null,
+            },
+          },
+        }));
+
+        const refresh = new Promise<void>((resolve) => {
+          const timeout = setModelDiscoveryTimer(() => {
+            const active = modelDiscoveryRuns.get(runId);
+            if (!active) return;
+            modelDiscoveryRuns.delete(runId);
+            if (modelDiscoveryTokens.get(catalogKey) === token) {
+              set((state) => ({
+                providerModels: {
+                  ...state.providerModels,
+                  [catalogKey]: {
+                    status: "unavailable",
+                    models: [],
+                    message: `Could not load ${provider.name} models. Default still uses its configured model.`,
+                  },
+                },
+              }));
+            }
+            void deps.agent.cancel({ id: runId }).catch(() => undefined);
+            resolve();
+          }, modelDiscoveryTimeoutMs);
+          modelDiscoveryRuns.set(runId, {
+            providerId,
+            catalogKey,
+            token,
+            lines: [],
+            timeout,
+            resolve,
+          });
+          void deps.agent
+            .start({
+              id: runId,
+              cwd: projectId ? (deps.projectRoot(projectId) ?? "") : "",
+              bin: provider.bin,
+              args: [...discovery.args],
+              // This is a bounded read-only command, not an interactive run.
+              // Explicit empty stdin makes Rust close the pipe immediately.
+              stdin: "",
+            })
+            .catch(() => {
+              const active = modelDiscoveryRuns.get(runId);
+              if (active) clearModelDiscoveryTimer(active.timeout);
+              modelDiscoveryRuns.delete(runId);
+              if (modelDiscoveryTokens.get(catalogKey) === token) {
+                set((state) => ({
+                  providerModels: {
+                    ...state.providerModels,
+                    [catalogKey]: {
+                      status: "unavailable",
+                      models: [],
+                      message: `Could not load ${provider.name} models. Default still uses its configured model.`,
+                    },
+                  },
+                }));
+              }
+              resolve();
+            });
+        });
+        modelRefreshes.set(catalogKey, refresh);
+        try {
+          await refresh;
+        } finally {
+          if (modelRefreshes.get(catalogKey) === refresh)
+            modelRefreshes.delete(catalogKey);
         }
       },
 
@@ -515,12 +787,19 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             messageEntries: new Map(),
             thinkingEntries: new Map(),
             toolEntries: new Map(),
+            conversationId: current.conversationId,
             turn,
           };
           runs.set(threadId, run);
           runByRunId.set(runId, threadId);
           const firstMessage = !current.entries.some((entry) => entry.kind === "message");
-          appendEntry(threadId, { kind: "message", id: newId(), role: "user", text: prompt });
+          appendEntry(threadId, {
+            kind: "message",
+            id: newId(),
+            role: "user",
+            text: prompt,
+            conversationId: current.conversationId,
+          });
           patch(threadId, (entry) => ({
             ...entry,
             status: "working",
@@ -558,6 +837,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           messageEntries: new Map(),
           thinkingEntries: new Map(),
           toolEntries: new Map(),
+          conversationId: thread.conversationId,
           turn,
         };
         runs.set(threadId, run);
@@ -565,7 +845,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
 
         // The first message names the thread; read that BEFORE appending it.
         const firstMessage = !thread.entries.some((entry) => entry.kind === "message");
-        appendEntry(threadId, { kind: "message", id: newId(), role: "user", text: prompt });
+        appendEntry(threadId, {
+          kind: "message",
+          id: newId(),
+          role: "user",
+          text: prompt,
+          conversationId: thread.conversationId,
+        });
         patch(threadId, (current) => ({
           ...current,
           status: "working",
@@ -680,6 +966,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       if (!thread) return;
       const messages: ChatMessage[] = thread.entries
         .filter((entry): entry is Extract<ChatEntry, { kind: "message" }> => entry.kind === "message")
+        .filter((entry) => (entry.conversationId ?? 0) === thread.conversationId)
         .filter((entry) => entry.role === "user" || entry.role === "assistant")
         .map((entry) => ({ role: entry.role, content: entry.text }));
       try {
@@ -714,6 +1001,10 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       } finally {
         if (runs.get(input.threadId)?.runId === input.run.runId) settle(input.threadId, input.run);
       }
+    }
+
+    function providerFor(providerId: string): Provider | undefined {
+      return providers.find((provider) => provider.id === providerId);
     }
   });
 

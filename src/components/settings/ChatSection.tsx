@@ -19,7 +19,7 @@ import { SettingsCard, SettingsRow } from "./SettingsCard";
 
 export function ChatSection({
   onLogin = (launch, providerId) =>
-    void appStore
+    appStore
       .getState()
       .launchInSession(launch, providerId)
       .catch((error) => {
@@ -27,7 +27,7 @@ export function ChatSection({
       }),
   chatThreadsStore = chatStore,
 }: {
-  onLogin?: (launch: string, providerId: string) => void;
+  onLogin?: (launch: string, providerId: string) => void | Promise<void>;
   chatThreadsStore?: StoreApi<ChatState>;
 } = {}) {
   const statuses = useStore(providersStore, (state) => state.statuses);
@@ -87,23 +87,42 @@ export function ChatSection({
               {ollamaChat ? (
                 <div className="flex max-w-52 flex-col items-end gap-1">
                   <span className="flex items-center gap-2">
+                    {ollama.status !== "ready" && ollama.status !== "loading" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void Promise.resolve()
+                            .then(() => onLogin("ollama serve", provider.id))
+                            .then(() => chatThreadsStore.getState().refreshOllama())
+                            .catch((error) => {
+                              console.error("kodade: Ollama start terminal failed", error);
+                            });
+                        }}
+                        disabled={!hasActiveChat}
+                        aria-describedby={
+                          hasActiveChat ? undefined : `chat-login-guidance-${provider.id}`
+                        }
+                        title={
+                          hasActiveChat
+                            ? "Open a terminal to start Ollama"
+                            : activeProjectId
+                              ? "Select a KödChat thread first"
+                              : "Open a project and select a KödChat thread first"
+                        }
+                        className="rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
+                      >
+                        start Ollama
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => onLogin("ollama serve", provider.id)}
-                      disabled={!hasActiveChat}
-                      aria-describedby={
-                        hasActiveChat ? undefined : `chat-login-guidance-${provider.id}`
+                      onClick={() =>
+                        void chatThreadsStore.getState().refreshOllama()
                       }
-                      title={
-                        hasActiveChat
-                          ? "Open a terminal to start Ollama"
-                          : activeProjectId
-                            ? "Select a KödChat thread first"
-                            : "Open a project and select a KödChat thread first"
-                      }
+                      disabled={ollama.status === "loading"}
                       className="rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
                     >
-                      start Ollama
+                      refresh models
                     </button>
                     <a
                       href={provider.install}
@@ -114,16 +133,18 @@ export function ChatSection({
                       install
                     </a>
                   </span>
-                  {!hasActiveChat && (
-                    <span
-                      id={`chat-login-guidance-${provider.id}`}
-                      className="text-right text-[10px] text-text-dim"
-                    >
-                      {activeProjectId
-                        ? "Select a KödChat thread before opening an Ollama terminal."
-                        : "Open a project and select a KödChat thread before opening an Ollama terminal."}
-                    </span>
-                  )}
+                  {!hasActiveChat &&
+                    ollama.status !== "ready" &&
+                    ollama.status !== "loading" && (
+                      <span
+                        id={`chat-login-guidance-${provider.id}`}
+                        className="text-right text-[10px] text-text-dim"
+                      >
+                        {activeProjectId
+                          ? "Select a KödChat thread before opening an Ollama terminal."
+                          : "Open a project and select a KödChat thread before opening an Ollama terminal."}
+                      </span>
+                    )}
                 </div>
               ) : capable && installed ? (
                 <div className="flex max-w-52 flex-col items-end gap-1">

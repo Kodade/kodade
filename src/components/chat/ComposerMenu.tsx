@@ -23,6 +23,7 @@ export function ComposerMenu({
   onSelect,
   children,
   menuWidthClass = "min-w-[220px]",
+  disabled = false,
 }: {
   label: string; // aria-label for both the trigger and the listbox
   value: string;
@@ -30,6 +31,7 @@ export function ComposerMenu({
   onSelect(id: string): void;
   children: ReactNode; // chip content; the chevron is appended here
   menuWidthClass?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -82,13 +84,14 @@ export function ComposerMenu({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
           event.preventDefault();
           setOpen(true);
         }}
-        className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-bg px-2.5 text-xs font-medium text-text hover:bg-surface-hover focus:outline-none focus:ring-1 focus:ring-accent"
+        className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-bg px-2.5 text-xs font-medium text-text hover:bg-surface-hover focus:outline-none focus:ring-1 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-45"
       >
         {children}
         <svg

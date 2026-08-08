@@ -21,6 +21,10 @@ export type ChatEntry =
       id: string;
       role: "user" | "assistant";
       text: string;
+      // Client-side conversation boundary. Provider/model switches keep the
+      // visible transcript but must not replay an earlier provider's messages.
+      // Optional only for source compatibility with version-1 documents.
+      conversationId?: number;
       // True while the assistant's text is still arriving. Never persisted —
       // a reloaded transcript is by definition settled.
       streaming?: boolean;
@@ -53,6 +57,10 @@ export type ChatThread = {
   // The CLI's own conversation id, so the next turn resumes rather than
   // starting cold. Null until the first turn reports one.
   resumeId: string | null;
+  // Monotonic client-side boundary for transports without native sessions.
+  // Switching provider (or an Ollama model) increments it while preserving
+  // older entries for display.
+  conversationId: number;
   // The user's model pick for this thread; null runs the CLI's default.
   model: string | null;
   // Permission posture each turn spawns with (see catalog.ACCESS_LEVELS).
@@ -77,6 +85,7 @@ export type PersistedChatThread = {
   providerId: string;
   title: string;
   resumeId: string | null;
+  conversationId: number;
   model: string | null;
   access: ChatAccessLevel;
   thinking: string | null;
@@ -143,6 +152,7 @@ export function newThread(
     title: DEFAULT_TITLE,
     entries: [],
     resumeId: null,
+    conversationId: 0,
     model: null,
     access: DEFAULT_ACCESS_LEVEL,
     thinking: null,
@@ -160,6 +170,7 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
     providerId: thread.providerId,
     title: thread.title,
     resumeId: thread.resumeId,
+    conversationId: thread.conversationId,
     model: thread.model,
     access: thread.access,
     thinking: thread.thinking,
@@ -168,7 +179,13 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
       .slice(-MAX_THREAD_ENTRIES)
       .map((entry) =>
         entry.kind === "message" && entry.streaming
-          ? { kind: "message" as const, id: entry.id, role: entry.role, text: entry.text }
+          ? {
+              kind: "message" as const,
+              id: entry.id,
+              role: entry.role,
+              text: entry.text,
+              conversationId: entry.conversationId,
+            }
           : entry,
       ),
     updatedAt: thread.updatedAt,
@@ -188,8 +205,16 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
   const doc = value as Record<string, unknown>;
   if (doc.version !== CHAT_DOC_VERSION) return null;
   if (typeof doc.id !== "string" || typeof doc.projectId !== "string") return null;
+  const conversationId =
+    typeof doc.conversationId === "number" &&
+    Number.isSafeInteger(doc.conversationId) &&
+    doc.conversationId >= 0
+      ? doc.conversationId
+      : 0;
   const entries = Array.isArray(doc.entries)
-    ? doc.entries.map(parseEntry).filter((entry): entry is ChatEntry => !!entry)
+    ? doc.entries
+        .map((entry) => parseEntry(entry, conversationId))
+        .filter((entry): entry is ChatEntry => !!entry)
     : [];
   return {
     version: CHAT_DOC_VERSION,
@@ -198,6 +223,7 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
     providerId: typeof doc.providerId === "string" ? doc.providerId : "claude",
     title: typeof doc.title === "string" ? doc.title : DEFAULT_TITLE,
     resumeId: typeof doc.resumeId === "string" ? doc.resumeId : null,
+    conversationId,
     model: typeof doc.model === "string" ? doc.model : null,
     // Documents predating access levels default like new threads do.
     access:
@@ -211,7 +237,7 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
   };
 }
 
-function parseEntry(value: unknown): ChatEntry | null {
+function parseEntry(value: unknown, fallbackConversationId = 0): ChatEntry | null {
   if (typeof value !== "object" || value === null) return null;
   const entry = value as Record<string, unknown>;
   const id = typeof entry.id === "string" ? entry.id : null;
@@ -219,7 +245,13 @@ function parseEntry(value: unknown): ChatEntry | null {
   if (entry.kind === "message") {
     const role = entry.role === "user" || entry.role === "assistant" ? entry.role : null;
     if (!role || typeof entry.text !== "string") return null;
-    return { kind: "message", id, role, text: entry.text };
+    const conversationId =
+      typeof entry.conversationId === "number" &&
+      Number.isSafeInteger(entry.conversationId) &&
+      entry.conversationId >= 0
+        ? entry.conversationId
+        : fallbackConversationId;
+    return { kind: "message", id, role, text: entry.text, conversationId };
   }
   if (entry.kind === "thinking") {
     return typeof entry.text === "string"

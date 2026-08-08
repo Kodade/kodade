@@ -392,9 +392,14 @@ describe("opencode dialect", () => {
   });
 
   it("maps reasoning, tool output, and step token usage", () => {
-    expect(events.find((event) => event.type === "thinking-complete")).toMatchObject({
-      text: "I should inspect the fixture before answering.",
-    });
+    expect(
+      events
+        .filter((event) => event.type === "thinking-complete")
+        .map((event) => event.text),
+    ).toEqual([
+      "I should inspect the fixture before answering.",
+      "I should summarize the completed read.",
+    ]);
     expect(events.find((event) => event.type === "tool-call-completed")).toEqual({
       type: "tool-call-completed",
       callId: "call_fixture_read",
@@ -402,7 +407,7 @@ describe("opencode dialect", () => {
     });
     expect(events.at(-1)).toEqual({
       type: "done",
-      usage: { promptTokens: 12, completionTokens: 4, totalTokens: 16 },
+      usage: { promptTokens: 15, completionTokens: 6, totalTokens: 24 },
     });
   });
 

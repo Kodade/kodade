@@ -15,6 +15,7 @@ import {
   thinkingLevelsFor,
 } from "../../providers/catalog";
 import type { OllamaModel } from "../../chat/ollama";
+import type { ProviderModelState } from "../../chat/store";
 import { ComposerMenu } from "./ComposerMenu";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -29,6 +30,7 @@ export function ChatComposer({
   working,
   disabled,
   ollama,
+  providerModels,
   onProviderChange,
   onModelChange,
   onAccessChange,
@@ -37,6 +39,7 @@ export function ChatComposer({
   onDraftChange,
   onSend,
   onCancel,
+  onRefreshOllama,
 }: {
   providers: Provider[];
   providerId: string;
@@ -52,6 +55,7 @@ export function ChatComposer({
     models: OllamaModel[];
     message: string | null;
   };
+  providerModels?: ProviderModelState;
   onProviderChange(providerId: string): void;
   onModelChange(model: string | null): void;
   onAccessChange(access: ChatAccessLevel): void;
@@ -60,15 +64,22 @@ export function ChatComposer({
   onDraftChange(draft: string): void;
   onSend(text: string): void;
   onCancel(): void;
+  onRefreshOllama?(): void;
 }) {
   const selected = providers.find((provider) => provider.id === providerId);
   const chatCapable = selected ? supportsChat(selected) : false;
   const ollamaChat = isOllamaChat(selected);
-  const models = ollamaChat ? (ollama?.models ?? []) : (selected?.stream?.models ?? []);
+  const discoversModels = !!selected?.stream?.modelDiscovery;
+  const models = ollamaChat
+    ? (ollama?.models ?? [])
+    : discoversModels
+      ? (providerModels?.models ?? [])
+      : (selected?.stream?.models ?? []);
   // Empty when this provider/model has no verified thinking flag — the pill
   // simply doesn't render then.
   const thinkingLevels = chatCapable ? thinkingLevelsFor(selected?.stream, model) : [];
-  const providerReady = !ollamaChat || ollama?.status === "ready";
+  const providerReady =
+    !ollamaChat || (ollama?.status === "ready" && models.length > 0);
   const canSend =
     !working &&
     !disabled &&
@@ -91,6 +102,7 @@ export function ChatComposer({
   // "" is the menu id for "let the CLI pick" — a null model on the thread.
   const modelLabel =
     models.find((entry) => entry.id === model)?.label ??
+    model ??
     (ollamaChat ? models[0]?.label ?? "Choose a local model" : "Default model");
   // Null (or a level the current model no longer offers) shows the neutral
   // chip label; engine.buildAgentArgs drops a stale level the same way.
@@ -106,11 +118,33 @@ export function ChatComposer({
         </p>
       )}
       {ollamaChat && (
-        <p className="mb-2 text-[11px] text-text-dim" data-testid="ollama-chat-notice">
-          {ollama?.message ??
-            (ollama?.status === "loading"
-              ? "Checking local Ollama models…"
-              : "Local chat only — no filesystem access, tools, or server-side sessions.")}
+        <div
+          className="mb-2 flex items-center justify-between gap-2 text-[11px] text-text-dim"
+          data-testid="ollama-chat-notice"
+        >
+          <span>
+            {ollama?.message ??
+              (ollama?.status === "loading"
+                ? "Checking local Ollama models…"
+                : "Local chat only — no filesystem access, tools, or server-side sessions.")}
+          </span>
+          {ollama?.status !== "loading" && onRefreshOllama && (
+            <button
+              type="button"
+              onClick={onRefreshOllama}
+              className="shrink-0 rounded border border-border px-2 py-1 text-text hover:bg-surface-hover"
+            >
+              refresh models
+            </button>
+          )}
+        </div>
+      )}
+      {discoversModels && providerModels && providerModels.status !== "idle" && (
+        <p className="mb-2 text-[11px] text-text-dim" data-testid="provider-model-notice">
+          {providerModels?.message ??
+            (providerModels?.status === "loading"
+              ? `Loading ${selected?.name ?? providerId} models…`
+              : `${models.length} model${models.length === 1 ? "" : "s"} available.`)}
         </p>
       )}
       <div className="rounded-xl border border-border bg-surface focus-within:border-accent/70">
@@ -206,6 +240,7 @@ export function ChatComposer({
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <ComposerMenu
           label="Provider"
+          disabled={working || disabled}
           value={providerId}
           onSelect={onProviderChange}
           options={providers.map((provider) => ({
@@ -222,9 +257,11 @@ export function ChatComposer({
             {selected?.name ?? providerId}
           </span>
         </ComposerMenu>
-        {chatCapable && (models.length > 0 || ollamaChat) && (
+        {chatCapable &&
+          (models.length > 0 || ollamaChat || discoversModels || selected?.stream?.models !== undefined) && (
           <ComposerMenu
             label="Model"
+            disabled={working || disabled}
             value={model ?? ""}
             onSelect={(id) => onModelChange(id || null)}
             options={[
@@ -239,6 +276,7 @@ export function ChatComposer({
         {chatCapable && !ollamaChat && (
           <ComposerMenu
             label="Access level"
+            disabled={working || disabled}
             value={access}
             onSelect={(id) => onAccessChange(id as ChatAccessLevel)}
             options={ACCESS_LEVELS.map((level) => ({
@@ -255,6 +293,7 @@ export function ChatComposer({
         {thinkingLevels.length > 0 && (
           <ComposerMenu
             label="Thinking level"
+            disabled={working || disabled}
             value={thinking ?? ""}
             onSelect={(id) => onThinkingChange(id || null)}
             options={[

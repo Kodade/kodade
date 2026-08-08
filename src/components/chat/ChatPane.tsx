@@ -21,7 +21,7 @@ import {
   reviewStore as defaultReviewStore,
   workingTreeSummaryStore as defaultWorkingTreeSummaryStore,
 } from "../../store/appStore";
-import type { ChatState } from "../../chat/store";
+import { providerModelKey, type ChatState } from "../../chat/store";
 import type {
   WorkingTreeSummary,
   WorkingTreeSummaryState,
@@ -74,6 +74,7 @@ export function ChatPane({
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
   const ollama = useStore(chatThreadsStore, (s) => s.ollama);
+  const providerModels = useStore(chatThreadsStore, (s) => s.providerModels);
   const catalog = useStore(providers, (s) => s.providers);
   const summaryProjectRoot = useStore(workingTree, (s) => s.projectRoot);
   const workingTreeSummary = useStore(workingTree, (s) => s.summary);
@@ -234,6 +235,11 @@ export function ChatPane({
                 access={thread.access}
                 thinking={thread.thinking}
                 ollama={ollama}
+                providerModels={
+                  activeProjectIsRemote || !activeProjectId
+                    ? undefined
+                    : providerModels[providerModelKey(thread.providerId, activeProjectId)]
+                }
                 attachments={attachments}
                 draft={drafts[thread.id] ?? ""}
                 working={thread.status === "working"}
@@ -291,6 +297,9 @@ export function ChatPane({
                     });
                 }}
                 onCancel={() => void chatThreadsStore.getState().cancel(thread.id)}
+                onRefreshOllama={() =>
+                  void chatThreadsStore.getState().refreshOllama()
+                }
               />
             </>
           )}

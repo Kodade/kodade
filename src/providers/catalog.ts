@@ -27,6 +27,20 @@ export type ChatAccessLevel = "plan" | "standard" | "full";
 // token; `label` is the composer's display text.
 export type ThinkingLevel = { id: string; label: string };
 
+export type ProviderModel = {
+  id: string;
+  label: string;
+  thinkingLevels?: readonly ThinkingLevel[];
+};
+
+export type ProviderModelDiscovery = {
+  // A read-only CLI command whose stdout is one provider/model id per line.
+  // The app executes it through the same login-shell process boundary as a
+  // chat turn; no catalog ids are guessed or written into provider config.
+  args: readonly string[];
+  format: "lines";
+};
+
 export type ProviderStream = {
   // Which parser in src/agents/ reads this CLI's output.
   dialect: "claude" | "codex" | "grok" | "opencode";
@@ -47,9 +61,11 @@ export type ProviderStream = {
   // Levels every model of this CLI accepts. A model entry may override with
   // its own list (see thinkingLevelsFor).
   thinkingLevels?: readonly ThinkingLevel[];
-  // Models the composer offers. Omit when the CLI's current model names
-  // aren't verified — the picker then shows only "Default".
-  models?: readonly { id: string; label: string; thinkingLevels?: readonly ThinkingLevel[] }[];
+  // Models the composer offers. Static entries are only for verified catalogs.
+  models?: readonly ProviderModel[];
+  // Dynamic model discovery for provider/plugin catalogs that can change
+  // independently of Ködade. The picker always keeps a Default escape hatch.
+  modelDiscovery?: ProviderModelDiscovery;
 };
 
 export const DEFAULT_ACCESS_LEVEL: ChatAccessLevel = "standard";
@@ -367,7 +383,7 @@ export const PROVIDERS: Provider[] = [
     bin: "opencode",
     launch: "opencode",
     install: "https://opencode.ai",
-    // Verified against OpenCode 1.18.5: `opencode run --format json` accepts
+    // Verified against OpenCode 1.18.15: `opencode run --format json` accepts
     // piped stdin, reports raw JSON events, and resumes with `--session`.
     // Its built-in `plan` agent is read-only by permission policy; `build` is
     // the normal editing agent. `--auto` only approves permissions not
@@ -383,6 +399,7 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["--session", "{session}"],
       modelArgs: ["--model", "{model}"],
+      modelDiscovery: { args: ["models"], format: "lines" },
     },
     // OpenCode: instructions in AGENTS.md (global ~/.config/opencode/AGENTS.md,
     // project <project>/AGENTS.md — the same file codex reads, so a shared

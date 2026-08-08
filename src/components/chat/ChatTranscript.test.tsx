@@ -12,6 +12,7 @@ function thread(entries: ChatThread["entries"]): ChatThread {
     title: "Transcript",
     entries,
     resumeId: null,
+    conversationId: 0,
     model: null,
     access: "standard",
     thinking: null,

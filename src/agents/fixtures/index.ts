@@ -18,6 +18,6 @@ export const CLAUDE_TOOL_TURN = lines(claudeToolTurn);
 export const CODEX_TOOL_TURN = lines(codexToolTurn);
 // Grok Build: one turn that thinks, calls read_file, then answers.
 export const GROK_TOOL_TURN = lines(grokToolTurn);
-// OpenCode 1.18.5 `run --format json`: sanitized part events plus a captured
-// unauthenticated error (the fixture never contains local paths or credentials).
+// OpenCode 1.18.15 `run --format json`: sanitized multi-step part events plus
+// a captured unauthenticated error (no local paths or credentials).
 export const OPENCODE_TOOL_TURN = lines(openCodeToolTurn);
