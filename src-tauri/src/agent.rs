@@ -81,6 +81,16 @@ impl AgentManager {
         on_line: LineSink,
         on_exit: ExitSink,
     ) -> Result<(), String> {
+        self.start_with_shell(spawn, &ShellEnvironment::current(), on_line, on_exit)
+    }
+
+    fn start_with_shell(
+        &self,
+        spawn: AgentSpawn,
+        shell: &ShellEnvironment,
+        on_line: LineSink,
+        on_exit: ExitSink,
+    ) -> Result<(), String> {
         // Hold the map lock across resolve+spawn+insert so two starts can't
         // race one id. Everything here is a fork/exec, and no stream I/O ever
         // takes this lock.
@@ -89,9 +99,8 @@ impl AgentManager {
             return Err(format!("agent run id already in use: {}", spawn.id));
         }
 
-        let shell = ShellEnvironment::current();
-        let executable = shell
-            .resolve_executable(&spawn.bin)
+        let (executable, login_path) = shell
+            .resolve_executable_with_login_path(&spawn.bin)
             .ok_or_else(|| format!("{} is not installed or not on PATH", spawn.bin))?;
 
         let dir = if spawn.cwd.is_empty() {
@@ -108,6 +117,9 @@ impl AgentManager {
             .stderr(Stdio::piped());
         // Headless CLIs decorate output when they think a human is watching.
         // These make the structured stream predictable without touching auth.
+        if let Some(path) = login_path {
+            cmd.env("PATH", path);
+        }
         cmd.env("NO_COLOR", "1");
         cmd.env("TERM", "dumb");
         #[cfg(unix)]
@@ -308,8 +320,20 @@ pub fn kill_child(tree: &ProcessTree, child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::shell::ShellKind;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[cfg(unix)]
+    fn write_executable(path: &std::path::Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
 
     type SinkHarness = (
         LineSink,
@@ -381,6 +405,61 @@ mod tests {
         assert_eq!(
             lines.recv_timeout(Duration::from_secs(10)).unwrap().1,
             "hello from kodchat"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn provider_can_launch_a_secondary_executable_from_its_login_profile_path() {
+        let fixture = tempfile::tempdir().unwrap();
+        let bin_dir = fixture.path().join("profile-bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        write_executable(
+            &bin_dir.join("profile-secondary"),
+            "#!/bin/sh\nprintf 'secondary launched\\n'\n",
+        );
+        write_executable(
+            &bin_dir.join("profile-provider"),
+            "#!/bin/sh\n\
+             [ -z \"${KODADE_PROFILE_SECRET-}\" ] || { echo 'secret leaked' >&2; exit 9; }\n\
+             [ \"$1\" = 'literal;$(not-executed)' ] || { echo 'argument changed' >&2; exit 8; }\n\
+             exec env profile-secondary\n",
+        );
+
+        // This shell wrapper models a login profile that prepends one private
+        // tool directory without changing the desktop process environment.
+        let shell = fixture.path().join("profile-shell");
+        write_executable(
+            &shell,
+            &format!(
+                "#!/bin/sh\nexport PATH=\"{}:$PATH\"\nexport KODADE_PROFILE_SECRET=must-not-leak\n[ \"$1\" = -l ] && shift\nexec /bin/sh \"$@\"\n",
+                bin_dir.display()
+            ),
+        );
+
+        let shell = ShellEnvironment::new(shell, ShellKind::Posix, fixture.path().into());
+        let manager = AgentManager::new();
+        let (on_line, on_exit, lines, exits) = sinks();
+        manager
+            .start_with_shell(
+                AgentSpawn {
+                    id: "run-profile-path".into(),
+                    cwd: fixture.path().to_string_lossy().into_owned(),
+                    bin: "profile-provider".into(),
+                    args: vec!["literal;$(not-executed)".into()],
+                    stdin: Some(String::new()),
+                },
+                &shell,
+                on_line,
+                on_exit,
+            )
+            .expect("provider should resolve through the login profile");
+
+        let (_, code, stderr) = exits.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(code, Some(0), "provider failed: {stderr}");
+        assert_eq!(
+            lines.recv_timeout(Duration::from_secs(1)).unwrap().1,
+            "secondary launched"
         );
     }
 
