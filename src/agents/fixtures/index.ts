@@ -6,6 +6,7 @@
 import claudeToolTurn from "./claude-tool-turn.jsonl?raw";
 import codexToolTurn from "./codex-tool-turn.jsonl?raw";
 import grokToolTurn from "./grok-tool-turn.jsonl?raw";
+import openCodeToolTurn from "./opencode-tool-turn.jsonl?raw";
 
 function lines(text: string): string[] {
   return text.split("\n").filter((line) => line.trim().length > 0);
@@ -17,3 +18,6 @@ export const CLAUDE_TOOL_TURN = lines(claudeToolTurn);
 export const CODEX_TOOL_TURN = lines(codexToolTurn);
 // Grok Build: one turn that thinks, calls read_file, then answers.
 export const GROK_TOOL_TURN = lines(grokToolTurn);
+// OpenCode 1.18.15 `run --format json`: sanitized multi-step part events plus
+// a captured unauthenticated error (no local paths or credentials).
+export const OPENCODE_TOOL_TURN = lines(openCodeToolTurn);

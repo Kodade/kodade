@@ -1,6 +1,6 @@
 // KödChat's stream-adapter seam. One adapter per agent CLI dialect turns that
-// CLI's structured stdout into the provider-neutral chat vocabulary KödLocal
-// already defines (ChatMessage / ToolCall / ToolOutcome / TokenUsage), so the
+// CLI's structured stdout into the provider-neutral chat vocabulary
+// (ChatMessage / ToolCall / ToolOutcome / TokenUsage), so the
 // pane, the store, and the transcript format never learn a vendor's JSON.
 //
 // Deliberately SEPARATE from HarnessAdapter (src/harness): that contract is
@@ -10,7 +10,7 @@
 // providers/catalog.ts rather than baked into an adapter.
 
 import type { ChatAccessLevel } from "../providers/catalog";
-import type { ChatMessage, TokenUsage } from "../local/backend";
+import type { ChatMessage, TokenUsage } from "../inference/backend";
 import type { ToolCall } from "../local/toolcall";
 import type { ToolOutcome } from "../local/tools";
 

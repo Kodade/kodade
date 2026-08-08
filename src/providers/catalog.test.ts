@@ -39,4 +39,10 @@ describe("provider catalog", () => {
       ),
     ).not.toContain("kodade-local");
   });
+
+  it("discovers OpenCode models dynamically instead of shipping a guessed catalog", () => {
+    const stream = PROVIDERS.find((provider) => provider.id === "opencode")?.stream;
+    expect(stream?.models).toBeUndefined();
+    expect(stream?.modelDiscovery).toEqual({ args: ["models"], format: "lines" });
+  });
 });

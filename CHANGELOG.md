@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added OpenCode as a first-class KödChat provider with native session resume,
+  structured reasoning/tool output, access modes, and project-scoped dynamic
+  model discovery that always retains the CLI-configured Default.
+- Added public Ollama chat over its loopback OpenAI-compatible API, including
+  dynamic installed models, streamed reasoning/text, stop, and persisted
+  client-side conversation history with clean provider/model boundaries.
 - Replaced KödChat's per-call tool rows with compact work summaries that keep
   bounded arguments and results available through Details.
 - Added GitHub issue/pull-request link icons and a current-working-tree Edited

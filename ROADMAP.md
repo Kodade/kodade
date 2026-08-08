@@ -6,7 +6,13 @@ This file states the public product boundary.
 ## Supported
 
 - macOS Apple Silicon on macOS 13 or newer
-- KödChat with Claude Code, Codex, and Grok Build
+- KödChat with Claude Code, Codex, Grok Build, and OpenCode through their
+  official CLIs. OpenCode models are discovered per local project from the
+  installed CLI, with Default retained and no bundled model catalog.
+- Ollama local HTTP chat at `127.0.0.1:11434`, with dynamic local-model picks,
+  streamed reasoning/responses, stop, and persisted client-side conversation
+  history bounded to the active provider/model. Ollama chat has no filesystem
+  or tool access.
 - Native terminals, projects, files, and editor
 - KödMem, KödMCP, KödHarness, and KödSkills
 - Embedded browser and GitHub desktop panes

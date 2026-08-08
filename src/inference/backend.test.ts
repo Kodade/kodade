@@ -29,7 +29,7 @@ describe("OpenAIHttpBackend", () => {
   it("assembles split SSE frames and preserves OpenAI delta fields", async () => {
     const fetch = vi.fn().mockResolvedValue(
       sseResponse([
-        'data: {"id":"chat-1","model":"local","choices":[{"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}\n',
+        'data: {"id":"chat-1","model":"local","choices":[{"delta":{"role":"assistant","reasoning":"Think ","content":"Hel"},"finish_reason":null}]}\n',
         '\ndata: {"id":"chat-1","model":"local","choices":[{"delta":{"content":"lo","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\\"p"}}]},"finish_reason":null}]}\n\n',
         'data: {"id":"chat-1","model":"local","choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
       ]),
@@ -41,7 +41,13 @@ describe("OpenAIHttpBackend", () => {
     );
 
     expect(deltas).toEqual([
-      { id: "chat-1", model: "local", role: "assistant", content: "Hel" },
+      {
+        id: "chat-1",
+        model: "local",
+        role: "assistant",
+        content: "Hel",
+        reasoning: "Think ",
+      },
       {
         id: "chat-1",
         model: "local",

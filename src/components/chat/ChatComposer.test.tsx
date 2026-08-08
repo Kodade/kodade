@@ -140,3 +140,141 @@ describe("the thinking-level pill", () => {
     expect(labels.some((entry) => entry?.includes("Ultra"))).toBe(true);
   });
 });
+
+describe("Ollama composer semantics", () => {
+  it("shows dynamic local models and hides agent access controls", () => {
+    const { host, root } = mount({
+      providerId: "ollama",
+      ollama: {
+        status: "ready",
+        models: [{ id: "qwen3:8b", label: "qwen3:8b" }],
+        message: null,
+      },
+    });
+    mounted = root;
+    expect(host.querySelector('[data-testid="ollama-chat-notice"]')?.textContent).toContain(
+      "no filesystem access, tools, or server-side sessions",
+    );
+    expect(host.querySelector('button[aria-label="Model"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Access level"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Thinking level"]')).toBeNull();
+  });
+
+  it("keeps send disabled when Ollama is ready but has no installed models", () => {
+    const { host, root } = mount({
+      providerId: "ollama",
+      draft: "keep this draft",
+      ollama: {
+        status: "ready",
+        models: [],
+        message: "Ollama is running, but no local models are installed yet.",
+      },
+    });
+    mounted = root;
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(
+      true,
+    );
+  });
+
+  it("offers an explicit model refresh while unavailable without remounting", () => {
+    const onRefreshOllama = vi.fn();
+    const { host, root } = mount({
+      providerId: "ollama",
+      ollama: {
+        status: "unavailable",
+        models: [],
+        message: "Ollama is not running. Start it, then retry.",
+      },
+      onRefreshOllama,
+    });
+    mounted = root;
+    const refresh = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "refresh models",
+    );
+    act(() => refresh?.click());
+    expect(onRefreshOllama).toHaveBeenCalledOnce();
+  });
+});
+
+describe("dynamic OpenCode models", () => {
+  it("offers Default plus only the discovered model ids", () => {
+    const onModelChange = vi.fn();
+    const { host, root } = mount({
+      providerId: "opencode",
+      providerModels: {
+        status: "ready",
+        models: [
+          {
+            id: "openrouter/~anthropic/claude-fable-latest",
+            label: "openrouter/~anthropic/claude-fable-latest",
+          },
+        ],
+        message: null,
+      },
+      onModelChange,
+    });
+    mounted = root;
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Model"]')!;
+    act(() => trigger.click());
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Default model"),
+      expect.stringContaining("openrouter/~anthropic/claude-fable-latest"),
+    ]);
+    act(() => options[1]!.click());
+    expect(onModelChange).toHaveBeenCalledWith(
+      "openrouter/~anthropic/claude-fable-latest",
+    );
+  });
+
+  it("stays Default-only when discovery is unavailable or intentionally withheld", () => {
+    const { host, root } = mount({
+      providerId: "opencode",
+      providerModels: undefined,
+    });
+    mounted = root;
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Model"]')!;
+    act(() => trigger.click());
+    expect([...host.querySelectorAll('[role="option"]')].map((entry) => entry.textContent)).toEqual([
+      expect.stringContaining("Default model"),
+    ]);
+  });
+
+  it("retries unavailable discovery without remounting", () => {
+    const onRefreshProviderModels = vi.fn();
+    const { host, root } = mount({
+      providerId: "opencode",
+      providerModels: {
+        status: "unavailable",
+        models: [],
+        message: "OpenCode model discovery failed. Default remains available.",
+      },
+      onRefreshProviderModels,
+    });
+    mounted = root;
+
+    const refresh = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "refresh models",
+    );
+    act(() => refresh?.click());
+    expect(onRefreshProviderModels).toHaveBeenCalledOnce();
+  });
+
+  it("locks provider and model controls while a turn is working", () => {
+    const { host, root } = mount({
+      providerId: "opencode",
+      working: true,
+      providerModels: {
+        status: "ready",
+        models: [{ id: "provider/model", label: "provider/model" }],
+        message: null,
+      },
+    });
+    mounted = root;
+    for (const label of ["Provider", "Model", "Access level"]) {
+      expect(host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.disabled).toBe(
+        true,
+      );
+    }
+  });
+});

@@ -4,10 +4,15 @@
 
 import { describe, expect, it } from "vitest";
 import { PROVIDERS } from "../providers/catalog";
-import { adapterFor, chatProviderIds } from "./registry";
+import { adapterFor, chatProviderIds, streamProviderIds } from "./registry";
 import type { AgentStreamEvent } from "./contract";
 import { buildAgentArgs, looksLikeAuthFailure } from "./engine";
-import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN, GROK_TOOL_TURN } from "./fixtures";
+import {
+  CLAUDE_TOOL_TURN,
+  CODEX_TOOL_TURN,
+  GROK_TOOL_TURN,
+  OPENCODE_TOOL_TURN,
+} from "./fixtures";
 
 function drain(
   providerId: string,
@@ -376,9 +381,49 @@ describe("grok dialect", () => {
   });
 });
 
+describe("opencode dialect", () => {
+  const events = drain("opencode", OPENCODE_TOOL_TURN.slice(0, -1));
+
+  it("captures its native session and completed message parts", () => {
+    expect(events[0]).toEqual({ type: "session", sessionId: "ses_fixture" });
+    expect(events.find((event) => event.type === "message-complete")).toMatchObject({
+      message: { role: "assistant", content: "fixture-ok" },
+    });
+  });
+
+  it("maps reasoning, tool output, and step token usage", () => {
+    expect(
+      events
+        .filter((event) => event.type === "thinking-complete")
+        .map((event) => event.text),
+    ).toEqual([
+      "I should inspect the fixture before answering.",
+      "I should summarize the completed read.",
+    ]);
+    expect(events.find((event) => event.type === "tool-call-completed")).toEqual({
+      type: "tool-call-completed",
+      callId: "call_fixture_read",
+      outcome: { status: "executed", result: "fixture-ok\n" },
+    });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      usage: { promptTokens: 15, completionTokens: 6, totalTokens: 24 },
+    });
+  });
+
+  it("ignores malformed output and makes the captured auth failure actionable", () => {
+    const noisy = drain("opencode", ["not json", OPENCODE_TOOL_TURN.at(-1)!], 1);
+    expect(noisy).toEqual([
+      { type: "session", sessionId: "ses_auth_fixture" },
+      { type: "auth-error", message: "OpenRouter API key is missing." },
+      { type: "done" },
+    ]);
+  });
+});
+
 describe("run termination is uniform across dialects", () => {
   it("a crash with no terminal frame still produces one error and one done", () => {
-    for (const id of chatProviderIds()) {
+    for (const id of streamProviderIds()) {
       const events = drain(id, [], 1, "boom: the CLI fell over");
       expect(events).toEqual([
         { type: "error", message: "boom: the CLI fell over" },
@@ -388,7 +433,7 @@ describe("run termination is uniform across dialects", () => {
   });
 
   it("stderr that reads like a login failure becomes an auth error", () => {
-    for (const id of chatProviderIds()) {
+    for (const id of streamProviderIds()) {
       const events = drain(id, [], 1, "Not logged in. Run `codex login` to continue.");
       expect(events[0]).toMatchObject({ type: "auth-error" });
     }
@@ -504,6 +549,36 @@ describe("argv comes from the catalog, not the adapters", () => {
     ]);
   });
 
+  it("opencode runs JSON through stdin, maps access to its own agents, and resumes natively", () => {
+    const adapter = adapterFor("opencode")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo", access: "plan" })).toEqual({
+      bin: "opencode",
+      args: ["run", "--format", "json", "--thinking", "--agent", "plan"],
+      stdin: "hi",
+    });
+    expect(
+      adapter.spawn({
+        prompt: "again",
+        cwd: "/repo",
+        access: "full",
+        resumeId: "ses_fixture",
+        model: "openrouter/fixture-model",
+      }).args,
+    ).toEqual([
+      "run",
+      "--format",
+      "json",
+      "--thinking",
+      "--agent",
+      "build",
+      "--auto",
+      "--model",
+      "openrouter/fixture-model",
+      "--session",
+      "ses_fixture",
+    ]);
+  });
+
   it("access levels map to each CLI's own posture flags", () => {
     const claude = adapterFor("claude")!;
     const codex = adapterFor("codex")!;
@@ -598,7 +673,7 @@ describe("argv comes from the catalog, not the adapters", () => {
   });
 
   it("no thinking pick means no thinking args at all", () => {
-    for (const id of chatProviderIds()) {
+    for (const id of streamProviderIds()) {
       const args = adapterFor(id)!.spawn({ prompt: "x", cwd: "/repo" }).args;
       expect(args).not.toContain("--effort");
       expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
@@ -607,12 +682,12 @@ describe("argv comes from the catalog, not the adapters", () => {
 });
 
 describe("providers without a verified stream have no adapter", () => {
-  it("opencode, ollama and KödLocal are terminal-only for now", () => {
-    for (const id of ["opencode", "ollama", "kodade-local"]) {
+  it("ollama and KödLocal remain outside the CLI stream adapters", () => {
+    for (const id of ["ollama", "kodade-local"]) {
       expect(providerOf(id).stream).toBeUndefined();
       expect(adapterFor(id)).toBeNull();
     }
-    expect(chatProviderIds()).toEqual(["claude", "codex", "grok"]);
+    expect(chatProviderIds()).toEqual(["claude", "codex", "grok", "opencode", "ollama"]);
   });
 
   it("an unknown provider id is null, not a throw", () => {

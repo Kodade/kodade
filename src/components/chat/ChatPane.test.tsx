@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockAgentIpc, MockStorage } from "../../ipc/mock";
-import { createChatStore } from "../../chat/store";
+import { createChatStore, providerModelKey } from "../../chat/store";
 import { createActivityModule } from "../../activity/activity";
 import { createProjectsStore, isChatSession } from "../../store/projects";
 import { createProvidersStore } from "../../providers/store";
@@ -14,6 +14,7 @@ import { MockGit } from "../../ipc/mock";
 import { createWorkingTreeSummaryStore } from "../../chat/working-tree";
 import { projectWorkspaceView } from "../ProjectsSidebar";
 import { ChatPane } from "./ChatPane";
+import { remoteProjectId, remoteTargetForProjectId } from "../../ssh/model";
 
 function fakeRegistry() {
   const hosts = new Map<string, HTMLElement>();
@@ -131,6 +132,8 @@ async function mount({
     agent,
     storage,
     projectRoot: () => "/repos/alpha",
+    remoteTarget: (id) =>
+      remoteTargetForProjectId(projectsStore.getState().remoteTargets, id),
     persistDebounceMs: 0,
   });
   await chatThreadsStore.getState().start();
@@ -181,6 +184,53 @@ afterEach(() => {
 });
 
 describe("ChatPane", () => {
+  it("keeps a remote OpenCode thread Default-only even when local models are cached", async () => {
+    const { host, root, projectsStore, chatThreadsStore } = await mount();
+    mounted = root;
+    const target = { host: "studio", path: "/srv/project" };
+    const remoteId = remoteProjectId(target);
+    const threadId = "remote-chat";
+
+    await act(async () => {
+      projectsStore.setState((state) => ({
+        remoteTargets: [...state.remoteTargets, target],
+        activeProjectId: remoteId,
+        activeSessionByProject: {
+          ...state.activeSessionByProject,
+          [remoteId]: threadId,
+        },
+        sessions: [
+          ...state.sessions,
+          {
+            id: threadId,
+            projectId: remoteId,
+            kind: "chat" as const,
+            name: "opencode 1",
+          },
+        ],
+      }));
+      chatThreadsStore.setState((state) => ({
+        providerModels: {
+          ...state.providerModels,
+          [providerModelKey("opencode", remoteId)]: {
+            status: "ready",
+            models: [{ id: "local/should-not-leak", label: "local/should-not-leak" }],
+            message: null,
+          },
+        },
+      }));
+      await chatThreadsStore
+        .getState()
+        .openThread(threadId, remoteId, "opencode");
+    });
+
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Model"]')!;
+    await act(async () => trigger.click());
+    expect([...host.querySelectorAll('[role="option"]')].map((entry) => entry.textContent)).toEqual([
+      expect.stringContaining("Default model"),
+    ]);
+  });
+
   it("keeps a newly selected project free of a terminal until a chat requests one", async () => {
     const { host, root } = await mount();
     mounted = root;
@@ -619,13 +669,13 @@ describe("ChatPane", () => {
         (option) => option.textContent?.includes(label),
       );
 
-    // Provider menu: options carry the brand badge and terminal-only providers
-    // are listed but not selectable.
+    // Provider menu: options carry the brand badge; Ollama is a first-class
+    // local HTTP chat provider, while genuinely terminal-only entries stay disabled.
     const providerTrigger = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Provider"]',
     )!;
     await act(async () => providerTrigger.click());
-    expect(optionByLabel("Ollama")?.disabled).toBe(true);
+    expect(optionByLabel("Ollama")?.disabled).toBe(false);
     await act(async () => optionByLabel("Codex")?.click());
     expect(chatThreadsStore.getState().threads[threadId].providerId).toBe("codex");
 

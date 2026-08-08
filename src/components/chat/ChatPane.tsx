@@ -21,7 +21,7 @@ import {
   reviewStore as defaultReviewStore,
   workingTreeSummaryStore as defaultWorkingTreeSummaryStore,
 } from "../../store/appStore";
-import type { ChatState } from "../../chat/store";
+import { providerModelKey, type ChatState } from "../../chat/store";
 import type {
   WorkingTreeSummary,
   WorkingTreeSummaryState,
@@ -32,7 +32,7 @@ import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
 import { isChatSession } from "../../store/projects";
 import type { ProvidersState } from "../../providers/store";
-import { AVAILABLE_PROVIDERS } from "../../providers/catalog";
+import { AVAILABLE_PROVIDERS, isOllamaChat } from "../../providers/catalog";
 import { buildRemoteProgramLaunch } from "../../ssh/command";
 import {
   remoteSessionBase,
@@ -73,6 +73,8 @@ export function ChatPane({
     s.activeProjectId ? (s.activeSessionByProject[s.activeProjectId] ?? null) : null,
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
+  const ollama = useStore(chatThreadsStore, (s) => s.ollama);
+  const providerModels = useStore(chatThreadsStore, (s) => s.providerModels);
   const catalog = useStore(providers, (s) => s.providers);
   const summaryProjectRoot = useStore(workingTree, (s) => s.projectRoot);
   const workingTreeSummary = useStore(workingTree, (s) => s.summary);
@@ -232,6 +234,12 @@ export function ChatPane({
                 model={thread.model}
                 access={thread.access}
                 thinking={thread.thinking}
+                ollama={ollama}
+                providerModels={
+                  activeProjectIsRemote || !activeProjectId
+                    ? undefined
+                    : providerModels[providerModelKey(thread.providerId, activeProjectId)]
+                }
                 attachments={attachments}
                 draft={drafts[thread.id] ?? ""}
                 working={thread.status === "working"}
@@ -264,7 +272,12 @@ export function ChatPane({
                   );
                   void chatThreadsStore
                     .getState()
-                    .send(thread.id, withAttachments(text, attachments))
+                    .send(
+                      thread.id,
+                      isOllamaChat(providerList.find((provider) => provider.id === thread.providerId))
+                        ? text
+                        : withAttachments(text, attachments),
+                    )
                     .then(() => {
                       // The first user message becomes the thread's sidebar
                       // name. This is the only place transcript-derived text
@@ -284,6 +297,16 @@ export function ChatPane({
                     });
                 }}
                 onCancel={() => void chatThreadsStore.getState().cancel(thread.id)}
+                onRefreshOllama={() =>
+                  void chatThreadsStore.getState().refreshOllama()
+                }
+                onRefreshProviderModels={() =>
+                  activeProjectId
+                    ? void chatThreadsStore
+                        .getState()
+                        .refreshProviderModels(thread.providerId, activeProjectId)
+                    : undefined
+                }
               />
             </>
           )}

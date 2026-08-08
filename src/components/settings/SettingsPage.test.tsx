@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appStore,
+  chatStore,
   filesStore,
   memoryStore,
   providersStore,
@@ -47,6 +48,9 @@ describe("settings page", () => {
       activeSessionByProject: {},
       localModelPreferences: DEFAULT_LOCAL_MODEL_PREFERENCES,
       sessions: [],
+    });
+    chatStore.setState({
+      ollama: { status: "idle", models: [], message: null },
     });
     providersStore.setState((state) => ({
       launchingProviderId: null,
@@ -569,6 +573,52 @@ describe("settings page", () => {
     expect(onLogin).not.toHaveBeenCalled();
   });
 
+  it("refreshes Ollama explicitly and after opening its start terminal", async () => {
+    const onLogin = vi.fn(async () => undefined);
+    const refresh = vi
+      .spyOn(chatStore.getState(), "refreshOllama")
+      .mockResolvedValue(undefined);
+    appStore.setState({
+      sessions: [
+        {
+          id: "chat-project",
+          projectId: "project",
+          kind: "chat",
+          name: "ollama 1",
+        },
+      ],
+      activeSessionByProject: { project: "chat-project" },
+    });
+    await render(<ChatSection onLogin={onLogin} />);
+
+    const button = (label: string) =>
+      [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+        (candidate) => candidate.textContent?.trim() === label,
+      );
+    await act(async () => button("refresh models")?.click());
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      button("start Ollama")?.click();
+      await Promise.resolve();
+    });
+    expect(onLogin).toHaveBeenCalledWith("ollama serve", "ollama");
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not offer to start a second Ollama server when it is ready", async () => {
+    chatStore.setState({
+      ollama: {
+        status: "ready",
+        models: [{ id: "qwen3:8b", label: "qwen3:8b" }],
+        message: null,
+      },
+    });
+    await render(<ChatSection />);
+    expect(container?.textContent).not.toContain("start Ollama");
+    expect(container?.textContent).toContain("refresh models");
+  });
+
   it("persists the default provider for new chats", async () => {
     appStore.setState({ chatProvider: "claude" });
     await render(<ChatSection />);
@@ -592,10 +642,9 @@ describe("settings page", () => {
     expect(appStore.getState().chatProvider).toBe("codex");
   });
 
-  it("ignores a provider KödChat cannot drive", async () => {
+  it("accepts Ollama as a chat-capable default provider", async () => {
     appStore.setState({ chatProvider: "claude" });
     appStore.getState().setChatProvider("ollama");
-    // Rejected: the preference can never leave the composer unusable.
-    expect(appStore.getState().chatProvider).toBe("claude");
+    expect(appStore.getState().chatProvider).toBe("ollama");
   });
 });
