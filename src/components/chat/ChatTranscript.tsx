@@ -191,13 +191,16 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
   const running = entries.some((entry) => entry.outcome === null);
   const failures = entries.filter((entry) => entry.outcome?.status === "error").length;
   const denied = entries.filter((entry) => entry.outcome?.status === "denied").length;
+  const suggested = entries.filter((entry) => entry.outcome?.status === "suggested").length;
   const state = running
     ? "working"
     : failures > 0
       ? "failed"
       : denied > 0
         ? "needs approval"
-        : "completed";
+        : suggested > 0
+          ? "suggested"
+          : "completed";
   const count = `${entries.length} action${entries.length === 1 ? "" : "s"}`;
 
   return (
@@ -270,6 +273,7 @@ function toolLabel(entry: ToolEntry): string {
   const path =
     stringArg(args, "file_path") ??
     stringArg(args, "filePath") ??
+    stringArg(args, "target_file") ??
     stringArg(args, "path");
   const query = stringArg(args, "query") ?? stringArg(args, "pattern");
   const command = stringArg(args, "command");

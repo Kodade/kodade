@@ -22,7 +22,10 @@ import {
   workingTreeSummaryStore as defaultWorkingTreeSummaryStore,
 } from "../../store/appStore";
 import type { ChatState } from "../../chat/store";
-import type { WorkingTreeSummaryState } from "../../chat/working-tree";
+import type {
+  WorkingTreeSummary,
+  WorkingTreeSummaryState,
+} from "../../chat/working-tree";
 import type { ReviewState } from "../../store/review";
 import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
@@ -122,7 +125,7 @@ export function ChatPane({
     void workingTree.getState().load(root);
   }, [workingTree, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
 
-  const currentWorkingTree =
+  const showWorkingTreeSummary =
     !!thread &&
     thread.status === "idle" &&
     summaryProjectRoot === filesStore.getState().rootPath &&
@@ -212,11 +215,9 @@ export function ChatPane({
                   }}
                 />
               </div>
-              {currentWorkingTree && (
+              {showWorkingTreeSummary && (
                 <EditedFilesCard
-                  files={workingTreeSummary.files}
-                  adds={workingTreeSummary.adds}
-                  dels={workingTreeSummary.dels}
+                  summary={workingTreeSummary}
                   onReview={() => {
                     const root = filesStore.getState().rootPath;
                     if (!root) return;
@@ -344,14 +345,10 @@ export function ChatPane({
 }
 
 function EditedFilesCard({
-  files,
-  adds,
-  dels,
+  summary,
   onReview,
 }: {
-  files: number;
-  adds: number;
-  dels: number;
+  summary: WorkingTreeSummary;
   onReview(): void;
 }) {
   return (
@@ -364,15 +361,15 @@ function EditedFilesCard({
     >
       <span data-testid="chat-edited-files-copy" className="min-w-0">
         <span className="block text-text">
-          Edited {files} file{files === 1 ? "" : "s"}
+          Edited {summary.files} file{summary.files === 1 ? "" : "s"}
         </span>
         <span className="mt-0.5 block text-[11px] text-text-dim">
           Current working tree ·{" "}
           <span data-testid="chat-additions" className="text-[var(--kd-success)]">
-            +{adds}
+            +{summary.adds}
           </span>{" "}
           <span data-testid="chat-deletions" className="text-[var(--kd-error)]">
-            −{dels}
+            −{summary.dels}
           </span>
         </span>
       </span>

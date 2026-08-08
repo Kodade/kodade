@@ -6,7 +6,7 @@ const markdown = new MarkdownIt("commonmark", {
   // Markdown is content, not an HTML escape hatch. Raw tags stay text.
   html: false,
   linkify: true,
-}).enable(["table", "strikethrough"]);
+}).enable(["table", "strikethrough", "linkify"]);
 
 type MarkdownRenderOptions = {
   // KödChat is the only surface that turns issue/PR references into GitHub
@@ -16,7 +16,7 @@ type MarkdownRenderOptions = {
 
 type MarkdownEnvironment = MarkdownRenderOptions;
 
-const githubIssueOrPull = /^https:\/\/github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/\d+(?:[/?#].*)?$/i;
+const githubIssueOrPull = /^https?:\/\/github\.com\/[^/?#]+\/[^/?#]+\/(?:issues|pull)\/\d+\/?(?:[?#].*)?$/i;
 
 markdown.renderer.rules.link_open = (tokens, index, options, env: MarkdownEnvironment, self) => {
   const token = tokens[index];

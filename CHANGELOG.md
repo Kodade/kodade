@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Replaced KödChat's per-call tool rows with compact work summaries that keep
+  bounded arguments and results available through Details.
+- Added GitHub issue/pull-request link icons and a current-working-tree Edited
+  files card that opens the existing KödPR review beside KödChat.
+
 ## 1.4.15 - 2026-08-08
 
 - Added Grok Build as a chat-capable KödChat agent through the grok CLI's

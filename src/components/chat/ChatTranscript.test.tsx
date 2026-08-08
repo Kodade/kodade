@@ -102,18 +102,40 @@ describe("ChatTranscript", () => {
     expect(summary.textContent).toContain("Searched *.tsx in src/components");
   });
 
+  it("recognizes Grok read targets and never reports suggested work as completed", async () => {
+    const host = await render([
+      { kind: "tool", id: "1", call: { tool: "read_file", args: { target_file: "/fixture/hello.txt" } }, outcome: { status: "executed", result: "ok" } },
+      { kind: "tool", id: "2", call: { tool: "write_file", args: { path: "src/new.ts" } }, outcome: { status: "suggested", result: "TOOL NOT EXECUTED" } },
+    ]);
+
+    const summary = host.querySelector('[data-testid="chat-tool-activity"]')!;
+    expect(summary.textContent).toContain("Read /fixture/hello.txt");
+    expect(summary.textContent).toContain("suggested");
+    expect(summary.textContent).not.toContain("completed");
+  });
+
   it("decorates only GitHub issue and pull-request links in KödChat", async () => {
     const host = await render([
       {
         kind: "message",
         id: "1",
         role: "assistant",
-        text: "[issue](https://github.com/Kodade/kodade/issues/25) [pr](https://github.com/Kodade/kodade/pull/26) [site](https://kodade.com) [relative](docs/readme.md)",
+        text: "[issue](https://github.com/Kodade/kodade/issues/25) [pr](https://github.com/Kodade/kodade/pull/26) [http](http://github.com/Kodade/kodade/issues/27) github.com/Kodade/kodade/pull/30 [site](https://kodade.com) [relative](docs/readme.md) [invalid](https://github.com/Kodade/kodade/issues/not-a-number) [extra](https://github.com/Kodade/kodade/issues/25/files)",
       },
     ]);
 
-    expect(host.querySelectorAll("a.markdown-github-link")).toHaveLength(2);
-    expect(host.querySelectorAll("a:not(.markdown-github-link)")).toHaveLength(2);
+    expect(host.querySelectorAll("a.markdown-github-link")).toHaveLength(4);
+    expect(host.querySelectorAll("a:not(.markdown-github-link)")).toHaveLength(4);
+    expect(
+      host.querySelector(
+        'a.markdown-github-link[href="http://github.com/Kodade/kodade/pull/30"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      host.querySelector(
+        'a.markdown-github-link[href="https://github.com/Kodade/kodade/issues/25/files"]',
+      ),
+    ).toBeNull();
   });
 
   it("derives the same compact summary from a persisted transcript", async () => {
