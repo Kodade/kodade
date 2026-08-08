@@ -44,7 +44,9 @@ describe("settings page", () => {
     settingsViewStore.setState({ section: "general" });
     appStore.setState({
       activeProjectId: "project",
+      activeSessionByProject: {},
       localModelPreferences: DEFAULT_LOCAL_MODEL_PREFERENCES,
+      sessions: [],
     });
     providersStore.setState((state) => ({
       launchingProviderId: null,
@@ -522,6 +524,17 @@ describe("settings page", () => {
 
   it("offers a login terminal only for an installed chat-capable provider", async () => {
     const onLogin = vi.fn();
+    appStore.setState({
+      sessions: [
+        {
+          id: "chat-project",
+          projectId: "project",
+          kind: "chat",
+          name: "claude 1",
+        },
+      ],
+      activeSessionByProject: { project: "chat-project" },
+    });
     await render(<ChatSection onLogin={onLogin} />);
 
     const buttons = Array.from(
@@ -536,6 +549,24 @@ describe("settings page", () => {
     // The provider's own interactive command, in a real terminal — Kodade
     // never proxies the credential.
     expect(onLogin).toHaveBeenCalledWith("claude", "claude");
+  });
+
+  it("requires an active KödChat thread before offering a login terminal", async () => {
+    const onLogin = vi.fn();
+    await render(<ChatSection onLogin={onLogin} />);
+
+    const button = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find(
+      (candidate) =>
+        candidate.textContent?.trim() === "open a terminal to log in",
+    );
+    expect(button?.disabled).toBe(true);
+    expect(container?.textContent).toContain(
+      "Select a KödChat thread before opening a login terminal.",
+    );
+    await act(async () => button?.click());
+    expect(onLogin).not.toHaveBeenCalled();
   });
 
   it("persists the default provider for new chats", async () => {

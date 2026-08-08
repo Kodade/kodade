@@ -7,6 +7,7 @@
 
 import { useStore } from "zustand";
 import { appStore, providersStore } from "../../store/appStore";
+import { isChatSession } from "../../store/projects";
 import {
   AVAILABLE_PROVIDERS,
   supportsChat,
@@ -27,10 +28,18 @@ export function ChatSection({
   const statuses = useStore(providersStore, (state) => state.statuses);
   const detecting = useStore(providersStore, (state) => state.detecting);
   const chatProvider = useStore(appStore, (state) => state.chatProvider);
-  const hasProject = useStore(
-    appStore,
-    (state) => state.activeProjectId !== null,
-  );
+  const activeProjectId = useStore(appStore, (state) => state.activeProjectId);
+  const hasActiveChat = useStore(appStore, (state) => {
+    const projectId = state.activeProjectId;
+    if (!projectId) return false;
+    const sessionId = state.activeSessionByProject[projectId];
+    return state.sessions.some(
+      (session) =>
+        session.id === sessionId &&
+        session.projectId === projectId &&
+        isChatSession(session),
+    );
+  });
 
   const chatProviders = AVAILABLE_PROVIDERS.filter(supportsChat);
 
@@ -61,19 +70,36 @@ export function ChatSection({
               }
             >
               {capable && installed ? (
-                <button
-                  type="button"
-                  onClick={() => onLogin(provider.launch, provider.id)}
-                  disabled={!hasProject}
-                  title={
-                    hasProject
-                      ? `Open a terminal running ${provider.launch}`
-                      : "Open a project first"
-                  }
-                  className="rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
-                >
-                  open a terminal to log in
-                </button>
+                <div className="flex max-w-52 flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onLogin(provider.launch, provider.id)}
+                    disabled={!hasActiveChat}
+                    aria-describedby={
+                      hasActiveChat ? undefined : `chat-login-guidance-${provider.id}`
+                    }
+                    title={
+                      hasActiveChat
+                        ? `Open a terminal running ${provider.launch}`
+                        : activeProjectId
+                          ? "Select a KödChat thread first"
+                          : "Open a project and select a KödChat thread first"
+                    }
+                    className="rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
+                  >
+                    open a terminal to log in
+                  </button>
+                  {!hasActiveChat && (
+                    <span
+                      id={`chat-login-guidance-${provider.id}`}
+                      className="text-right text-[10px] text-text-dim"
+                    >
+                      {activeProjectId
+                        ? "Select a KödChat thread before opening a login terminal."
+                        : "Open a project and select a KödChat thread before opening a login terminal."}
+                    </span>
+                  )}
+                </div>
               ) : (
                 <span
                   data-testid={capable ? undefined : "chat-unsupported"}

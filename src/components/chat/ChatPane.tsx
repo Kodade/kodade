@@ -5,6 +5,7 @@
 // so the registry keeps owning its xterm hosts without changing the sidebar.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { Pane } from "../Pane";
@@ -46,7 +47,9 @@ export function ChatPane({
   providers?: StoreApi<ProvidersState>;
   terminalRegistry?: TerminalDisplayRegistry;
 } = {}) {
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  // Terminal visibility belongs to the chat that owns the PTY. Switching
+  // threads must never reveal another thread's shell below the transcript.
+  const [terminalOpenByThread, setTerminalOpenByThread] = useState<Record<string, boolean>>({});
   // Files dropped on the pane, waiting to ride along with the next message.
   const [attachments, setAttachments] = useState<string[]>([]);
   // Composer drafts are transient, but owned by the thread they belong to.
@@ -54,24 +57,47 @@ export function ChatPane({
   const dropRegion = useRef<HTMLDivElement | null>(null);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
   const sessions = useStore(projectsStore, (s) => s.sessions);
+  const remoteTargets = useStore(projectsStore, (s) => s.remoteTargets);
   const activeSessionId = useStore(projectsStore, (s) =>
     s.activeProjectId ? (s.activeSessionByProject[s.activeProjectId] ?? null) : null,
   );
   const threads = useStore(chatThreadsStore, (s) => s.threads);
   const catalog = useStore(providers, (s) => s.providers);
 
-  // The selected session is a chat thread only when it was created as one.
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
-  const threadId = activeSession && isChatSession(activeSession) ? activeSession.id : null;
+  const owningChat =
+    activeSession && !isChatSession(activeSession) && activeSession.workspaceId
+      ? (sessions.find(
+          (session) =>
+            session.projectId === activeSession.projectId &&
+            session.id === activeSession.workspaceId &&
+            isChatSession(session),
+        ) ?? null)
+      : null;
+  const activeChat =
+    activeSession && isChatSession(activeSession) ? activeSession : owningChat;
+  const threadId = activeChat?.id ?? null;
   const thread = threadId ? (threads[threadId] ?? null) : null;
+  const terminalOpen = threadId ? (terminalOpenByThread[threadId] ?? false) : false;
+  const activeProjectIsRemote = activeProjectId
+    ? remoteTargetForProjectId(remoteTargets, activeProjectId) !== null
+    : false;
+
+  // A generic terminal creator selects the new PTY as part of its lifecycle.
+  // If that child belongs to a local chat, repair the selection immediately;
+  // the render below already uses the owner so no full-pane terminal flashes.
+  useEffect(() => {
+    if (!activeProjectId || !owningChat || activeSessionId === owningChat.id) return;
+    projectsStore.getState().setActiveSession(activeProjectId, owningChat.id);
+  }, [activeProjectId, activeSessionId, owningChat, projectsStore]);
 
   // Register + lazily load the transcript whenever a chat thread is selected.
   useEffect(() => {
     if (!threadId || !activeProjectId) return;
     void chatThreadsStore
       .getState()
-      .openThread(threadId, activeProjectId, providerForSession(activeSession));
-  }, [activeProjectId, activeSession, chatThreadsStore, threadId]);
+      .openThread(threadId, activeProjectId, providerForSession(activeChat));
+  }, [activeChat, activeProjectId, chatThreadsStore, threadId]);
 
   const providerList = useMemo(
     () => (catalog.length > 0 ? catalog : AVAILABLE_PROVIDERS),
@@ -97,32 +123,30 @@ export function ChatPane({
   const title = thread ? `KödChat — ${thread.title}` : "KödChat";
 
   const toggleTerminal = () => {
+    if (!activeProjectId || !threadId) return;
     if (terminalOpen) {
-      setTerminalOpen(false);
+      setTerminalOpenByThread((current) => ({ ...current, [threadId]: false }));
       return;
     }
 
-    if (activeProjectId && threadId) {
-      const state = projectsStore.getState();
-      const existing = state.sessions.find(
-        (session) =>
-          session.projectId === activeProjectId &&
-          !isChatSession(session) &&
-          session.workspaceId === threadId,
-      );
-      if (!existing) state.addTerminal(activeProjectId, threadId);
-      // addTerminal selects the new PTY by default. This terminal is embedded
-      // in the thread, so keep the chat selected and visible above it.
-      projectsStore.getState().setActiveSession(activeProjectId, threadId);
-    }
-
-    setTerminalOpen(true);
+    const state = projectsStore.getState();
+    const existing = state.sessions.find(
+      (session) =>
+        session.projectId === activeProjectId &&
+        !isChatSession(session) &&
+        session.workspaceId === threadId,
+    );
+    if (!existing) state.addTerminal(activeProjectId, threadId);
+    // addTerminal selects the new PTY by default. This terminal is embedded
+    // in the thread, so keep the chat selected and visible above it.
+    projectsStore.getState().setActiveSession(activeProjectId, threadId);
+    setTerminalOpenByThread((current) => ({ ...current, [threadId]: true }));
   };
 
-  // A terminal row is a distinct project child, not a chat with a terminal
-  // attached. Selecting it should therefore use the full work pane for the
-  // terminal instead of leaving an empty KödChat surface above it.
-  if (activeSession && !isChatSession(activeSession)) {
+  // Pinned SSH projects keep their standalone terminal workflow. Local PTYs
+  // are never root workspaces in the chat-first app, including stale/unowned
+  // selections that bypassed the store's navigation guard.
+  if (activeSession && !isChatSession(activeSession) && activeProjectIsRemote) {
     return (
       <TerminalPane
         projectsStore={projectsStore}
@@ -131,16 +155,8 @@ export function ChatPane({
     );
   }
 
-  return (
-    <Pane
-      title={title}
-      className="bg-bg"
-      headerAction={
-        <TerminalToggle open={terminalOpen} onToggle={toggleTerminal} />
-      }
-    >
-      <div className="flex h-full min-h-0 flex-col">
-        <div ref={dropRegion} className="flex min-h-0 flex-1 flex-col">
+  const chatSurface = (
+    <div ref={dropRegion} className="flex h-full min-h-0 flex-col">
           {!activeProjectId ? (
             <EmptyWorkspace />
           ) : !thread ? (
@@ -157,7 +173,8 @@ export function ChatPane({
                     filesStore.getState().setBrowserUrl(url);
                   }}
                   onOpenLoginTerminal={() => {
-                    setTerminalOpen(true);
+                    if (!threadId) return;
+                    setTerminalOpenByThread((current) => ({ ...current, [threadId]: true }));
                     void openLoginTerminal(projectsStore, thread.providerId);
                   }}
                 />
@@ -223,20 +240,57 @@ export function ChatPane({
               />
             </>
           )}
-        </div>
-        {terminalOpen && (
-          // The full terminal system, scoped to this thread, in the bottom
-          // half. The registry remains the sole owner of every xterm host.
-          <div
-            data-testid="chat-terminal-split"
-            className="h-1/2 min-h-0 shrink-0 border-t border-border"
+    </div>
+  );
+
+  return (
+    <Pane
+      title={title}
+      className="bg-bg"
+      headerAction={
+        <TerminalToggle
+          open={terminalOpen}
+          disabled={!threadId}
+          onToggle={toggleTerminal}
+        />
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        {terminalOpen ? (
+          // This nested group is intentionally transient. Root pane sizes have
+          // a durable four-slot contract; a thread-local split must not alter it.
+          <Group
+            id="chat-terminal-group"
+            orientation="vertical"
+            defaultLayout={{ chat: 55, terminal: 45 }}
+            className="min-h-0 flex-1"
           >
-            <TerminalPane
-              projectsStore={projectsStore}
-              terminalRegistry={terminalRegistry}
-              workspaceId={threadId ?? undefined}
-            />
-          </div>
+            <Panel id="chat" minSize="30%" className="min-h-0">
+              {chatSurface}
+            </Panel>
+            <Separator
+              id="chat-terminal-resize-handle"
+              aria-label="Resize chat and terminal"
+              className="group relative h-2 shrink-0 cursor-row-resize focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            >
+              <span
+                data-testid="chat-terminal-resize-line"
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-colors group-hover:bg-accent group-focus-visible:bg-accent"
+              />
+            </Separator>
+            <Panel id="terminal" minSize="20%" className="min-h-0">
+              <div data-testid="chat-terminal-split" className="h-full min-h-0">
+                <TerminalPane
+                  projectsStore={projectsStore}
+                  terminalRegistry={terminalRegistry}
+                  workspaceId={threadId ?? undefined}
+                />
+              </div>
+            </Panel>
+          </Group>
+        ) : (
+          chatSurface
         )}
       </div>
     </Pane>
@@ -296,9 +350,11 @@ async function openLoginTerminal(
 
 function TerminalToggle({
   open,
+  disabled = false,
   onToggle,
 }: {
   open: boolean;
+  disabled?: boolean;
   onToggle(): void;
 }) {
   const label = open ? "Hide terminal" : "Show terminal";
@@ -306,10 +362,11 @@ function TerminalToggle({
     <button
       type="button"
       onClick={onToggle}
+      disabled={disabled}
       aria-pressed={open}
       aria-label={label}
       title={label}
-      className="flex h-7 items-center gap-1.5 rounded px-1.5 text-[10px] tracking-[0.12em] text-text-dim hover:bg-surface hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+      className="flex h-7 items-center gap-1.5 rounded px-1.5 text-[10px] tracking-[0.12em] text-text-dim hover:bg-surface hover:text-text focus:outline-none focus:ring-1 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
     >
       <svg
         viewBox="0 0 16 16"

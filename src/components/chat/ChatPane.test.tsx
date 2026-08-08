@@ -14,10 +14,17 @@ import { ChatPane } from "./ChatPane";
 
 function fakeRegistry() {
   const hosts = new Map<string, HTMLElement>();
+  const write = vi.fn(async (_id: string, _data: string) => undefined);
   return {
     open: vi.fn((id: string) => {
       const host = document.createElement("div");
       host.dataset.terminalSessionId = id;
+      const input = document.createElement("textarea");
+      input.setAttribute("aria-label", "Terminal input");
+      input.addEventListener("input", () => {
+        void write(id, input.value);
+      });
+      host.appendChild(input);
       hosts.set(id, host);
     }),
     ready: vi.fn(async () => undefined),
@@ -25,7 +32,7 @@ function fakeRegistry() {
       hosts.get(id)?.remove();
       hosts.delete(id);
     }),
-    write: vi.fn(async () => undefined),
+    write,
     sync: vi.fn(
       (
         container: HTMLElement,
@@ -45,6 +52,50 @@ function fakeRegistry() {
   };
 }
 
+// react-resizable-panels discovers adjacent panels from layout geometry.
+// happy-dom reports every offset as zero, which sorts the separator after both
+// panels; give this one nested group realistic vertical positions instead.
+let restoreAriaDisabled: (() => void) | null = null;
+
+function mockResizableGeometry() {
+  const ariaDisabledDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "ariaDisabled",
+  );
+  Object.defineProperty(HTMLElement.prototype, "ariaDisabled", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute("aria-disabled");
+    },
+  });
+  restoreAriaDisabled = () => {
+    if (ariaDisabledDescriptor) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "ariaDisabled",
+        ariaDisabledDescriptor,
+      );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "ariaDisabled");
+    }
+  };
+  vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(
+    function (this: HTMLElement) {
+      if (this.id === "chat-terminal-resize-handle") return 550;
+      if (this.id === "terminal") return 558;
+      return 0;
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
+      if (this.id === "chat") return 550;
+      if (this.id === "chat-terminal-resize-handle") return 8;
+      if (this.id === "terminal") return 450;
+      return 0;
+    },
+  );
+}
+
 async function mount() {
   const storage = new MockStorage();
   const agent = new MockAgentIpc();
@@ -52,6 +103,7 @@ async function mount() {
   const projectsStore = createProjectsStore({
     storage,
     registry: terminalRegistry,
+    autoStartTerminal: false,
     newId: (() => {
       let n = 0;
       return () => `s-${++n}`;
@@ -105,19 +157,20 @@ afterEach(() => {
   mounted = null;
   if (root) act(() => root.unmount());
   document.body.innerHTML = "";
+  restoreAriaDisabled?.();
+  restoreAriaDisabled = null;
+  vi.restoreAllMocks();
 });
 
 describe("ChatPane", () => {
-  it("shows a selected terminal as the full workspace instead of an empty chat", async () => {
+  it("keeps a newly selected project free of a terminal until a chat requests one", async () => {
     const { host, root } = await mount();
     mounted = root;
 
-    expect(host.querySelector("[data-terminal-layout]")).not.toBeNull();
+    expect(host.querySelector("[data-terminal-layout]")).toBeNull();
     expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
-    expect(host.textContent).not.toContain("Send a message to start the conversation.");
-    expect(
-      host.querySelector('button[aria-label="Show terminal"]'),
-    ).toBeNull();
+    expect(host.textContent).toContain("Send a message to start the conversation.");
+    expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
   });
 
   it("shows the empty state until a message is sent", async () => {
@@ -458,11 +511,14 @@ describe("ChatPane", () => {
     mounted = root;
     const initialTerminal = projectsStore
       .getState()
-      .sessions.find((session) => !isChatSession(session))!;
-    await act(async () => {
-      await projectsStore.getState().closeSession(initialTerminal.id);
-    });
+      .sessions.find((session) => !isChatSession(session));
+    if (initialTerminal) {
+      await act(async () => {
+        await projectsStore.getState().closeSession(initialTerminal.id);
+      });
+    }
     terminalRegistry.open.mockClear();
+    mockResizableGeometry();
 
     let threadId = "";
     await act(async () => {
@@ -483,6 +539,16 @@ describe("ChatPane", () => {
 
     const split = host.querySelector('[data-testid="chat-terminal-split"]');
     expect(split).not.toBeNull();
+    const resizeHandle = host.querySelector<HTMLElement>(
+      '[data-testid="chat-terminal-resize-handle"]',
+    );
+    expect(resizeHandle?.getAttribute("role")).toBe("separator");
+    expect(resizeHandle?.getAttribute("aria-orientation")).toBe("horizontal");
+    expect(resizeHandle?.getAttribute("aria-controls")).toBe("chat");
+    expect(resizeHandle?.classList.contains("h-2")).toBe(true);
+    expect(
+      resizeHandle?.querySelector('[data-testid="chat-terminal-resize-line"]'),
+    ).not.toBeNull();
     expect(host.textContent).toContain("Send a message to start the conversation.");
     expect(split!.querySelector("[data-terminal-leaf-id]")).not.toBeNull();
     expect(split!.textContent).not.toContain("No terminal is open");
@@ -493,6 +559,46 @@ describe("ChatPane", () => {
     expect(terminal).toMatchObject({ projectId, workspaceId: threadId });
     expect(state.activeSessionByProject[projectId]).toBe(threadId);
     expect(terminalRegistry.open).toHaveBeenCalledWith(terminal!.id, "/repos/alpha");
+
+    const terminalHost = split!.querySelector<HTMLElement>(
+      `[data-terminal-session-id="${terminal!.id}"]`,
+    )!;
+    const terminalInput = terminalHost.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Terminal input"]',
+    )!;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      resizeHandle?.focus();
+      resizeHandle?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Home",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(Number(resizeHandle?.getAttribute("aria-valuenow"))).toBe(30);
+    await act(async () => {
+      resizeHandle?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "End",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+    });
+    expect(Number(resizeHandle?.getAttribute("aria-valuenow"))).toBe(80);
+    expect(
+      split!.querySelector(`[data-terminal-session-id="${terminal!.id}"]`),
+    ).toBe(terminalHost);
+    terminalInput.focus();
+    terminalInput.value = "pwd";
+    terminalInput.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(document.activeElement).toBe(terminalInput);
+    expect(terminalInput.value).toBe("pwd");
+    expect(terminalRegistry.write).toHaveBeenCalledWith(terminal!.id, "pwd");
 
     const activity = createActivityModule({ now: () => 0 });
     activity.observe({
@@ -532,5 +638,105 @@ describe("ChatPane", () => {
     });
     expect(projectsStore.getState().sessions).toHaveLength(0);
     expect(terminalRegistry.close).toHaveBeenCalledWith(terminal!.id);
+  });
+
+  it("keeps an opened terminal inside its owning chat when switching threads", async () => {
+    const {
+      host,
+      root,
+      projectsStore,
+      chatThreadsStore,
+      projectId,
+      terminalRegistry,
+    } = await mount();
+    mounted = root;
+
+    const initialTerminal = projectsStore
+      .getState()
+      .sessions.find((session) => !isChatSession(session));
+    if (initialTerminal) {
+      await act(async () => {
+        await projectsStore.getState().closeSession(initialTerminal.id);
+      });
+    }
+    terminalRegistry.open.mockClear();
+
+    let firstThreadId = "";
+    let secondThreadId = "";
+    await act(async () => {
+      firstThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(firstThreadId, projectId, "claude");
+    });
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('button[aria-label="Show terminal"]')?.click(),
+    );
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).not.toBeNull();
+    const firstTerminal = projectsStore
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+    const firstTerminalHost = host.querySelector(
+      `[data-terminal-session-id="${firstTerminal.id}"]`,
+    );
+
+    await act(async () => {
+      secondThreadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(secondThreadId, projectId, "claude");
+    });
+
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Show terminal"]')).not.toBeNull();
+    expect(
+      projectsStore
+        .getState()
+        .sessions.filter((session) => !isChatSession(session)),
+    ).toHaveLength(1);
+    expect(terminalRegistry.open).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      projectsStore.getState().setActiveSession(projectId, firstThreadId);
+      await chatThreadsStore
+        .getState()
+        .openThread(firstThreadId, projectId, "claude");
+    });
+
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).not.toBeNull();
+    expect(
+      host.querySelector(`[data-terminal-session-id="${firstTerminal.id}"]`),
+    ).toBe(firstTerminalHost);
+    expect(terminalRegistry.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a defensively selected owned terminal back to its chat", async () => {
+    const { host, root, projectsStore, chatThreadsStore, projectId } = await mount();
+    mounted = root;
+    let chatId = "";
+
+    await act(async () => {
+      chatId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(chatId, projectId, "claude");
+      projectsStore.getState().addTerminal(projectId, chatId);
+      await Promise.resolve();
+    });
+
+    expect(projectsStore.getState().activeSessionByProject[projectId]).toBe(chatId);
+    expect(host.textContent).toContain("KödChat");
+    expect(host.querySelector("[data-terminal-layout]")).toBeNull();
+    expect(host.querySelector('button[aria-label="New terminal"]')).toBeNull();
+  });
+
+  it("does not render a stale unowned local terminal as a root workspace", async () => {
+    const { host, root, projectsStore, projectId } = await mount();
+    mounted = root;
+
+    await act(async () => {
+      projectsStore.setState({
+        sessions: [{ id: "stale-root", projectId, name: "zsh 1" }],
+        activeSessionByProject: { [projectId]: "stale-root" },
+      });
+    });
+
+    expect(host.textContent).toContain("KödChat");
+    expect(host.querySelector("[data-terminal-layout]")).toBeNull();
+    expect(host.querySelector('button[aria-label="New terminal"]')).toBeNull();
   });
 });

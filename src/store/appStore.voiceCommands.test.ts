@@ -6,6 +6,7 @@ const originalTargetState = {
   sessions: appStore.getState().sessions,
   activeProjectId: appStore.getState().activeProjectId,
   activeSessionByProject: appStore.getState().activeSessionByProject,
+  remoteTargets: appStore.getState().remoteTargets,
 };
 const originalSetRoot = filesStore.getState().setRoot;
 
@@ -41,6 +42,56 @@ describe("voiceCommandActions.submit (M9f)", () => {
       activeSessionByProject: { "project-x": "session-never-opened" },
     });
     await expect(voiceCommandActions.submit()).resolves.toBeUndefined();
+  });
+});
+
+describe("voiceCommandActions.newSession", () => {
+  afterEach(() => {
+    appStore.setState(originalTargetState);
+  });
+
+  it("does not create a hidden terminal outside KödChat's explicit Show terminal control", () => {
+    appStore.setState({
+      projects: [{ id: "project-x", name: "Project", path: "/project" }],
+      sessions: [{ id: "chat-x", projectId: "project-x", kind: "chat", name: "claude 1" }],
+      activeProjectId: "project-x",
+      activeSessionByProject: { "project-x": "chat-x" },
+    });
+
+    voiceCommandActions.newSession();
+
+    expect(appStore.getState().sessions).toEqual([
+      { id: "chat-x", projectId: "project-x", kind: "chat", name: "claude 1" },
+    ]);
+  });
+});
+
+describe("voiceCommandActions session navigation", () => {
+  afterEach(() => {
+    appStore.setState(originalTargetState);
+  });
+
+  it("keeps local navigation on chats when an owned terminal is in the session list", () => {
+    appStore.setState({
+      sessions: [
+        { id: "chat-1", projectId: "project-x", kind: "chat", name: "claude 1" },
+        {
+          id: "terminal-1",
+          projectId: "project-x",
+          workspaceId: "chat-1",
+          name: "zsh 1",
+        },
+        { id: "chat-2", projectId: "project-x", kind: "chat", name: "codex 1" },
+      ],
+      activeProjectId: "project-x",
+      activeSessionByProject: { "project-x": "chat-2" },
+      remoteTargets: [],
+    });
+
+    voiceCommandActions.prevTerminal();
+    expect(appStore.getState().activeSessionByProject["project-x"]).toBe("chat-1");
+    expect(voiceCommandActions.switchTerminal(2)).toBe(true);
+    expect(appStore.getState().activeSessionByProject["project-x"]).toBe("chat-2");
   });
 });
 

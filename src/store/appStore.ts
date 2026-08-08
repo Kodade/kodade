@@ -46,7 +46,7 @@ import { createReviewStore } from "./review";
 import { createSshStore } from "./ssh";
 import { createRemoteFilesStore } from "./remoteFiles";
 import { routeFileDrop } from "./drop-routing";
-import { createProjectsStore } from "./projects";
+import { createProjectsStore, isChatSession } from "./projects";
 import { remoteTargetForProjectId } from "../ssh/model";
 import { createThemeStore } from "./theme";
 import { EDITOR_BROWSER_ID } from "../browser/constants";
@@ -117,6 +117,7 @@ export const registry = new SessionRegistry(
 export const appStore = createProjectsStore({
   storage: tauriStorage,
   registry,
+  autoStartTerminal: false,
   canUseRemote: () =>
     RELEASE_MANIFEST.features.ssh &&
     entitlements.hasFeature(FEATURES.sshPro),
@@ -249,15 +250,17 @@ function harvestFilesForRoot(root: string): string[] {
   return paths;
 }
 
-// Terminals of the active project, in sidebar order — the list "switch to
-// terminal N" indexes into (M9f).
+// Sessions eligible for global navigation. Local projects expose only chats;
+// pinned remote projects retain their standalone terminal workflow (M9f).
 function activeProjectSessions() {
   const state = appStore.getState();
   const projectId = state.activeProjectId;
   if (!projectId) return { projectId: null as string | null, sessions: [] };
+  const sessions = state.sessions.filter((session) => session.projectId === projectId);
+  const remoteProject = remoteTargetForProjectId(state.remoteTargets, projectId);
   return {
     projectId,
-    sessions: state.sessions.filter((s) => s.projectId === projectId),
+    sessions: remoteProject ? sessions : sessions.filter(isChatSession),
   };
 }
 
@@ -268,8 +271,8 @@ function activeProjectSessions() {
 export const voiceCommandActions = {
   sessionCount: () => activeProjectSessions().sessions.length,
   newSession: () => {
-    const projectId = appStore.getState().activeProjectId;
-    if (projectId) appStore.getState().addSession(projectId);
+    // A global command cannot reveal a ChatPane's thread-local split. Keep it
+    // unavailable rather than starting a shell the user cannot see.
   },
   switchTerminal: (index: number): boolean => {
     const { projectId, sessions } = activeProjectSessions();
@@ -531,8 +534,8 @@ export function installAppShortcuts(): () => void {
       toggleSidebar: () => appStore.getState().toggleSidebarMode(),
       toggleFiles: () => appStore.getState().toggleFilesPanel(),
       newSession: () => {
-        const projectId = appStore.getState().activeProjectId;
-        if (projectId) appStore.getState().addSession(projectId);
+        // See voiceCommandActions.newSession: terminal creation is explicit in
+        // the owning KödChat surface.
       },
       saveFile: () => void filesStore.getState().saveFile(),
       nextSession: () => appStore.getState().cycleSession(1),
