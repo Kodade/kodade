@@ -3257,7 +3257,7 @@ fn projects_vault_mapping_persists_stable_identity_across_workspace_locations() 
             .expect("read portable identity folder")
             .next()
             .is_none(),
-        "identity registration must not scaffold project knowledge before issue #35"
+        "identity registration must create only an empty portable identity folder"
     );
 
     drop(store);
@@ -3301,6 +3301,10 @@ fn projects_vault_mapping_persists_stable_identity_across_workspace_locations() 
             .map(|project| project.id.as_str())
             .collect::<Vec<_>>(),
         vec!["portable-project"]
+    );
+    assert_eq!(
+        discovered.projects[0].display_name, "portable-project",
+        "fresh stores discover the portable ID without inventing a second naming policy"
     );
     let other_workspace = other_store
         .register_workspace(&other_checkout, "Portable checkout", None)

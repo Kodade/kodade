@@ -93,7 +93,10 @@ export function ProjectsVaultSetup({
     const selected = vault?.projects.find((project) => project.id === id);
     setProjectDraft({
       id,
-      name: selected?.displayName ?? projectNameFromId(id),
+      name:
+        selected && selected.displayName !== selected.id
+          ? selected.displayName
+          : projectNameFromId(id),
     });
   };
 

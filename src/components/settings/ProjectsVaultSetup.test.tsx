@@ -152,4 +152,42 @@ describe("projects vault setup", () => {
       )?.value,
     ).toBe("existing-project");
   });
+
+  it("turns a freshly discovered portable ID into a UX name", async () => {
+    const portableVault: ProjectsVault = {
+      ...vault,
+      projects: [
+        {
+          id: "portable-project",
+          displayName: "portable-project",
+          folderExists: true,
+        },
+      ],
+    };
+    const ipc = projectsVaultIpc({
+      projectsVault: vi.fn().mockResolvedValue(portableVault),
+    });
+
+    await render(<ProjectsVaultSetup workspace={workspace} ipc={ipc} />);
+
+    const id = container?.querySelector<HTMLInputElement>(
+      'input[aria-label="logical project ID"]',
+    );
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      if (id) {
+        setValue?.call(id, "portable-project");
+        id.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+
+    expect(
+      container?.querySelector<HTMLInputElement>(
+        'input[aria-label="logical project name"]',
+      )?.value,
+    ).toBe("Portable Project");
+  });
 });

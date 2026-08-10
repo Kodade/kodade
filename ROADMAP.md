@@ -19,6 +19,7 @@ This file states the public product boundary.
 
 ## In development
 
+- Projects-vault-backed KödMem workflows and cross-machine project identity
 - Windows packaging, signing, and platform QA
 - KödLocal local-model workflows
 - KödWhisper local voice workflows
