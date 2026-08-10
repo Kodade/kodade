@@ -81,6 +81,9 @@ export const CMD = {
   memoryWorkspaceProjectMapping: "memory_workspace_project_mapping",
   memoryMapWorkspaceToProject: "memory_map_workspace_to_project",
   memoryProjectWorkspaceMappings: "memory_project_workspace_mappings",
+  memoryPreviewProjectScaffold: "memory_preview_project_scaffold",
+  memoryApplyProjectScaffold: "memory_apply_project_scaffold",
+  memoryOpenProjectInObsidian: "memory_open_project_in_obsidian",
   memoryContext: "memory_context",
   memorySearch: "memory_search",
   memoryGet: "memory_get",
@@ -708,6 +711,28 @@ export type WorkspaceProjectMapping = {
   updatedAt: number;
 };
 
+export type ScaffoldOperationKind = "createDirectory" | "createFile";
+
+export type ScaffoldOperation = {
+  kind: ScaffoldOperationKind;
+  relativePath: string;
+  content: string | null;
+};
+
+export type ProjectScaffoldPlan = {
+  workspaceId: string;
+  projectId: string;
+  projectDisplayName: string;
+  vaultRoot: string;
+  fingerprint: string;
+  operations: ScaffoldOperation[];
+};
+
+export type ProjectScaffoldApply = {
+  projectId: string;
+  created: ScaffoldOperation[];
+};
+
 // The bundled KödMCP helper resolved by the desktop app. `path` stays nullable
 // so callers can model an unavailable helper without inventing a sentinel path.
 export type MemoryMcpBinaryPath = {
@@ -1006,6 +1031,12 @@ export interface MemoryIpc {
   projectWorkspaceMappings(
     projectId: string,
   ): Promise<WorkspaceProjectMapping[]>;
+  previewProjectScaffold(workspaceId: string): Promise<ProjectScaffoldPlan>;
+  applyProjectScaffold(
+    workspaceId: string,
+    expectedFingerprint: string,
+  ): Promise<ProjectScaffoldApply>;
+  openProjectInObsidian(workspaceId: string): Promise<void>;
   context(workspaceId: string): Promise<WorkspaceContext>;
   search(query: MemoryQuery): Promise<Page<MemorySearchHit>>;
   get(id: string): Promise<MemoryRecord>;

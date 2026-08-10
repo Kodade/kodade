@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -60,9 +61,23 @@ struct PathObservation {
 }
 
 struct RequiredArtifact {
-    suffix: &'static str,
+    suffix: String,
     kind: ScaffoldOperationKind,
     content: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScaffoldPolicy {
+    schema: u8,
+    artifacts: Vec<ArtifactPolicy>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum ArtifactPolicy {
+    Directory { path: String },
+    File { path: String, lines: Vec<String> },
 }
 
 #[derive(Deserialize)]
@@ -97,7 +112,7 @@ impl MemoryStore {
         required.insert(
             0,
             RequiredArtifact {
-                suffix: "",
+                suffix: String::new(),
                 kind: ScaffoldOperationKind::CreateDirectory,
                 content: None,
             },
@@ -106,7 +121,7 @@ impl MemoryStore {
         let mut observations = Vec::with_capacity(required.len());
         let mut operations = Vec::new();
         for artifact in required {
-            let path = artifact_path(&project_root, artifact.suffix);
+            let path = artifact_path(&project_root, &artifact.suffix);
             let relative_path = if artifact.suffix.is_empty() {
                 project_relative.clone()
             } else {
@@ -221,6 +236,35 @@ impl MemoryStore {
             project_id: plan.project_id,
             created,
         })
+    }
+
+    pub fn project_obsidian_uri(&self, workspace_id: &str) -> Result<String> {
+        let plan = self.preview_project_scaffold(workspace_id)?;
+        let project_note = format!("10-Projects/{}/Project.md", plan.project_id);
+        if plan
+            .operations
+            .iter()
+            .any(|operation| operation.relative_path == project_note)
+        {
+            return Err(MemoryError::InvalidInput(
+                "create or repair project knowledge before opening it in Obsidian".into(),
+            ));
+        }
+        let vault_name = Path::new(&plan.vault_root)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                MemoryError::InvalidInput(
+                    "projects vault folder name must be valid UTF-8 to open it in Obsidian".into(),
+                )
+            })?;
+        let mut uri = url::Url::parse("obsidian://open").map_err(|error| {
+            MemoryError::InvalidInput(format!("cannot build Obsidian project link: {error}"))
+        })?;
+        uri.query_pairs_mut()
+            .append_pair("vault", vault_name)
+            .append_pair("file", &project_note);
+        Ok(uri.into())
     }
 }
 
@@ -474,76 +518,89 @@ fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<()
 }
 
 fn required_artifacts(project_id: &str, project_name: &str) -> Result<Vec<RequiredArtifact>> {
-    Ok(vec![
-        directory("Decisions"),
-        directory("Plans"),
-        directory("Research"),
-        directory("Worklog"),
-        file("Project.md", project_note(project_id, project_name)?),
-        file("STATE.md", state_note(project_id, project_name)?),
-        file("References.md", references_note(project_id, project_name)?),
-        file(
-            "Decisions/Decisions.md",
-            index_note(project_id, project_name, "Decisions", "decision")?,
-        ),
-        file(
-            "Plans/Plans.md",
-            index_note(project_id, project_name, "Plans", "plan")?,
-        ),
-        file(
-            "Research/Research.md",
-            index_note(project_id, project_name, "Research", "research")?,
-        ),
-    ])
-}
-
-fn directory(suffix: &'static str) -> RequiredArtifact {
-    RequiredArtifact {
-        suffix,
-        kind: ScaffoldOperationKind::CreateDirectory,
-        content: None,
+    let policy: ScaffoldPolicy = serde_json::from_str(include_str!(
+        "../../../resources/kodmem/project-scaffold.json"
+    ))?;
+    if policy.schema != 1 {
+        return Err(MemoryError::InvalidInput(
+            "project scaffold policy uses an unsupported schema".into(),
+        ));
     }
+    let mut seen = HashSet::new();
+    policy
+        .artifacts
+        .into_iter()
+        .map(|artifact| {
+            let (suffix, kind, content) = match artifact {
+                ArtifactPolicy::Directory { path } => {
+                    (path, ScaffoldOperationKind::CreateDirectory, None)
+                }
+                ArtifactPolicy::File { path, lines } => (
+                    path,
+                    ScaffoldOperationKind::CreateFile,
+                    Some(render_template(&lines.join("\n"), project_id, project_name)? + "\n"),
+                ),
+            };
+            validate_policy_path(&suffix)?;
+            if !seen.insert(suffix.clone()) {
+                return Err(MemoryError::InvalidInput(format!(
+                    "project scaffold policy repeats path: {suffix}"
+                )));
+            }
+            Ok(RequiredArtifact {
+                suffix,
+                kind,
+                content,
+            })
+        })
+        .collect()
 }
 
-fn file(suffix: &'static str, content: String) -> RequiredArtifact {
-    RequiredArtifact {
-        suffix,
-        kind: ScaffoldOperationKind::CreateFile,
-        content: Some(content),
+fn validate_policy_path(path: &str) -> Result<()> {
+    let relative = Path::new(path);
+    if path.is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(MemoryError::InvalidInput(
+            "project scaffold policy contains an unsafe relative path".into(),
+        ));
     }
+    Ok(())
 }
 
-fn project_note(project_id: &str, project_name: &str) -> Result<String> {
-    let title = serde_json::to_string(project_name)?;
-    let heading = markdown_text(project_name);
-    Ok(format!(
-        "---\ntitle: {title}\ntype: project\nproject_id: {project_id}\nstatus: active\nrepositories: []\ntags:\n  - project\n  - project/active\n---\n<!-- kodmem-project {{\"schema\":1,\"projectId\":\"{project_id}\",\"authority\":\"projects-vault\"}} -->\n\n# {heading}\n\n## Purpose\n\nDescribe the durable purpose and boundaries of this project.\n\n## Resume here\n\n- [[STATE|Current state]]\n- Latest daily note in `Worklog/`\n\n## Knowledge\n\n- [[Decisions/Decisions|Decisions]]\n- [[Plans/Plans|Plans]]\n- [[Research/Research|Research]]\n- [[References]]\n\n## Boundaries\n\n- KödMem storage authority remains unchanged until an explicit migration completes.\n"
-    ))
-}
-
-fn state_note(project_id: &str, project_name: &str) -> Result<String> {
-    let title = serde_json::to_string(&format!("{project_name} State"))?;
-    let heading = markdown_text(project_name);
-    Ok(format!(
-        "---\ntitle: {title}\ntype: state\nproject: \"[[Project]]\"\nproject_id: {project_id}\ntags:\n  - project/state\n---\n\n# {heading} state\n\n## Current state\n\n- Add the current verified project state.\n\n## Decisions\n\n- None recorded.\n\n## Risks\n\n- None recorded.\n\n## Next actions\n\n- Add the next concrete action.\n"
-    ))
-}
-
-fn references_note(project_id: &str, project_name: &str) -> Result<String> {
-    let title = serde_json::to_string(&format!("{project_name} References"))?;
-    let heading = markdown_text(project_name);
-    Ok(format!(
-        "---\ntitle: {title}\ntype: references\nproject: \"[[Project]]\"\nproject_id: {project_id}\ntags:\n  - project/reference\n---\n\n# {heading} references\n\nAdd durable project links and references here.\n"
-    ))
-}
-
-fn index_note(project_id: &str, project_name: &str, role: &str, tag: &str) -> Result<String> {
-    let title = serde_json::to_string(&format!("{project_name} {role}"))?;
-    let heading = markdown_text(project_name);
-    Ok(format!(
-        "---\ntitle: {title}\ntype: index\nproject: \"[[../Project]]\"\nproject_id: {project_id}\ntags:\n  - project/{tag}\n---\n\n# {heading} {role}\n\nAdd project {role_lower} here.\n",
-        role_lower = role.to_lowercase()
-    ))
+fn render_template(lines: &str, project_id: &str, project_name: &str) -> Result<String> {
+    let project_name_markdown = markdown_text(project_name);
+    let mut rendered = String::with_capacity(lines.len());
+    let mut remainder = lines;
+    while let Some(start) = remainder.find("{{") {
+        rendered.push_str(&remainder[..start]);
+        remainder = &remainder[start + 2..];
+        let end = remainder.find("}}").ok_or_else(|| {
+            MemoryError::InvalidInput("project scaffold policy has an unclosed token".into())
+        })?;
+        let token = &remainder[..end];
+        let value = match token {
+            "project_id" => project_id.to_string(),
+            "project_name_markdown" => project_name_markdown.clone(),
+            "project_name_yaml" => serde_json::to_string(project_name)?,
+            _ if token.starts_with("project_name_yaml:") => {
+                let suffix = &token["project_name_yaml:".len()..];
+                serde_json::to_string(&format!("{project_name}{suffix}"))?
+            }
+            _ => {
+                return Err(MemoryError::InvalidInput(format!(
+                    "project scaffold policy has an unknown token: {token}"
+                )));
+            }
+        };
+        rendered.push_str(&value);
+        remainder = &remainder[end + 2..];
+    }
+    rendered.push_str(remainder);
+    Ok(rendered)
 }
 
 fn markdown_text(value: &str) -> String {

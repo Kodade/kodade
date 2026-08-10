@@ -8,12 +8,57 @@ use kodade_lib::memory::{
     ActivityKind, AuditQuery, CheckpointQuery, DeletedMemoryQuery, MemoryError, MemoryKind,
     MemoryLink, MemoryQuery, MemoryRevision, MemorySource, MemoryStore, MutationProvenance,
     NewActivity, NewCheckpoint, NewMemory, ProjectKnowledgeSyncStatus, RetentionSettings,
-    WorkingMemoryMode,
+    WorkingMemoryMode, Workspace,
 };
 use sha2::{Digest, Sha256};
 
 struct TempProject {
     dir: PathBuf,
+}
+
+struct MappedProjectsVault {
+    _app_data: TempProject,
+    vault: TempProject,
+    checkout: PathBuf,
+    store: MemoryStore,
+    workspace: Workspace,
+}
+
+impl MappedProjectsVault {
+    fn new(name: &str, project_display_name: &str) -> Self {
+        let app_data = TempProject::new(name);
+        let vault = TempProject::new(&format!("{name}-vault"));
+        std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+        std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+        let checkout = app_data.root().join("checkout");
+        std::fs::create_dir(&checkout).expect("create checkout");
+        let store = MemoryStore::open(app_data.db()).expect("open store");
+        store
+            .register_projects_vault(vault.root())
+            .expect("register projects vault");
+        let workspace = store
+            .register_workspace(&checkout, "Portable project", None)
+            .expect("register workspace");
+        store
+            .map_workspace_to_project(
+                &workspace.id,
+                None,
+                "portable-project",
+                project_display_name,
+            )
+            .expect("map workspace");
+        Self {
+            _app_data: app_data,
+            vault,
+            checkout,
+            store,
+            workspace,
+        }
+    }
+
+    fn project_root(&self) -> PathBuf {
+        self.vault.root().join("10-Projects/portable-project")
+    }
 }
 
 #[test]
@@ -3788,25 +3833,11 @@ fn mapped_project_identity_survives_relinking_a_workspace_root() {
 
 #[test]
 fn project_scaffold_preview_lists_every_missing_role_without_writing() {
-    let app_data = TempProject::new("project-scaffold-preview");
-    let vault = TempProject::new("project-scaffold-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
+    let fixture = MappedProjectsVault::new("project-scaffold-preview", "Portable project");
 
-    let plan = store
-        .preview_project_scaffold(&workspace.id)
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect("preview scaffold");
 
     assert_eq!(plan.project_id, "portable-project");
@@ -3869,7 +3900,7 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
         "<!-- kodmem-project {\"schema\":1,\"projectId\":\"portable-project\",\"authority\":\"projects-vault\"} -->"
     ));
     assert!(
-        std::fs::read_dir(vault.root().join("10-Projects/portable-project"))
+        std::fs::read_dir(fixture.project_root())
             .expect("preview leaves identity folder readable")
             .next()
             .is_none(),
@@ -3879,57 +3910,43 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
 
 #[test]
 fn project_scaffold_apply_is_idempotent_and_preserves_generated_bytes() {
-    let app_data = TempProject::new("project-scaffold-apply");
-    let vault = TempProject::new("project-scaffold-apply-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
+    let fixture = MappedProjectsVault::new("project-scaffold-apply", "Portable project");
     std::fs::write(
-        checkout.join("repository-only.txt"),
+        fixture.checkout.join("repository-only.txt"),
         b"repository bytes must never enter the projects vault",
     )
     .expect("write repository-only fixture");
 
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    let plan = store
-        .preview_project_scaffold(&workspace.id)
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect("preview scaffold");
 
-    let applied = store
-        .apply_project_scaffold(&workspace.id, &plan.fingerprint)
+    let applied = fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
         .expect("apply scaffold");
 
     assert_eq!(applied.project_id, "portable-project");
     assert_eq!(applied.created, plan.operations);
-    let project_path = vault.root().join("10-Projects/portable-project/Project.md");
+    let project_path = fixture.project_root().join("Project.md");
     let original_project = std::fs::read(&project_path).expect("read generated Project.md");
     assert!(String::from_utf8_lossy(&original_project).contains(
         "<!-- kodmem-project {\"schema\":1,\"projectId\":\"portable-project\",\"authority\":\"projects-vault\"} -->"
     ));
     assert!(
-        !vault
-            .root()
-            .join("10-Projects/portable-project/repository-only.txt")
-            .exists(),
+        !fixture.project_root().join("repository-only.txt").exists(),
         "scaffolding must not copy repository files into the vault"
     );
 
-    let ready = store
-        .preview_project_scaffold(&workspace.id)
+    let ready = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect("preview completed scaffold");
     assert!(ready.operations.is_empty());
-    let repeated = store
-        .apply_project_scaffold(&workspace.id, &ready.fingerprint)
+    let repeated = fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &ready.fingerprint)
         .expect("repeat completed scaffold");
     assert!(repeated.created.is_empty());
     assert_eq!(
@@ -3939,30 +3956,60 @@ fn project_scaffold_apply_is_idempotent_and_preserves_generated_bytes() {
 }
 
 #[test]
+fn project_scaffold_builds_an_obsidian_deep_link_only_after_the_hub_exists() {
+    let fixture = MappedProjectsVault::new("project-scaffold-obsidian-link", "Portable project");
+
+    let error = fixture
+        .store
+        .project_obsidian_uri(&fixture.workspace.id)
+        .expect_err("hub must exist before opening it");
+    assert!(error
+        .to_string()
+        .contains("create or repair project knowledge before opening it"));
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .expect("preview scaffold");
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .expect("apply scaffold");
+
+    let uri = fixture
+        .store
+        .project_obsidian_uri(&fixture.workspace.id)
+        .expect("build Obsidian URI");
+    let parsed = url::Url::parse(&uri).expect("parse generated URI");
+    let query = parsed
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(parsed.scheme(), "obsidian");
+    assert_eq!(parsed.host_str(), Some("open"));
+    assert_eq!(
+        query.get("vault").map(|value| value.as_ref()),
+        fixture
+            .vault
+            .root()
+            .file_name()
+            .and_then(|name| name.to_str())
+    );
+    assert_eq!(
+        query.get("file").map(|value| value.as_ref()),
+        Some("10-Projects/portable-project/Project.md")
+    );
+}
+
+#[test]
 fn project_scaffold_rejects_an_existing_project_with_the_wrong_identity() {
-    let app_data = TempProject::new("project-scaffold-wrong-identity");
-    let vault = TempProject::new("project-scaffold-wrong-identity-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    let project_path = vault.root().join("10-Projects/portable-project/Project.md");
+    let fixture = MappedProjectsVault::new("project-scaffold-wrong-identity", "Portable project");
+    let project_path = fixture.project_root().join("Project.md");
     let conflicting =
         b"---\ntitle: Other project\ntype: project\nproject_id: other-project\n---\n\n# Keep me\n";
     std::fs::write(&project_path, conflicting).expect("write conflicting project hub");
 
-    let error = store
-        .preview_project_scaffold(&workspace.id)
+    let error = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect_err("reject mismatched portable identity");
 
     assert!(error.to_string().contains(
@@ -3973,7 +4020,7 @@ fn project_scaffold_rejects_an_existing_project_with_the_wrong_identity() {
         conflicting
     );
     assert_eq!(
-        std::fs::read_dir(vault.root().join("10-Projects/portable-project"))
+        std::fs::read_dir(fixture.project_root())
             .expect("read project folder")
             .count(),
         1,
@@ -3983,23 +4030,9 @@ fn project_scaffold_rejects_an_existing_project_with_the_wrong_identity() {
 
 #[test]
 fn project_scaffold_rejects_malformed_project_identity_contracts() {
-    let app_data = TempProject::new("project-scaffold-malformed-identity");
-    let vault = TempProject::new("project-scaffold-malformed-identity-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    let project_path = vault.root().join("10-Projects/portable-project/Project.md");
+    let fixture =
+        MappedProjectsVault::new("project-scaffold-malformed-identity", "Portable project");
+    let project_path = fixture.project_root().join("Project.md");
     let cases = [
         (
             "# Missing frontmatter\n",
@@ -4017,8 +4050,9 @@ fn project_scaffold_rejects_malformed_project_identity_contracts() {
 
     for (contents, expected_error) in cases {
         std::fs::write(&project_path, contents).expect("write malformed project hub");
-        let error = store
-            .preview_project_scaffold(&workspace.id)
+        let error = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
             .expect_err("reject malformed project identity");
         assert!(
             error.to_string().contains(expected_error),
@@ -4029,25 +4063,11 @@ fn project_scaffold_rejects_malformed_project_identity_contracts() {
 
 #[test]
 fn project_scaffold_rejects_a_display_name_that_cannot_be_safely_rendered() {
-    let app_data = TempProject::new("project-scaffold-unsafe-name");
-    let vault = TempProject::new("project-scaffold-unsafe-name-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable\nproject")
-        .expect("mapping persists identity independently of scaffold rendering");
+    let fixture = MappedProjectsVault::new("project-scaffold-unsafe-name", "Portable\nproject");
 
-    let error = store
-        .preview_project_scaffold(&workspace.id)
+    let error = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect_err("reject a multi-line project display name");
 
     assert!(error
@@ -4057,23 +4077,8 @@ fn project_scaffold_rejects_a_display_name_that_cannot_be_safely_rendered() {
 
 #[test]
 fn project_scaffold_repairs_missing_roles_without_changing_rich_existing_notes() {
-    let app_data = TempProject::new("project-scaffold-rich-existing");
-    let vault = TempProject::new("project-scaffold-rich-existing-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    let project_root = vault.root().join("10-Projects/portable-project");
+    let fixture = MappedProjectsVault::new("project-scaffold-rich-existing", "Portable project");
+    let project_root = fixture.project_root();
     let project = b"---\ntitle: Portable project\ntype: project\nproject_id: portable-project\n---\n\n# Detailed purpose\n\nKeep every custom paragraph.\n";
     let state = b"---\ntitle: Portable state\ntype: state\nproject_id: portable-project\n---\n\n# Current state\n\nA carefully maintained handoff.\n";
     std::fs::write(project_root.join("Project.md"), project).expect("write rich Project.md");
@@ -4085,8 +4090,9 @@ fn project_scaffold_repairs_missing_roles_without_changing_rich_existing_notes()
     )
     .expect("write existing daily history");
 
-    let plan = store
-        .preview_project_scaffold(&workspace.id)
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect("preview repair");
 
     assert!(plan.operations.iter().all(|operation| !matches!(
@@ -4095,8 +4101,9 @@ fn project_scaffold_repairs_missing_roles_without_changing_rich_existing_notes()
             | "10-Projects/portable-project/STATE.md"
             | "10-Projects/portable-project/Worklog"
     )));
-    store
-        .apply_project_scaffold(&workspace.id, &plan.fingerprint)
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
         .expect("repair missing roles");
     assert_eq!(
         std::fs::read(project_root.join("Project.md")).expect("read preserved Project.md"),
@@ -4115,30 +4122,17 @@ fn project_scaffold_repairs_missing_roles_without_changing_rich_existing_notes()
 
 #[test]
 fn project_scaffold_apply_rejects_a_stale_preview_before_writing() {
-    let app_data = TempProject::new("project-scaffold-stale");
-    let vault = TempProject::new("project-scaffold-stale-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    let plan = store
-        .preview_project_scaffold(&workspace.id)
+    let fixture = MappedProjectsVault::new("project-scaffold-stale", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect("preview scaffold");
-    let project_root = vault.root().join("10-Projects/portable-project");
+    let project_root = fixture.project_root();
     std::fs::create_dir(project_root.join("Decisions")).expect("concurrent Obsidian change");
 
-    let error = store
-        .apply_project_scaffold(&workspace.id, &plan.fingerprint)
+    let error = fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
         .expect_err("reject stale plan");
 
     assert!(error
@@ -4155,30 +4149,13 @@ fn project_scaffold_apply_rejects_a_stale_preview_before_writing() {
 
 #[test]
 fn project_scaffold_rejects_file_and_folder_role_collisions() {
-    let app_data = TempProject::new("project-scaffold-collision");
-    let vault = TempProject::new("project-scaffold-collision-vault");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    std::fs::write(
-        vault.root().join("10-Projects/portable-project/Plans"),
-        b"not a folder",
-    )
-    .expect("create role collision");
+    let fixture = MappedProjectsVault::new("project-scaffold-collision", "Portable project");
+    std::fs::write(fixture.project_root().join("Plans"), b"not a folder")
+        .expect("create role collision");
 
-    let error = store
-        .preview_project_scaffold(&workspace.id)
+    let error = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect_err("reject file where a role folder belongs");
 
     assert!(error
@@ -4191,31 +4168,14 @@ fn project_scaffold_rejects_file_and_folder_role_collisions() {
 fn project_scaffold_rejects_symlinked_role_paths_without_touching_the_target() {
     use std::os::unix::fs::symlink;
 
-    let app_data = TempProject::new("project-scaffold-role-symlink");
-    let vault = TempProject::new("project-scaffold-role-symlink-vault");
+    let fixture = MappedProjectsVault::new("project-scaffold-role-symlink", "Portable project");
     let outside = TempProject::new("project-scaffold-outside");
-    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
-    let checkout = app_data.root().join("checkout");
-    std::fs::create_dir(&checkout).expect("create checkout");
-    let store = MemoryStore::open(app_data.db()).expect("open store");
-    store
-        .register_projects_vault(vault.root())
-        .expect("register projects vault");
-    let workspace = store
-        .register_workspace(&checkout, "Portable project", None)
-        .expect("register workspace");
-    store
-        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
-        .expect("map workspace");
-    symlink(
-        outside.root(),
-        vault.root().join("10-Projects/portable-project/Decisions"),
-    )
-    .expect("create escaping role symlink");
+    symlink(outside.root(), fixture.project_root().join("Decisions"))
+        .expect("create escaping role symlink");
 
-    let error = store
-        .preview_project_scaffold(&workspace.id)
+    let error = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
         .expect_err("reject role symlink");
 
     assert!(error.to_string().contains("cannot be a symlink"));

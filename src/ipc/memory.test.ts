@@ -206,6 +206,25 @@ describe("typed memory IPC", () => {
     });
   });
 
+  it("previews applies and opens project knowledge through dedicated commands", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await tauriMemory.previewProjectScaffold("ws_checkout");
+    await tauriMemory.applyProjectScaffold("ws_checkout", "plan-fingerprint");
+    await tauriMemory.openProjectInObsidian("ws_checkout");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, CMD.memoryPreviewProjectScaffold, {
+      workspaceId: "ws_checkout",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, CMD.memoryApplyProjectScaffold, {
+      workspaceId: "ws_checkout",
+      expectedFingerprint: "plan-fingerprint",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, CMD.memoryOpenProjectInObsidian, {
+      workspaceId: "ws_checkout",
+    });
+  });
+
   it("maps the bundled KödMCP helper lookup without a payload", async () => {
     invoke.mockResolvedValue({ path: "/Applications/Ködade/kodade-mcp", exists: true });
 

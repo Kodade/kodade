@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "artifacts": [
+    { "kind": "directory", "path": "Decisions" },
+    { "kind": "directory", "path": "Plans" },
+    { "kind": "directory", "path": "Research" },
+    { "kind": "directory", "path": "Worklog" },
+    {
+      "kind": "file",
+      "path": "Project.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml}}",
+        "type: project",
+        "project_id: {{project_id}}",
+        "status: active",
+        "repositories: []",
+        "tags:",
+        "  - project",
+        "  - project/active",
+        "---",
+        "<!-- kodmem-project {\"schema\":1,\"projectId\":\"{{project_id}}\",\"authority\":\"projects-vault\"} -->",
+        "",
+        "# {{project_name_markdown}}",
+        "",
+        "## Purpose",
+        "",
+        "Describe the durable purpose and boundaries of this project.",
+        "",
+        "## Resume here",
+        "",
+        "- [[STATE|Current state]]",
+        "- Latest daily note in `Worklog/`",
+        "",
+        "## Knowledge",
+        "",
+        "- [[Decisions/Decisions|Decisions]]",
+        "- [[Plans/Plans|Plans]]",
+        "- [[Research/Research|Research]]",
+        "- [[References]]",
+        "",
+        "## Boundaries",
+        "",
+        "- KödMem storage authority remains unchanged until an explicit migration completes."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "STATE.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: State}}",
+        "type: state",
+        "project: \"[[Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/state",
+        "---",
+        "",
+        "# {{project_name_markdown}} state",
+        "",
+        "## Current state",
+        "",
+        "- Add the current verified project state.",
+        "",
+        "## Decisions",
+        "",
+        "- None recorded.",
+        "",
+        "## Risks",
+        "",
+        "- None recorded.",
+        "",
+        "## Next actions",
+        "",
+        "- Add the next concrete action."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "References.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: References}}",
+        "type: references",
+        "project: \"[[Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/reference",
+        "---",
+        "",
+        "# {{project_name_markdown}} references",
+        "",
+        "Add durable project links and references here."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "Decisions/Decisions.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: Decisions}}",
+        "type: index",
+        "project: \"[[../Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/decision",
+        "---",
+        "",
+        "# {{project_name_markdown}} Decisions",
+        "",
+        "Add project decisions here."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "Plans/Plans.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: Plans}}",
+        "type: index",
+        "project: \"[[../Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/plan",
+        "---",
+        "",
+        "# {{project_name_markdown}} Plans",
+        "",
+        "Add project plans here."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "Research/Research.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: Research}}",
+        "type: index",
+        "project: \"[[../Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/research",
+        "---",
+        "",
+        "# {{project_name_markdown}} Research",
+        "",
+        "Add project research here."
+      ]
+    }
+  ]
+}

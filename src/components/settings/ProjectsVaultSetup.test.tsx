@@ -52,6 +52,9 @@ function projectsVaultIpc(
     workspaceProjectMapping: vi.fn().mockResolvedValue(null),
     mapWorkspaceToProject: vi.fn().mockResolvedValue(mapping),
     projectWorkspaceMappings: vi.fn().mockResolvedValue([mapping]),
+    previewProjectScaffold: vi.fn(),
+    applyProjectScaffold: vi.fn(),
+    openProjectInObsidian: vi.fn(),
     ...overrides,
   };
 }
@@ -146,6 +149,7 @@ describe("projects vault setup", () => {
 
     expect(container?.textContent).toContain("Mapped to existing-project");
     expect(container?.textContent).toContain("2 workspaces use this project identity");
+    expect(container?.textContent).toContain("Preview knowledge setup");
     expect(
       container?.querySelector<HTMLInputElement>(
         'input[aria-label="logical project ID"]',

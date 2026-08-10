@@ -6,6 +6,7 @@ import type {
   WorkspaceProjectMapping,
 } from "../../ipc/contract";
 import { memory as memoryIpc, platform } from "../../ipc/transport";
+import { ProjectKnowledgeSetup } from "./ProjectKnowledgeSetup";
 
 export type ProjectsVaultIpc = Pick<
   MemoryIpc,
@@ -14,6 +15,9 @@ export type ProjectsVaultIpc = Pick<
   | "workspaceProjectMapping"
   | "mapWorkspaceToProject"
   | "projectWorkspaceMappings"
+  | "previewProjectScaffold"
+  | "applyProjectScaffold"
+  | "openProjectInObsidian"
 >;
 
 export function ProjectsVaultSetup({
@@ -202,13 +206,20 @@ export function ProjectsVaultSetup({
             Save project mapping
           </button>
           {mapping && (
-            <div className="text-[10px] text-text-dim sm:col-span-3">
-              <span>Mapped to {mapping.projectId}</span>
-              <span className="mx-1">·</span>
-              <span>
-                {relatedWorkspaces.length} {relatedWorkspaces.length === 1 ? "workspace uses" : "workspaces use"} this project identity
-              </span>
-            </div>
+            <>
+              <div className="text-[10px] text-text-dim sm:col-span-3">
+                <span>Mapped to {mapping.projectId}</span>
+                <span className="mx-1">·</span>
+                <span>
+                  {relatedWorkspaces.length} {relatedWorkspaces.length === 1 ? "workspace uses" : "workspaces use"} this project identity
+                </span>
+              </div>
+              <ProjectKnowledgeSetup
+                key={mapping.projectId}
+                workspaceId={workspace.id}
+                ipc={ipc}
+              />
+            </>
           )}
         </div>
       )}

@@ -20,6 +20,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::agent::{AgentManager, AgentSpawn};
 use crate::config::{self, ConfigScan};
 use crate::configguard::{Access, ConfigGuard};
+use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopCommand, DesktopPlatform};
 use crate::detect;
 use crate::fs::{self, DirEntry, FileRead, WatchHandle};
 use crate::git::{self, GitOutput};
@@ -1535,13 +1536,6 @@ pub fn fs_trash(root: String, path: String) -> Result<(), String> {
     fs::trash(&target)
 }
 
-#[cfg(any(target_os = "windows", test))]
-#[derive(Debug, PartialEq, Eq)]
-struct DesktopCommand {
-    program: &'static str,
-    args: Vec<OsString>,
-}
-
 // Explorer's /select option and the path form one argv item. Keeping the path
 // in OsString avoids lossy conversion and Command bypasses cmd.exe entirely.
 #[cfg(any(target_os = "windows", test))]
@@ -1552,23 +1546,6 @@ fn windows_reveal_command(path: &std::path::Path) -> DesktopCommand {
         program: "explorer.exe",
         args: vec![select],
     }
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_open_url_command(url: &str) -> DesktopCommand {
-    DesktopCommand {
-        program: "explorer.exe",
-        args: vec![OsString::from(url)],
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_desktop(command: DesktopCommand, context: &str) -> Result<(), String> {
-    std::process::Command::new(command.program)
-        .args(command.args)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("{context}: {e}"))
 }
 
 fn validated_http_url(url: &str) -> Result<url::Url, String> {
@@ -1617,16 +1594,15 @@ pub fn open_url(url: String) -> Result<(), String> {
     // never have that power.
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg(parsed.as_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("open URL: {e}"))
+        spawn_desktop(
+            open_uri_command(DesktopPlatform::MacOs, parsed.as_str()),
+            "open URL",
+        )
     }
     #[cfg(target_os = "windows")]
     {
         spawn_desktop(
-            windows_open_url_command(parsed.as_str()),
+            open_uri_command(DesktopPlatform::Windows, parsed.as_str()),
             "open URL with Windows handler",
         )
     }
@@ -1645,16 +1621,18 @@ pub fn open_microphone_privacy_settings() -> Result<(), String> {
     require_development_feature("KödWhisper")?;
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("open microphone privacy settings: {e}"))
+        spawn_desktop(
+            open_uri_command(
+                DesktopPlatform::MacOs,
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            ),
+            "open microphone privacy settings",
+        )
     }
     #[cfg(target_os = "windows")]
     {
         spawn_desktop(
-            windows_open_url_command("ms-settings:privacy-microphone"),
+            open_uri_command(DesktopPlatform::Windows, "ms-settings:privacy-microphone"),
             "open microphone privacy settings",
         )
     }
@@ -1669,7 +1647,8 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use super::{validated_http_url, windows_open_url_command, windows_reveal_command};
+    use super::{validated_http_url, windows_reveal_command};
+    use crate::desktop::{open_uri_command, DesktopPlatform};
 
     #[test]
     fn open_url_rejects_disallowed_schemes_before_launching() {
@@ -1693,7 +1672,7 @@ mod tests {
     #[test]
     fn windows_url_keeps_shell_metacharacters_in_one_argument() {
         let url = "https://example.com/search?q=a&next=b%20c";
-        let command = windows_open_url_command(url);
+        let command = open_uri_command(DesktopPlatform::Windows, url);
         assert_eq!(command.program, "explorer.exe");
         assert_eq!(command.args, vec![OsString::from(url)]);
     }
@@ -1702,7 +1681,7 @@ mod tests {
     fn microphone_privacy_settings_target_is_a_fixed_ms_settings_uri() {
         // The command is a hardcoded constant, never caller-supplied — this
         // pins the exact URI Windows' privacy pane expects.
-        let command = windows_open_url_command("ms-settings:privacy-microphone");
+        let command = open_uri_command(DesktopPlatform::Windows, "ms-settings:privacy-microphone");
         assert_eq!(command.program, "explorer.exe");
         assert_eq!(
             command.args,

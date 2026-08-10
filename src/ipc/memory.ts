@@ -15,6 +15,8 @@ import {
   type MemoryWorkspace,
   type Page,
   type ProjectsVault,
+  type ProjectScaffoldApply,
+  type ProjectScaffoldPlan,
   type RetentionReport,
   type Tombstone,
   type WorkspaceContext,
@@ -62,6 +64,17 @@ export const tauriMemory: MemoryIpc = {
     invoke<WorkspaceProjectMapping[]>(CMD.memoryProjectWorkspaceMappings, {
       projectId,
     }),
+  previewProjectScaffold: (workspaceId) =>
+    invoke<ProjectScaffoldPlan>(CMD.memoryPreviewProjectScaffold, {
+      workspaceId,
+    }),
+  applyProjectScaffold: (workspaceId, expectedFingerprint) =>
+    invoke<ProjectScaffoldApply>(CMD.memoryApplyProjectScaffold, {
+      workspaceId,
+      expectedFingerprint,
+    }),
+  openProjectInObsidian: (workspaceId) =>
+    invoke<void>(CMD.memoryOpenProjectInObsidian, { workspaceId }),
   context: (workspaceId) =>
     invoke<WorkspaceContext>(CMD.memoryContext, { workspaceId }),
   search: (query) => invoke<Page<MemorySearchHit>>(CMD.memorySearch, { query }),

@@ -6,12 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
+use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopPlatform};
+
 use super::{
     ActivityEvent, AuditEntry, AuditQuery, Checkpoint, CheckpointQuery, CheckpointSearchHit,
     DeletedMemoryQuery, ExportBundle, MemoryError, MemoryQuery, MemoryRecord, MemoryRevision,
     MemorySearchHit, MemoryStore, MutationProvenance, NewActivity, NewCheckpoint, NewMemory, Page,
-    ProjectsVault, RetentionReport, RetentionSettings, Tombstone, WorkingMemoryMode,
-    WorkingMemoryStatus, Workspace, WorkspaceContext, WorkspaceProjectMapping,
+    ProjectScaffoldApply, ProjectScaffoldPlan, ProjectsVault, RetentionReport, RetentionSettings,
+    Tombstone, WorkingMemoryMode, WorkingMemoryStatus, Workspace, WorkspaceContext,
+    WorkspaceProjectMapping,
 };
 
 #[derive(Serialize)]
@@ -139,6 +142,22 @@ fn process_store(path: PathBuf) -> super::Result<MemoryStore> {
     Ok(store)
 }
 
+fn open_in_obsidian(uri: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let command = open_uri_command(DesktopPlatform::MacOs, uri);
+    #[cfg(target_os = "windows")]
+    let command = open_uri_command(DesktopPlatform::Windows, uri);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        spawn_desktop(command, "cannot open project knowledge in Obsidian")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = uri;
+        Err("opening project knowledge in Obsidian is unsupported on this platform".into())
+    }
+}
+
 #[tauri::command]
 pub async fn memory_register_workspace(
     app: AppHandle,
@@ -236,6 +255,38 @@ pub async fn memory_project_workspace_mappings(
         store.project_workspace_mappings(&project_id)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn memory_preview_project_scaffold(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<ProjectScaffoldPlan, String> {
+    run_memory(app, move |store| {
+        store.preview_project_scaffold(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_apply_project_scaffold(
+    app: AppHandle,
+    workspace_id: String,
+    expected_fingerprint: String,
+) -> Result<ProjectScaffoldApply, String> {
+    run_memory(app, move |store| {
+        store.apply_project_scaffold(&workspace_id, &expected_fingerprint)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_open_project_in_obsidian(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<(), String> {
+    let uri = run_memory(app, move |store| store.project_obsidian_uri(&workspace_id)).await?;
+    open_in_obsidian(&uri)
 }
 
 #[tauri::command]

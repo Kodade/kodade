@@ -10,6 +10,7 @@ pub mod browser_protocol;
 mod commands;
 pub mod config;
 pub mod configguard;
+mod desktop;
 pub mod detect;
 pub mod document;
 #[cfg(feature = "voice")]
@@ -143,6 +144,9 @@ pub fn run() {
             memory::commands::memory_workspace_project_mapping,
             memory::commands::memory_map_workspace_to_project,
             memory::commands::memory_project_workspace_mappings,
+            memory::commands::memory_preview_project_scaffold,
+            memory::commands::memory_apply_project_scaffold,
+            memory::commands::memory_open_project_in_obsidian,
             memory::commands::memory_context,
             memory::commands::memory_search,
             memory::commands::memory_get,

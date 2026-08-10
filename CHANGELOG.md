@@ -8,6 +8,9 @@
 - Added bounded, provenance-tagged project context refreshed from mapped
   Obsidian Markdown in KödMem, KödMCP, local KödChat providers, and the Memory
   pane while preserving the existing unmapped workflow.
+- Added a previewable, idempotent project-knowledge setup that creates only
+  missing Obsidian roles, preserves existing notes, rejects stale plans and
+  unsafe paths, and opens the mapped project hub in Obsidian.
 
 ## 1.5.1 - 2026-08-08
 
