@@ -320,6 +320,11 @@ fn stdio_drives_the_registered_workspace_memory_workflow() {
         context["result"]["structuredContent"]["workspace"]["canonicalRoot"],
         root.as_ref()
     );
+    assert!(
+        context["result"]["structuredContent"]["projection"].is_null()
+            || context["result"]["structuredContent"]["projection"]["truncated"] == false,
+        "ordinary context must not claim that provider projection removed data"
+    );
 
     let missing = process.call_tool(
         "get_context",
@@ -562,6 +567,10 @@ fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
         context["result"]["structuredContent"]["projectKnowledge"]["sync"]["status"],
         "current"
     );
+    assert!(
+        context["result"]["structuredContent"]["projection"].is_null(),
+        "ordinary mapped context must not claim provider truncation"
+    );
     assert_eq!(
         context["result"]["structuredContent"]["projectKnowledge"]["sources"][1]["relativePath"],
         "STATE.md"
@@ -698,6 +707,54 @@ fn stdio_get_context_bounds_the_complete_worst_case_response() {
         serialized.len()
     );
     let context = &response["result"]["structuredContent"];
+    let projection = &context["projection"];
+    assert_eq!(projection["truncated"], true);
+    assert_eq!(projection["affectedLanesTruncated"], false);
+    let text_context: Value = serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("provider text context"),
+    )
+    .expect("parse provider text context");
+    assert_eq!(&text_context["projection"], projection);
+    assert_eq!(projection["originalCounts"]["pinnedDecisions"], 20);
+    assert_eq!(projection["originalCounts"]["openTasks"], 50);
+    assert_eq!(projection["originalCounts"]["recentMemories"], 30);
+    assert_eq!(projection["originalCounts"]["checkpointDecisions"], 100);
+    assert_eq!(projection["originalCounts"]["checkpointNextActions"], 100);
+    assert_eq!(projection["originalCounts"]["checkpointChangedPaths"], 100);
+    assert_eq!(projection["originalCounts"]["projectSources"], 2);
+    assert_eq!(projection["returnedCounts"]["pinnedDecisions"], 3);
+    assert_eq!(projection["returnedCounts"]["openTasks"], 5);
+    assert_eq!(projection["returnedCounts"]["recentMemories"], 5);
+    assert_eq!(projection["returnedCounts"]["checkpointDecisions"], 3);
+    assert_eq!(projection["returnedCounts"]["checkpointNextActions"], 3);
+    assert_eq!(projection["returnedCounts"]["checkpointChangedPaths"], 3);
+    assert_eq!(projection["returnedCounts"]["projectSources"], 2);
+    let affected_lanes = projection["affectedLanes"]
+        .as_array()
+        .expect("bounded projection lanes")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(affected_lanes.windows(2).all(|pair| pair[0] < pair[1]));
+    for lane in [
+        "latestCheckpoint.summary",
+        "latestCheckpoint.decisions",
+        "latestCheckpoint.decisions.items",
+        "pinnedDecisions",
+        "pinnedDecisions.body",
+        "openTasks",
+        "openTasks.body",
+        "recentMemories",
+        "recentMemories.body",
+        "projectKnowledge.sources.content",
+    ] {
+        assert!(
+            affected_lanes.contains(&lane),
+            "missing affected projection lane {lane}"
+        );
+    }
     assert!(context["latestCheckpoint"]["summary"]
         .as_str()
         .is_some_and(|summary| summary.ends_with('…')));
