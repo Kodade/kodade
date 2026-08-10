@@ -543,7 +543,13 @@ type ConnectionStatus =
   | "checking"
   | "connected-readwrite"
   | "connected-readonly"
+  | "configured-unhealthy-readwrite"
+  | "configured-unhealthy-readonly"
   | "not-connected";
+
+function isConfiguredConnection(status: ConnectionStatus): boolean {
+  return status.startsWith("connected") || status.startsWith("configured-unhealthy");
+}
 
 function redactOnboardingError(detail: string, localPaths: readonly (string | null)[]): string {
   return localPaths.reduce<string>(
@@ -721,7 +727,7 @@ function ConnectAgentsSection({
           const health = await memoryIpc.mcpHealth(workspace.id, client.id, detectedReadOnly);
           return [client.id, health.ok
             ? detectedReadOnly ? "connected-readonly" : "connected-readwrite"
-            : "not-connected"] as const;
+            : detectedReadOnly ? "configured-unhealthy-readonly" : "configured-unhealthy-readwrite"] as const;
         } catch {
           return [client.id, "not-connected"] as const;
         }
@@ -903,6 +909,8 @@ function ConnectAgentsSection({
                         ? "healthy · read-only"
                         : connections[client.id] === "connected-readwrite"
                           ? "healthy · read-write"
+                          : connections[client.id].startsWith("configured-unhealthy")
+                            ? "configured · unhealthy"
                           : "not connected"}
                   </span>
                 </div>
@@ -914,7 +922,7 @@ function ConnectAgentsSection({
               KödMCP tools, and context for this project.
             </p>
             <div className="mt-3 flex justify-end gap-2">
-              {Object.values(connections).some((status) => status.startsWith("connected")) && (
+              {Object.values(connections).some(isConfiguredConnection) && (
                 <button className="memory-action" disabled={busy} type="button" onClick={() => void prepareOnboarding("remove")}>
                   disconnect
                 </button>
@@ -1015,8 +1023,7 @@ function ConfigSnippet({
   status?: ConnectionStatus;
   onAdd(): void;
 }) {
-  const connected =
-    status === "connected-readwrite" || status === "connected-readonly";
+  const connected = status ? isConfiguredConnection(status) : false;
   return (
     <div className="rounded border border-border bg-bg/50 p-2">
       <div className="flex items-center gap-2 text-[11px]">
@@ -1033,6 +1040,8 @@ function ConfigSnippet({
                 ? "connected · read-only"
                 : status === "connected-readwrite"
                   ? "connected · read-write"
+                  : status?.startsWith("configured-unhealthy")
+                    ? "configured · unhealthy"
                 : "not connected"}
           </span>
         )}

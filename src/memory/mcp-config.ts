@@ -3,6 +3,13 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type { McpFormat, McpKeyPath, McpServerSpec } from "../harness/merge";
 
 export type MemoryMcpClient = "claude" | "codex";
+export const KODADE_ONBOARDING_BASELINE_ENV = "KODADE_ONBOARDING_BASELINE";
+
+export type MemoryMcpConfigState =
+  | { state: "absent" }
+  | { state: "unreadable" }
+  | { state: "drifted" }
+  | { state: "matched"; spec: McpServerSpec; baseline: string | null };
 
 type ReadyMemoryMcpSetup = {
   state: "ready";
@@ -72,6 +79,28 @@ export function memoryMcpConfigMatches(
   keyPath: McpKeyPath,
   expected: McpServerSpec,
 ): boolean {
+  return inspectMemoryMcpConfig(content, format, keyPath, [expected]).state === "matched";
+}
+
+export function withMemoryMcpBaseline(
+  spec: McpServerSpec,
+  baseline: "absent" | string,
+): McpServerSpec {
+  return {
+    ...spec,
+    config: {
+      ...spec.config,
+      env: { [KODADE_ONBOARDING_BASELINE_ENV]: baseline },
+    },
+  };
+}
+
+export function inspectMemoryMcpConfig(
+  content: string,
+  format: McpFormat,
+  keyPath: McpKeyPath,
+  expected: readonly McpServerSpec[],
+): MemoryMcpConfigState {
   try {
     let parsed: unknown;
     if (format === "toml") {
@@ -82,7 +111,7 @@ export function memoryMcpConfigMatches(
         allowTrailingComma: true,
         disallowComments: false,
       });
-      if (errors.length > 0) return false;
+      if (errors.length > 0) return { state: "unreadable" };
     }
     const serverMap = (typeof keyPath === "string" ? keyPath.split(".") : [...keyPath])
       .reduce<Record<string, unknown> | null>((current, segment) => {
@@ -93,11 +122,39 @@ export function memoryMcpConfigMatches(
           ? (next as Record<string, unknown>)
           : null;
       }, asObject(parsed));
-    const configured = asObject(serverMap?.[expected.name]);
-    if (!configured) return false;
-    return sameConfigValue(configured, expected.config);
+    const name = expected[0]?.name;
+    if (!name || !Object.prototype.hasOwnProperty.call(serverMap ?? {}, name)) {
+      return { state: "absent" };
+    }
+    const configured = asObject(serverMap?.[name]);
+    if (!configured) return { state: "drifted" };
+    for (const candidate of expected) {
+      if (candidate.name !== name) continue;
+      if (sameConfigValue(configured, candidate.config)) {
+        return { state: "matched", spec: candidate, baseline: null };
+      }
+      const env = asObject(configured.env);
+      const baseline = env?.[KODADE_ONBOARDING_BASELINE_ENV];
+      if (
+        env !== null &&
+        typeof baseline === "string" &&
+        (baseline === "absent" || /^[a-f0-9]{64}$/.test(baseline)) &&
+        Object.keys(env).length === 1
+      ) {
+        const withoutBaseline = { ...configured };
+        delete withoutBaseline.env;
+        if (sameConfigValue(withoutBaseline, candidate.config)) {
+          return {
+            state: "matched",
+            spec: withMemoryMcpBaseline(candidate, baseline),
+            baseline,
+          };
+        }
+      }
+    }
+    return { state: "drifted" };
   } catch {
-    return false;
+    return { state: "unreadable" };
   }
 }
 

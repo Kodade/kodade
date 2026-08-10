@@ -772,6 +772,25 @@ export class MockConfig implements ConfigIpc {
     }
     return Promise.resolve(this.reads.get(path)!);
   }
+  readOptionalText(path: string, projectRoot: string): Promise<string | null> {
+    this.readQueries.push({ path, projectRoot });
+    if (this.readFailPaths.has(path)) {
+      return Promise.reject(new Error("config artifact is unreadable"));
+    }
+    const read = this.reads.get(path);
+    if (!read) return Promise.resolve(null);
+    return read.kind === "text"
+      ? Promise.resolve(read.content)
+      : Promise.reject(new Error("config artifact is not text"));
+  }
+  baselineText(path: string, expectedHash: string, _projectRoot: string): Promise<string> {
+    for (const [candidate, read] of this.reads) {
+      if (!candidate.startsWith(`${path}.kodade-bak`) || read.kind !== "text") continue;
+      const actual = bytesToHex(sha256(utf8ToBytes(read.content)));
+      if (actual === expectedHash) return Promise.resolve(read.content);
+    }
+    return Promise.reject(new Error("the onboarding baseline backup is unavailable"));
+  }
   env(): Promise<ConfigEnv> {
     this.envQueries++;
     return Promise.resolve(this.envResult);

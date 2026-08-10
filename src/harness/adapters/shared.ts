@@ -13,6 +13,7 @@ import type {
   HarnessAdapter,
   HarnessChangeRequest,
   InstructionEditPayload,
+  RemoveFilePayload,
   SkillDirPayload,
   VerifyResult,
 } from "../contract";
@@ -58,6 +59,17 @@ function fingerprint(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+type OptionalText = { exists: boolean; text: string };
+
+async function readOptionalText(
+  config: ConfigIpc,
+  path: string,
+  projectRoot: string,
+): Promise<OptionalText> {
+  const text = await config.readOptionalText(path, projectRoot);
+  return { exists: text !== null, text: text ?? "" };
+}
+
 // Read one artifact's current text (for the pre-rename fingerprint), or null for
 // a directory skill / unreadable path. A guard rejection or dir read resolves to
 // null, so apply treats it as "no byte fingerprint" (a dir rename).
@@ -101,6 +113,8 @@ export function createHarnessAdapter(
           return planToggle(change);
         case "edit":
           return planEdit(config, change);
+        case "remove-file":
+          return planRemoveFile(config, change);
         case "add-mcp-server":
           return planAddMcpServer(config, change);
         case "remove-mcp-server":
@@ -154,6 +168,21 @@ export function createHarnessAdapter(
         await config.rename(change.before, change.after, change.projectRoot);
         return { path: change.after, backupPath: "", appliedAt: now(), hash, change };
       }
+      if (change.fileOperation === "remove") {
+        const backupPath = await config.backup(change.path, change.projectRoot);
+        await config.removeFile(
+          change.path,
+          change.expectedHash ?? "",
+          change.projectRoot,
+        );
+        return {
+          path: change.path,
+          backupPath,
+          appliedAt: now(),
+          hash: "",
+          change,
+        };
+      }
       const backupPath = await config.write(
         change.path,
         change.after,
@@ -188,6 +217,19 @@ export function createHarnessAdapter(
           : { ok: false, reason: "the installed skill files do not match the planned pack" };
       }
       if (receipt.change.format !== "dir-rename") {
+        if (receipt.change.fileOperation === "remove") {
+          try {
+            const current = await config.readOptionalText(
+              receipt.path,
+              receipt.change.projectRoot,
+            );
+            return current === null
+              ? { ok: true }
+              : { ok: false, reason: "the managed file is still present" };
+          } catch {
+            return { ok: false, reason: "the removed file state could not be verified" };
+          }
+        }
         // A byte write verifies by re-reading: the file must still be exactly the
         // bytes we merged. Any drift (a racing writer, a truncated write) fails,
         // and the store auto-restores from the backup the receipt carries.
@@ -246,6 +288,14 @@ export function createHarnessAdapter(
         return;
       }
       if (receipt.change.format !== "dir-rename") {
+        if (receipt.change.fileOperation === "remove") {
+          await config.restore(
+            receipt.path,
+            receipt.backupPath,
+            receipt.change.projectRoot,
+          );
+          return;
+        }
         // A byte write restores from the prior backup. A brand-new file has no
         // backup, so remove only the exact bytes this receipt wrote.
         if (!receipt.backupPath) {
@@ -367,9 +417,9 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
   if (!payload || typeof payload.path !== "string" || typeof payload.newText !== "string") {
     throw new Error("edit needs a { path, newText } payload");
   }
-  const current = await readText(config, payload.path, change.projectRoot);
-  const before = current ?? "";
-  const isNewFile = current === null;
+  const current = await readOptionalText(config, payload.path, change.projectRoot);
+  const before = current.text;
+  const isNewFile = !current.exists;
   if (payload.expectedText !== undefined && before !== payload.expectedText) {
     throw new Error("instructions changed while Ködade was preparing the preview; review again");
   }
@@ -378,7 +428,7 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
   }
   return {
     path: payload.path,
-    format: "markdown",
+    format: payload.format ?? "markdown",
     before,
     after: payload.newText,
     diff: lineDiff(before, payload.newText),
@@ -386,6 +436,30 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
     projectRoot: change.projectRoot,
     expectedHash: isNewFile ? "" : sha256Hex(before),
     isNewFile,
+  };
+}
+
+async function planRemoveFile(config: ConfigIpc, change: HarnessChangeRequest): Promise<ConfigChange> {
+  const payload = change.payload as RemoveFilePayload | undefined;
+  if (!payload || typeof payload.path !== "string" || typeof payload.expectedText !== "string") {
+    throw new Error("remove-file needs a { path, format, expectedText } payload");
+  }
+  const current = await readOptionalText(config, payload.path, change.projectRoot);
+  if (!current.exists) throw new Error("the managed file is already absent");
+  if (current.text !== payload.expectedText) {
+    throw new Error("the managed file changed while Ködade was preparing the preview; review again");
+  }
+  return {
+    path: payload.path,
+    format: payload.format,
+    before: current.text,
+    after: "",
+    diff: lineDiff(current.text, ""),
+    backupPath: "",
+    projectRoot: change.projectRoot,
+    expectedHash: sha256Hex(current.text),
+    isNewFile: false,
+    fileOperation: "remove",
   };
 }
 
@@ -401,8 +475,14 @@ async function planAddMcpServer(
   if (!payload || typeof payload.path !== "string" || !payload.server) {
     throw new Error("add-mcp-server needs a { path, format, keyPath, server } payload");
   }
-  const current = await readText(config, payload.path, change.projectRoot);
-  const before = current ?? "";
+  const current = await readOptionalText(config, payload.path, change.projectRoot);
+  const before = current.text;
+  if (
+    payload.expectedText !== undefined &&
+    (before !== payload.expectedText || current.exists === payload.expectedMissing)
+  ) {
+    throw new Error("MCP config changed while Ködade was preparing the preview; review again");
+  }
   const merge = mergeMcpServer(before, payload.format as McpFormat, payload.keyPath, payload.server);
   return {
     path: payload.path,
@@ -414,8 +494,8 @@ async function planAddMcpServer(
     projectRoot: change.projectRoot,
     touchedKeys: [merge.touchedKey],
     mcpOperation: merge.operation,
-    expectedHash: merge.isNewFile ? "" : sha256Hex(before),
-    isNewFile: merge.isNewFile,
+    expectedHash: current.exists ? sha256Hex(before) : "",
+    isNewFile: !current.exists,
   };
 }
 
@@ -427,10 +507,16 @@ async function planRemoveMcpServer(
   if (!payload || typeof payload.path !== "string" || !payload.server) {
     throw new Error("remove-mcp-server needs a { path, format, keyPath, server } payload");
   }
-  const current = await readText(config, payload.path, change.projectRoot);
-  if (current === null) throw new Error("the managed MCP config is not present");
+  const current = await readOptionalText(config, payload.path, change.projectRoot);
+  if (!current.exists) throw new Error("the managed MCP config is not present");
+  if (
+    payload.expectedText !== undefined &&
+    (current.text !== payload.expectedText || payload.expectedMissing === true)
+  ) {
+    throw new Error("MCP config changed while Ködade was preparing the preview; review again");
+  }
   const merge = removeMcpServer(
-    current,
+    current.text,
     payload.format as McpFormat,
     payload.keyPath,
     payload.server,
@@ -438,14 +524,14 @@ async function planRemoveMcpServer(
   return {
     path: payload.path,
     format: payload.format,
-    before: current,
+    before: current.text,
     after: merge.after,
     diff: merge.diff,
     backupPath: "",
     projectRoot: change.projectRoot,
     touchedKeys: [merge.touchedKey],
     mcpOperation: "remove",
-    expectedHash: sha256Hex(current),
+    expectedHash: sha256Hex(current.text),
     isNewFile: false,
   };
 }

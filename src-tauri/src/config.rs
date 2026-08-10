@@ -535,6 +535,53 @@ pub fn snapshot_external_skill(path: &Path) -> Result<Vec<ConfigFileHash>, Strin
     Ok(files)
 }
 
+pub fn baseline_text(target: &Path, expected_hash: &str) -> Result<String, String> {
+    if expected_hash.len() != 64
+        || !expected_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("the onboarding baseline hash is invalid".into());
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| "the onboarding baseline directory is unavailable".to_string())?;
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "the onboarding baseline filename is unavailable".to_string())?;
+    let prefix = format!("{name}{BACKUP_INFIX}");
+    let mut candidates = std::fs::read_dir(parent)
+        .map_err(|_| "the onboarding baseline directory is unavailable".to_string())?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| "the onboarding baseline directory is unavailable".to_string())?;
+    candidates.sort_by_key(std::fs::DirEntry::file_name);
+    candidates.reverse();
+    for candidate in candidates {
+        let candidate_name = candidate.file_name();
+        let Some(candidate_name) = candidate_name.to_str() else {
+            continue;
+        };
+        if !candidate_name.starts_with(&prefix) {
+            continue;
+        }
+        let metadata = candidate
+            .file_type()
+            .map_err(|_| "the onboarding baseline could not be verified".to_string())?;
+        if !metadata.is_file() || metadata.is_symlink() {
+            continue;
+        }
+        let bytes = std::fs::read(candidate.path())
+            .map_err(|_| "the onboarding baseline could not be read".to_string())?;
+        if sha256_hex(&bytes) != expected_hash {
+            continue;
+        }
+        return String::from_utf8(bytes)
+            .map_err(|_| "the onboarding baseline is not text".to_string());
+    }
+    Err("the onboarding baseline backup is unavailable".into())
+}
+
 fn sorted_hashes(files: &[ConfigFileHash]) -> Vec<ConfigFileHash> {
     let mut sorted = files.to_vec();
     sorted.sort_by(|left, right| left.path.cmp(&right.path));
@@ -865,6 +912,29 @@ mod tests {
 
         remove_config(&target, &sha256_hex(b"managed bytes")).unwrap();
         assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn baseline_text_recovers_only_an_exact_guarded_backup() {
+        let dir = temp_dir("onboarding-baseline");
+        let target = dir.join("config.toml");
+        let baseline = "# Preserve formatting exactly\n";
+        std::fs::write(&target, baseline).unwrap();
+        write_config(
+            &target,
+            "[mcp_servers.kodade]\ncommand = \"kodade-mcp\"\n",
+            &sha256_hex(baseline.as_bytes()),
+            std::time::UNIX_EPOCH,
+        )
+        .unwrap();
+
+        assert_eq!(
+            baseline_text(&target, &sha256_hex(baseline.as_bytes())).unwrap(),
+            baseline
+        );
+        assert!(baseline_text(&target, &sha256_hex(b"other baseline")).is_err());
+        assert!(baseline_text(&target, &sha256_hex(baseline.as_bytes()).to_uppercase()).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 

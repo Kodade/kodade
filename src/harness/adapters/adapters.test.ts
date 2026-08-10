@@ -659,6 +659,29 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
     expect(config.reads.has(MCP)).toBe(false);
   });
 
+  it("backs up an exact managed file before removal and restores it on rollback", async () => {
+    const config = new MockConfig();
+    const managed = '{ "mcpServers": { "kodade-mem": { "command": "kodade-mcp" } } }\n';
+    config.reads.set(MCP, { kind: "text", content: managed });
+    const adapter = createClaudeAdapter(config);
+
+    const change = await adapter.plan({
+      artifactId: "claude:remove-created-config",
+      action: "remove-file",
+      projectRoot: ROOT,
+      payload: { path: MCP, format: "json", expectedText: managed },
+    });
+    expect(change.fileOperation).toBe("remove");
+
+    const receipt = await adapter.apply(change);
+    expect(receipt.backupPath).not.toBe("");
+    expect(config.reads.has(MCP)).toBe(false);
+    expect(await adapter.verify(receipt)).toEqual({ ok: true });
+
+    await adapter.restore(receipt);
+    expect(config.reads.get(MCP)).toEqual({ kind: "text", content: managed });
+  });
+
   it("plan surfaces a corrupt-config abort before any write", async () => {
     const config = new MockConfig();
     config.reads.set(MCP, { kind: "text", content: '{ "mcpServers": { "x": } }' });

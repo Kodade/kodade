@@ -1,4 +1,6 @@
 import type { ConfigFileHash, ConfigIpc, ProjectSkillSourceBundle } from "../ipc/contract";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import type { HarnessChangeRequest } from "../harness/contract";
 import {
   buildProjectSkillRequests,
@@ -6,17 +8,20 @@ import {
   parseProjectSkillBundle,
 } from "../harness/project-skills";
 import type { ScanContext } from "../harness/model";
+import { mergeMcpServer } from "../harness/merge";
 import { nativeJoin } from "../platform/native-path";
 import type { PlannedBatchRequest } from "../store/harness";
 import {
   buildMemoryMcpSetup,
-  memoryMcpConfigMatches,
+  inspectMemoryMcpConfig,
+  withMemoryMcpBaseline,
   type MemoryMcpClient,
 } from "./mcp-config";
 import SKILL from "../../resources/kodmem/kodmem-project/SKILL.md?raw";
 
 export const KODMEM_BLOCK_START = "<!-- kodade:kodmem-project:v1:start -->";
 export const KODMEM_BLOCK_END = "<!-- kodade:kodmem-project:v1:end -->";
+export const KODMEM_CREATED_FILE_MARKER = "<!-- kodade:artifact-origin:created-file -->";
 
 const AGENTS_BLOCK = `${KODMEM_BLOCK_START}
 ## KödMem project context
@@ -31,9 +36,18 @@ const CLAUDE_BLOCK = `${KODMEM_BLOCK_START}
 Follow the managed KödMem project-context rule in \`AGENTS.md\`.
 ${KODMEM_BLOCK_END}`;
 
+function createdFileBlock(body: string): string {
+  return body.replace(KODMEM_BLOCK_END, `${KODMEM_CREATED_FILE_MARKER}\n${KODMEM_BLOCK_END}`);
+}
+
 const MANAGED_MARKER = /<!--\s*kodade:kodmem-project:[^>]+-->/g;
 
 type ManagedBlock = { start: number; after: number; eol: "\n" | "\r\n" };
+type OptionalText = { exists: boolean; text: string };
+
+function hashText(text: string): string {
+  return bytesToHex(sha256(utf8ToBytes(text)));
+}
 
 function managedBlock(text: string): ManagedBlock | null {
   const markers = [...text.matchAll(MANAGED_MARKER)].map((match) => match[0]);
@@ -159,13 +173,9 @@ async function externalSkillState(
   return result;
 }
 
-async function readText(config: ConfigIpc, path: string, root: string): Promise<string> {
-  try {
-    const read = await config.read(path, root);
-    return read.kind === "text" ? read.content : "";
-  } catch {
-    return "";
-  }
+async function readText(config: ConfigIpc, path: string, root: string): Promise<OptionalText> {
+  const text = await config.readOptionalText(path, root);
+  return { exists: text !== null, text: text ?? "" };
 }
 
 function instructionRequest(
@@ -174,6 +184,7 @@ function instructionRequest(
   before: string,
   after: string,
   root: string,
+  removeFile = false,
 ): PlannedBatchRequest | null {
   if (before === after) return null;
   return {
@@ -181,11 +192,26 @@ function instructionRequest(
     title: `update managed KödMem instructions for ${cli}`,
     request: {
       artifactId: `${cli}:project:instruction:kodmem-project`,
-      action: "edit",
+      action: removeFile ? "remove-file" : "edit",
       projectRoot: root,
-      payload: { path, newText: after, expectedText: before },
+      payload: removeFile
+        ? { path, expectedText: before, format: "markdown" }
+        : { path, newText: after, expectedText: before },
     },
   };
+}
+
+function removeInstructionBlock(
+  text: string,
+  regular: string,
+): { text: string; removeFile: boolean } {
+  try {
+    return { text: removeKodmemBlock(text, regular), removeFile: false };
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("differs")) throw error;
+  }
+  const removed = removeKodmemBlock(text, createdFileBlock(regular));
+  return { text: removed, removeFile: removed === "" };
 }
 
 export function memoryMcpTarget(
@@ -243,11 +269,16 @@ export async function buildAgentOnboardingPlan(
     ["claude", "codex"],
   );
   const skillRequests: PlannedBatchRequest[] = [];
+  const blockedSkill = skillModel.cells.find((cell) =>
+    action === "connect"
+      ? cell.status === "conflict" || cell.status === "modified" || cell.status === "external" || cell.status === "unreadable"
+      : cell.status === "modified" || cell.status === "unreadable" ||
+        (cell.status === "conflict" && cell.reason === "invalid Kodade provenance")
+  );
+  if (blockedSkill) {
+    throw new Error(`the project skill cannot be managed: ${blockedSkill.reason}`);
+  }
   if (action === "connect") {
-    const blocked = skillModel.cells.find((cell) =>
-      cell.status === "conflict" || cell.status === "modified" || cell.status === "external" || cell.status === "unreadable"
-    );
-    if (blocked) throw new Error(`the project skill cannot be managed: ${blocked.reason}`);
     skillRequests.push(
       ...buildProjectSkillRequests(
         skillModel,
@@ -295,54 +326,138 @@ export async function buildAgentOnboardingPlan(
   const claudePath = nativeJoin(input.workspaceRoot, "CLAUDE.md");
   const agentsBefore = await readText(config, agentsPath, input.workspaceRoot);
   const claudeBefore = await readText(config, claudePath, input.workspaceRoot);
+  const agentsAfter = action === "connect"
+    ? {
+        text: ensureKodmemBlock(
+          agentsBefore.text,
+          agentsBefore.exists ? AGENTS_BLOCK : createdFileBlock(AGENTS_BLOCK),
+        ),
+        removeFile: false,
+      }
+    : removeInstructionBlock(agentsBefore.text, AGENTS_BLOCK);
+  const claudeAfter = action === "connect"
+    ? {
+        text: ensureKodmemBlock(
+          claudeBefore.text,
+          claudeBefore.exists ? CLAUDE_BLOCK : createdFileBlock(CLAUDE_BLOCK),
+        ),
+        removeFile: false,
+      }
+    : removeInstructionBlock(claudeBefore.text, CLAUDE_BLOCK);
   const instructionRequests = [
     instructionRequest(
       "codex",
       agentsPath,
-      agentsBefore,
-      action === "connect" ? ensureKodmemBlock(agentsBefore, AGENTS_BLOCK) : removeKodmemBlock(agentsBefore, AGENTS_BLOCK),
+      agentsBefore.text,
+      agentsAfter.text,
       input.workspaceRoot,
+      agentsAfter.removeFile,
     ),
     instructionRequest(
       "claude",
       claudePath,
-      claudeBefore,
-      action === "connect" ? ensureKodmemBlock(claudeBefore, CLAUDE_BLOCK) : removeKodmemBlock(claudeBefore, CLAUDE_BLOCK),
+      claudeBefore.text,
+      claudeAfter.text,
       input.workspaceRoot,
+      claudeAfter.removeFile,
     ),
   ].filter((request): request is PlannedBatchRequest => request !== null);
 
   const mcpRequests: PlannedBatchRequest[] = [];
+  const alternate = buildMemoryMcpSetup({
+    workspaceId: input.workspaceId,
+    workspaceRoot: input.workspaceRoot,
+    binaryPath: input.binaryPath,
+    readOnly: !readOnly,
+  });
+  if (alternate.state !== "ready") throw new Error("KödMCP onboarding prerequisites are unavailable");
   for (const client of ["claude", "codex"] as const) {
     const target = memoryMcpTarget(input.home, input.workspaceRoot, client);
-    let spec = setup.spec(client);
+    const requestedSpec = setup.spec(client);
     const before = await readText(config, target.path, input.workspaceRoot);
-    if (action === "connect" && before && memoryMcpConfigMatches(before, target.format, target.keyPath, spec)) {
+    const inspected = before.exists
+      ? inspectMemoryMcpConfig(
+          before.text,
+          target.format,
+          target.keyPath,
+          action === "connect"
+            ? [requestedSpec]
+            : [requestedSpec, alternate.spec(client)],
+        )
+      : { state: "absent" as const };
+    if (inspected.state === "unreadable") {
+      throw new Error(`the ${client} MCP config is unreadable; no onboarding changes were staged`);
+    }
+    if (inspected.state === "drifted") {
+      throw new Error(`the ${client} KödMCP entry drifted; repair or remove it before retrying`);
+    }
+    if (action === "connect") {
+      if (inspected.state === "matched") continue;
+      const baseline = before.exists ? hashText(before.text) : "absent";
+      const spec = withMemoryMcpBaseline(requestedSpec, baseline);
+      mcpRequests.push({
+        cli: client,
+        title: `configure KödMCP for ${client}`,
+        request: {
+          artifactId: `${client}:mcp:${spec.name}`,
+          action: "add-mcp-server",
+          projectRoot: input.workspaceRoot,
+          payload: {
+            ...target,
+            server: spec,
+            expectedText: before.text,
+            expectedMissing: !before.exists,
+          },
+        } satisfies HarnessChangeRequest,
+      });
       continue;
     }
-    if (action === "remove") {
-      if (!before) continue;
-      if (!memoryMcpConfigMatches(before, target.format, target.keyPath, spec)) {
-        const alternate = buildMemoryMcpSetup({
-          workspaceId: input.workspaceId,
-          workspaceRoot: input.workspaceRoot,
-          binaryPath: input.binaryPath,
-          readOnly: !readOnly,
+    if (inspected.state === "absent") continue;
+
+    if (inspected.baseline !== null) {
+      const baseline = inspected.baseline === "absent"
+        ? null
+        : await config.baselineText(target.path, inspected.baseline, input.workspaceRoot);
+      const connected = mergeMcpServer(
+        baseline ?? "",
+        target.format,
+        target.keyPath,
+        inspected.spec,
+      ).after;
+      if (connected === before.text) {
+        mcpRequests.push({
+          cli: client,
+          title: `restore ${client} MCP config baseline`,
+          request: {
+            artifactId: `${client}:mcp:${inspected.spec.name}`,
+            action: baseline === null ? "remove-file" : "edit",
+            projectRoot: input.workspaceRoot,
+            payload: baseline === null
+              ? { path: target.path, expectedText: before.text, format: target.format }
+              : {
+                  path: target.path,
+                  newText: baseline,
+                  expectedText: before.text,
+                  format: target.format,
+                },
+          } satisfies HarnessChangeRequest,
         });
-        if (alternate.state !== "ready") continue;
-        const alternateSpec = alternate.spec(client);
-        if (!memoryMcpConfigMatches(before, target.format, target.keyPath, alternateSpec)) continue;
-        spec = alternateSpec;
+        continue;
       }
     }
     mcpRequests.push({
       cli: client,
-      title: `${action === "connect" ? "configure" : "remove"} KödMCP for ${client}`,
+      title: `remove KödMCP for ${client}`,
       request: {
-        artifactId: `${client}:mcp:${spec.name}`,
-        action: action === "connect" ? "add-mcp-server" : "remove-mcp-server",
+        artifactId: `${client}:mcp:${inspected.spec.name}`,
+        action: "remove-mcp-server",
         projectRoot: input.workspaceRoot,
-        payload: { ...target, server: spec },
+        payload: {
+          ...target,
+          server: inspected.spec,
+          expectedText: before.text,
+          expectedMissing: false,
+        },
       } satisfies HarnessChangeRequest,
     });
   }

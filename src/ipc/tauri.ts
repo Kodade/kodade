@@ -228,6 +228,10 @@ export const tauriConfig: ConfigIpc = {
     invoke<ConfigScan>(CMD.configScan, { root, projectRoot }),
   read: (path: string, projectRoot: string) =>
     invoke<FileRead>(CMD.configRead, { path, projectRoot }),
+  readOptionalText: (path: string, projectRoot: string) =>
+    invoke<string | null>(CMD.configReadOptionalText, { path, projectRoot }),
+  baselineText: (path: string, expectedHash: string, projectRoot: string) =>
+    invoke<string>(CMD.configBaselineText, { path, expectedHash, projectRoot }),
   env: () => invoke<ConfigEnv>(CMD.configEnv),
   // Guarded write surface (M10d). Rust authorizes each under configguard.
   rename: (path: string, newPath: string, projectRoot: string) =>

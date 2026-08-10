@@ -57,6 +57,7 @@ const TOGGLE_CONTAINERS: &[&str] = &["skills", "agents"];
 pub enum Access {
     ScanDir,
     ReadFile,
+    ReadOptionalFile,
     WriteFile,
     RenameEntry,
     ReadBackup,
@@ -198,6 +199,19 @@ impl ConfigGuard {
                     return Err(format!("not a known config artifact: {path}"));
                 }
                 Ok(canonical)
+            }
+            Access::ReadOptionalFile => {
+                let candidate = match std::fs::canonicalize(raw) {
+                    Ok(canonical) => canonical,
+                    Err(_) => self.parent_canonical_join(raw, path)?,
+                };
+                if !self.contained(&candidate) {
+                    return Err(format!("path is outside the allowed config roots: {path}"));
+                }
+                if !is_known_artifact_file(&candidate) {
+                    return Err(format!("not a known config artifact: {path}"));
+                }
+                Ok(candidate)
             }
             Access::ReadBackup => {
                 // A `.kodade-bak` sibling, for the restore flow. Restorable but

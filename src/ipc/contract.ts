@@ -61,6 +61,8 @@ export const CMD = {
   openMicrophonePrivacySettings: "open_microphone_privacy_settings",
   configScan: "config_scan",
   configRead: "config_read",
+  configReadOptionalText: "config_read_optional_text",
+  configBaselineText: "config_baseline_text",
   configEnv: "config_env",
   configRename: "config_rename",
   configWrite: "config_write",
@@ -362,6 +364,12 @@ export type ConfigEnv = {
 export interface ConfigIpc {
   scan(root: string, projectRoot: string): Promise<ConfigScan>;
   read(path: string, projectRoot: string): Promise<FileRead>;
+  // Distinguish a missing artifact from an unreadable one. Transaction plans
+  // need this ownership fact to preserve pre-existing empty files.
+  readOptionalText(path: string, projectRoot: string): Promise<string | null>;
+  // Recover the exact pre-onboarding bytes from a guarded sibling backup whose
+  // sha-256 is recorded in the managed MCP entry.
+  baselineText(path: string, expectedHash: string, projectRoot: string): Promise<string>;
   env(): Promise<ConfigEnv>;
 
   // --- Guarded write surface (M10d) ---

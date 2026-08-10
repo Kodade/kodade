@@ -123,6 +123,8 @@ pub fn run() {
             commands::run_git,
             commands::config_scan,
             commands::config_read,
+            commands::config_read_optional_text,
+            commands::config_baseline_text,
             commands::config_env,
             commands::config_rename,
             commands::config_write,

@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 
 import { filesStore, harnessStore, memoryStore } from "../store/appStore";
+import { buildMemoryMcpSetup } from "../memory/mcp-config";
 import { MemoryPane } from "./MemoryPane";
 
 const workspace: MemoryWorkspace = {
@@ -150,7 +151,7 @@ describe("KödMem pane", () => {
       if (command === CMD.memoryListDeleted) return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
       if (command === CMD.memoryGet) return Promise.resolve(decision);
       if (command === CMD.configEnv) {
-        return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
+        return Promise.resolve({ home: "/Users/developer", platform: "mac", appDataRoaming: null, appDataLocal: null });
       }
       if (command === CMD.configRead) return Promise.reject(new Error("missing"));
       throw new Error(`unexpected Tauri command: ${command}`);
@@ -334,7 +335,7 @@ describe("KödMem pane", () => {
   });
 
   it("shows the readable working-memory files and checkpoint provenance", async () => {
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -410,7 +411,7 @@ describe("KödMem pane", () => {
       lastIndexedAt: 10,
       lastCommit: null,
     };
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -520,7 +521,7 @@ describe("KödMem pane", () => {
       }
       if (command === CMD.configEnv) {
         return Promise.resolve({
-          home: "/Users/Keith",
+          home: "/Users/developer",
           platform: "mac",
           appDataRoaming: null,
           appDataLocal: null,
@@ -571,6 +572,70 @@ describe("KödMem pane", () => {
     ).toHaveLength(1);
   });
 
+  it("offers Disconnect when managed config is installed but health is failing", async () => {
+    const setup = buildMemoryMcpSetup({
+      workspaceId: workspace.id,
+      workspaceRoot: workspace.canonicalRoot,
+      binaryPath: "/Applications/Ködade/kodade-mcp",
+      readOnly: false,
+    });
+    if (setup.state !== "ready") throw new Error("fixture setup failed");
+    mockInvoke((command: string, payload?: unknown) => {
+      if (command === CMD.memoryContext) {
+        return Promise.resolve({ workspace, latestCheckpoint: null, pinnedDecisions: [], openTasks: [], recentMemories: [] });
+      }
+      if (command === CMD.memoryAudit || command === CMD.memoryListDeleted) {
+        return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
+      }
+      if (command === CMD.configEnv) {
+        return Promise.resolve({ home: "/Users/developer", platform: "mac", appDataRoaming: null, appDataLocal: null });
+      }
+      if (command === CMD.configRead) {
+        const path = (payload as { path?: string } | undefined)?.path;
+        if (path?.endsWith(".claude.json")) {
+          return Promise.resolve({
+            kind: "text",
+            content: JSON.stringify({
+              projects: {
+                [workspace.canonicalRoot]: {
+                  mcpServers: { [setup.spec("claude").name]: setup.spec("claude").config },
+                },
+              },
+            }),
+          });
+        }
+        return Promise.reject(new Error("missing"));
+      }
+      if (command === CMD.memoryMcpHealth) {
+        return Promise.resolve({
+          ok: false,
+          client: "claude",
+          access: "read-write",
+          workspaceId: workspace.id,
+          projectId: "kodade",
+          stateHash: null,
+          tools: [],
+          stage: "context",
+          message: "mapped context is stale",
+        });
+      }
+      throw new Error(`unexpected Tauri command: ${command}`);
+    });
+
+    await act(async () => {
+      root.render(<MemoryPane workspaceId={workspace.id} />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await expandAgentSetup();
+
+    expect(container.textContent).toContain("configured · unhealthy");
+    expect([...container.querySelectorAll("button")].some(
+      (button) => button.textContent === "disconnect",
+    )).toBe(true);
+  });
+
   it("stages the full onboarding transaction through the shared preview", async () => {
     mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
@@ -580,13 +645,19 @@ describe("KödMem pane", () => {
         return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
       }
       if (command === CMD.configEnv) {
-        return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
+        return Promise.resolve({ home: "/Users/developer", platform: "mac", appDataRoaming: null, appDataLocal: null });
       }
       if (command === CMD.configRead) {
         const path = (payload as { path?: string } | undefined)?.path ?? "";
         if (path.endsWith(".claude.json")) return Promise.resolve({ kind: "text", content: '{ "projects": {} }\n' });
         if (path.endsWith("config.toml")) return Promise.resolve({ kind: "text", content: "" });
         return Promise.resolve({ kind: "text", content: "# Existing\n" });
+      }
+      if (command === CMD.configReadOptionalText) {
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        if (path.endsWith(".claude.json")) return Promise.resolve('{ "projects": {} }\n');
+        if (path.endsWith("config.toml")) return Promise.resolve("");
+        return Promise.resolve("# Existing\n");
       }
       if (command === CMD.configExternalSkillSnapshot) return Promise.reject(new Error("missing"));
       if (command === CMD.configScan) return Promise.resolve({ status: "missing", root: "skills" });
@@ -612,8 +683,8 @@ describe("KödMem pane", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
 
-    expect(invoke).toHaveBeenCalledWith(CMD.configRead, {
-      path: "/Users/Keith/.claude.json",
+    expect(invoke).toHaveBeenCalledWith(CMD.configReadOptionalText, {
+      path: "/Users/developer/.claude.json",
       projectRoot: workspace.canonicalRoot,
     });
     expect(harnessStore.getState().mutationError).toBeNull();
@@ -626,7 +697,7 @@ describe("KödMem pane", () => {
   });
 
   it("keeps a staged KödMCP merge owned by its workspace across an unmount and remount", async () => {
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({ workspace, latestCheckpoint: null, pinnedDecisions: [], openTasks: [], recentMemories: [] });
       }
@@ -634,9 +705,13 @@ describe("KödMem pane", () => {
         return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
       }
       if (command === CMD.configEnv) {
-        return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
+        return Promise.resolve({ home: "/Users/developer", platform: "mac", appDataRoaming: null, appDataLocal: null });
       }
       if (command === CMD.configRead) return Promise.resolve({ kind: "text", content: "" });
+      if (command === CMD.configReadOptionalText) {
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        return Promise.resolve(path.endsWith(".claude.json") ? "{}" : "");
+      }
       if (command === CMD.configExternalSkillSnapshot) return Promise.reject(new Error("missing"));
       if (command === CMD.configScan) return Promise.resolve({ status: "missing", root: "skills" });
       throw new Error(`unexpected Tauri command: ${command}`);

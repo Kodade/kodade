@@ -3,7 +3,8 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use kodade_lib::memory::{
-    MemoryKind, MemorySource, MemoryStore, NewCheckpoint, NewMemory, WorkingMemoryMode,
+    run_mcp_health_with_discovery, MemoryKind, MemorySource, MemoryStore, NewCheckpoint, NewMemory,
+    WorkingMemoryMode,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -180,6 +181,78 @@ fn registered_store() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
         .register_workspace(&workspace, "MCP Fixture", None)
         .expect("register MCP fixture workspace");
     (temp, db, workspace)
+}
+
+#[test]
+fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
+    let temp = tempfile::tempdir().expect("create health fixture");
+    let workspace_root = temp.path().join("workspace");
+    std::fs::create_dir(&workspace_root).expect("create workspace");
+    let workspace_root = std::fs::canonicalize(workspace_root).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    let project = vault.join("10-Projects/health-project");
+    std::fs::create_dir_all(&project).expect("create mapped project");
+    std::fs::write(project.join("Project.md"), "# Health project\n").expect("write project hub");
+    std::fs::write(
+        project.join("STATE.md"),
+        "# State\n\nReady for health verification.\n",
+    )
+    .expect("write state");
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open health store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register projects vault");
+    let registered = store
+        .register_workspace(&workspace_root, "Health fixture", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&registered.id, None, "health-project", "Health project")
+        .expect("map workspace");
+    let workspace = store
+        .workspace(&registered.id)
+        .expect("load registered workspace");
+    drop(store);
+
+    for client in ["claude", "codex"] {
+        for read_only in [true, false] {
+            let discovered_client = std::sync::Mutex::new(None::<String>);
+            let health = run_mcp_health_with_discovery(
+                env!("CARGO_BIN_EXE_kodade-mcp").into(),
+                db.clone(),
+                workspace.clone(),
+                "health-project".into(),
+                client.into(),
+                read_only,
+                |discovered_workspace, discovered| {
+                    assert_eq!(discovered_workspace.id, registered.id);
+                    *discovered_client.lock().expect("record discovery") =
+                        Some(discovered.to_owned());
+                    true
+                },
+            );
+            assert_eq!(
+                discovered_client.into_inner().expect("read discovery"),
+                Some(client.to_owned())
+            );
+            let health = serde_json::to_value(health).expect("serialize health");
+            let serialized = health.to_string();
+            assert!(!serialized.contains(&workspace_root.to_string_lossy().to_string()));
+            assert!(!serialized.contains(&vault.to_string_lossy().to_string()));
+            assert_eq!(health["ok"], true, "{client} health should pass");
+            assert_eq!(health["client"], client);
+            assert_eq!(
+                health["access"],
+                if read_only { "read-only" } else { "read-write" }
+            );
+            assert_eq!(health["projectId"], "health-project");
+            assert_eq!(health["stateHash"].as_str().map(str::len), Some(64));
+            let tools = health["tools"].as_array().expect("health tools");
+            let has_checkpoint = tools.iter().any(|tool| tool == "checkpoint");
+            assert_eq!(has_checkpoint, !read_only);
+        }
+    }
 }
 
 fn file_hash(path: &Path) -> Vec<u8> {

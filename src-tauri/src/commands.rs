@@ -1804,6 +1804,35 @@ pub fn config_read(path: String, project_root: String) -> Result<FileRead, Strin
     fs::read_file(&file.to_string_lossy())
 }
 
+#[tauri::command]
+pub fn config_read_optional_text(
+    path: String,
+    project_root: String,
+) -> Result<Option<String>, String> {
+    let shell = ShellEnvironment::current();
+    let guard = ConfigGuard::new(shell.home(), std::path::Path::new(&project_root));
+    let file = guard.authorize(&path, Access::ReadOptionalFile)?;
+    if !file.exists() {
+        return Ok(None);
+    }
+    match fs::read_file(&file.to_string_lossy())? {
+        FileRead::Text { content } => Ok(Some(content)),
+        _ => Err("config artifact is not readable text".into()),
+    }
+}
+
+#[tauri::command]
+pub fn config_baseline_text(
+    path: String,
+    expected_hash: String,
+    project_root: String,
+) -> Result<String, String> {
+    let shell = ShellEnvironment::current();
+    let guard = ConfigGuard::new(shell.home(), std::path::Path::new(&project_root));
+    let target = guard.authorize(&path, Access::ReadOptionalFile)?;
+    config::baseline_text(&target, &expected_hash)
+}
+
 // The real home dir + OS family, for KödHarness global scope (M10c). A thin
 // getter — all path templating and scan logic stays in TypeScript; this just
 // hands over the facts (ShellEnvironment::home(), build target, and — M10g —

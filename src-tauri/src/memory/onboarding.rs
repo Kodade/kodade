@@ -53,7 +53,31 @@ pub(super) fn run_mcp_health(
     client: String,
     read_only: bool,
 ) -> McpHealth {
-    if !client_discovers_mcp(&workspace, &client) {
+    run_mcp_health_with_discovery(
+        binary,
+        db,
+        workspace,
+        expected_project_id,
+        client,
+        read_only,
+        client_discovers_mcp,
+    )
+}
+
+#[doc(hidden)]
+pub fn run_mcp_health_with_discovery<F>(
+    binary: PathBuf,
+    db: PathBuf,
+    workspace: Workspace,
+    expected_project_id: String,
+    client: String,
+    read_only: bool,
+    discovers: F,
+) -> McpHealth
+where
+    F: FnOnce(&Workspace, &str) -> bool,
+{
+    if !discovers(&workspace, &client) {
         return failed_mcp_health(
             &client,
             read_only,
@@ -248,23 +272,22 @@ pub(super) fn run_mcp_health(
             "KödMCP could not refresh the mapped project context",
         );
     }
-    let state_hash = context
-        .pointer("/projectKnowledge/sources")
-        .and_then(Value::as_array)
-        .and_then(|sources| {
-            sources
-                .iter()
-                .find(|source| source.get("kind").and_then(Value::as_str) == Some("state"))
-        })
-        .and_then(|source| source.get("sha256").and_then(Value::as_str))
-        .map(str::to_owned);
+    let Some(state_hash) = context_state_hash(context) else {
+        return failed_mcp_health(
+            &client,
+            read_only,
+            &workspace.id,
+            "context",
+            "KödMCP did not return the current state hash",
+        );
+    };
     McpHealth {
         ok: true,
         client,
         access: if read_only { "read-only" } else { "read-write" }.into(),
         workspace_id: workspace.id,
         project_id,
-        state_hash,
+        state_hash: Some(state_hash),
         tools,
         stage: "ready".into(),
         message: "KödMCP returned context for this workspace".into(),
@@ -348,6 +371,25 @@ fn context_is_current(context: &Value) -> bool {
         == Some("current")
 }
 
+fn context_state_hash(context: &Value) -> Option<String> {
+    context
+        .pointer("/projectKnowledge/sources")
+        .and_then(Value::as_array)
+        .and_then(|sources| {
+            sources
+                .iter()
+                .find(|source| source.get("kind").and_then(Value::as_str) == Some("state"))
+        })
+        .and_then(|source| source.get("sha256").and_then(Value::as_str))
+        .filter(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +439,29 @@ mod tests {
         assert!(!context_is_current(&json!({
             "projectKnowledge": { "projectId": "kodade", "sync": { "status": "error" } }
         })));
+    }
+
+    #[test]
+    fn health_requires_a_current_state_hash_for_checkpoint_cas() {
+        let hash = "a".repeat(64);
+        let context = json!({
+            "projectKnowledge": {
+                "sources": [
+                    { "kind": "project", "sha256": "b".repeat(64) },
+                    { "kind": "state", "sha256": hash }
+                ]
+            }
+        });
+        assert_eq!(context_state_hash(&context), Some("a".repeat(64)));
+        assert_eq!(
+            context_state_hash(&json!({ "projectKnowledge": { "sources": [] } })),
+            None
+        );
+        assert_eq!(
+            context_state_hash(&json!({
+                "projectKnowledge": { "sources": [{ "kind": "state", "sha256": "NOT-A-HASH" }] }
+            })),
+            None
+        );
     }
 }

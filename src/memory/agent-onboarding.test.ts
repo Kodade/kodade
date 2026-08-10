@@ -15,7 +15,7 @@ import {
 } from "./agent-onboarding";
 
 const ROOT = "/projects/acme.with-dots";
-const HOME = "/Users/keith";
+const HOME = "/Users/developer";
 const INPUT: AgentOnboardingInput = {
   workspaceId: "ws_01HZX3WQ",
   workspaceRoot: ROOT,
@@ -24,6 +24,63 @@ const INPUT: AgentOnboardingInput = {
   platform: "mac",
   access: "read-write",
 };
+
+function exposeInstalledSkills(config: MockConfig, plan: Awaited<ReturnType<typeof buildAgentOnboardingPlan>>) {
+  for (const request of plan.requests.filter((item) => item.request.action === "install-skill")) {
+    const payload = request.request.payload as {
+      targetPath: string;
+      files: { path: string; contents: string; sha256: string }[];
+    };
+    const separator = payload.targetPath.includes("\\") ? "\\" : "/";
+    const container = payload.targetPath.slice(0, payload.targetPath.lastIndexOf(separator));
+    const marker = payload.files.find((file) => file.path === ".kodade-skill.json")!;
+    const markerPath = `${payload.targetPath}${separator}${marker.path}`;
+    config.scans.set(container, {
+      status: "listing",
+      root: container,
+      entries: [{
+        name: "kodmem-project",
+        path: payload.targetPath,
+        isDir: true,
+        isSymlink: false,
+        target: null,
+        orphaned: false,
+        children: [{
+          name: marker.path,
+          path: markerPath,
+          isDir: false,
+          isSymlink: false,
+          target: null,
+          orphaned: false,
+          children: null,
+        }],
+      }],
+    });
+    config.reads.set(markerPath, { kind: "text", content: marker.contents });
+  }
+}
+
+async function applyPlan(
+  config: MockConfig,
+  input: AgentOnboardingInput,
+  action: "connect" | "remove",
+) {
+  const plan = await buildAgentOnboardingPlan(config, input, action);
+  const store = createHarnessStore({
+    config,
+    adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+    hasFeature: () => true,
+  });
+  await store.getState().prepareBatch(
+    plan.requests,
+    `${action} agents`,
+    { surface: "memory", scopeId: input.workspaceId },
+    action === "connect" ? async () => ({ ok: true }) : undefined,
+  );
+  await store.getState().confirmPendingChange();
+  expect(store.getState().mutationError).toBeNull();
+  return plan;
+}
 
 describe("managed KödMem instruction blocks", () => {
   it("inserts, updates, and removes only its exact block", () => {
@@ -63,6 +120,57 @@ describe("managed KödMem instruction blocks", () => {
 });
 
 describe("buildAgentOnboardingPlan", () => {
+  it.each([
+    {
+      name: "macOS files that were absent",
+      input: INPUT,
+      initial: new Map<string, string>(),
+    },
+    {
+      name: "Windows files and empty structures that already existed",
+      input: {
+        ...INPUT,
+        workspaceRoot: "C:\\Work\\Acme",
+        home: "C:\\Users\\Developer",
+        binaryPath: "C:\\Program Files\\Kodade\\kodade-mcp.exe",
+        platform: "windows" as const,
+      },
+      initial: new Map<string, string>([
+        ["C:\\Work\\Acme\\AGENTS.md", ""],
+        ["C:\\Work\\Acme\\CLAUDE.md", "# Claude\r\n"],
+        ["C:\\Users\\Developer\\.claude.json", '{ "projects": {} }\r\n'],
+        ["C:\\Users\\Developer\\.codex\\config.toml", "# existing\r\n"],
+      ]),
+    },
+  ])("restores the exact initial onboarding tree after connect and disconnect: $name", async ({ input, initial }) => {
+    const config = new MockConfig();
+    for (const [path, content] of initial) {
+      config.reads.set(path, { kind: "text", content });
+    }
+
+    const connected = await applyPlan(config, input, "connect");
+    exposeInstalledSkills(config, connected);
+    await applyPlan(config, input, "remove");
+
+    const artifactPaths = [
+      input.platform === "windows" ? `${input.workspaceRoot}\\AGENTS.md` : `${input.workspaceRoot}/AGENTS.md`,
+      input.platform === "windows" ? `${input.workspaceRoot}\\CLAUDE.md` : `${input.workspaceRoot}/CLAUDE.md`,
+      input.platform === "windows" ? `${input.home}\\.claude.json` : `${input.home}/.claude.json`,
+      input.platform === "windows" ? `${input.home}\\.codex\\config.toml` : `${input.home}/.codex/config.toml`,
+    ];
+    expect(new Map(artifactPaths.flatMap((path) => {
+      const read = config.reads.get(path);
+      return read?.kind === "text" ? [[path, read.content] as const] : [];
+    }))).toEqual(initial);
+    for (const request of connected.requests.filter((item) => item.request.action === "install-skill")) {
+      const targetPath = (request.request.payload as { targetPath: string }).targetPath;
+      await expect(config.dirSnapshot(targetPath, input.workspaceRoot)).resolves.toEqual({
+        status: "missing",
+        path: targetPath,
+      });
+    }
+  });
+
   it("previews skill, instructions, and both client configs as one ordered transaction", async () => {
     const config = new MockConfig();
     config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Agents\n" });
@@ -250,6 +358,92 @@ describe("buildAgentOnboardingPlan", () => {
     expect(config.installDirCalls).toEqual([]);
     expect(config.writeCalls).toEqual([]);
   });
+
+  it.each(["connect", "remove"] as const)(
+    "refuses an existing drifted MCP entry before staging a %s transaction",
+    async (action) => {
+      const config = new MockConfig();
+      config.reads.set(`${HOME}/.claude.json`, {
+        kind: "text",
+        content: JSON.stringify({
+          projects: {
+            [ROOT]: {
+              mcpServers: {
+                "kodade-mem": {
+                  command: INPUT.binaryPath,
+                  args: ["--workspace", "/another/project", "--client", "claude"],
+                },
+              },
+            },
+          },
+        }),
+      });
+
+      await expect(buildAgentOnboardingPlan(config, INPUT, action)).rejects.toThrow(
+        /KödMCP entry drifted.*before retrying/i,
+      );
+      expect(config.writeCalls).toEqual([]);
+      expect(config.installDirCalls).toEqual([]);
+    },
+  );
+
+  it.each(["connect", "remove"] as const)(
+    "refuses an unreadable MCP config before staging a %s transaction",
+    async (action) => {
+      const config = new MockConfig();
+      config.reads.set(`${HOME}/.claude.json`, {
+        kind: "text",
+        content: "{ not valid JSON",
+      });
+
+      await expect(buildAgentOnboardingPlan(config, INPUT, action)).rejects.toThrow(
+        /MCP config is unreadable.*no onboarding changes were staged/i,
+      );
+      expect(config.writeCalls).toEqual([]);
+      expect(config.installDirCalls).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["connect", "modified"],
+    ["connect", "unreadable"],
+    ["remove", "modified"],
+    ["remove", "unreadable"],
+  ] as const)(
+    "refuses %s when a Ködade-owned project skill is %s",
+    async (action, condition) => {
+      const config = new MockConfig();
+      const connected = await buildAgentOnboardingPlan(config, INPUT, "connect");
+      exposeInstalledSkills(config, connected);
+      const install = connected.requests.find((item) => item.request.action === "install-skill")!;
+      const payload = install.request.payload as {
+        targetPath: string;
+        files: { path: string; sha256: string }[];
+      };
+      const separator = payload.targetPath.includes("\\") ? "\\" : "/";
+      const container = payload.targetPath.slice(0, payload.targetPath.lastIndexOf(separator));
+      if (condition === "unreadable") {
+        config.scans.set(container, {
+          status: "unreadable",
+          root: container,
+          error: "permission denied",
+        });
+      } else {
+        config.dirSnapshots.set(payload.targetPath, {
+          status: "snapshot",
+          path: payload.targetPath,
+          files: payload.files.map((file) => ({
+            path: file.path,
+            sha256: file.path === "SKILL.md" ? "locally-modified" : file.sha256,
+          })),
+        });
+      }
+
+      await expect(buildAgentOnboardingPlan(config, INPUT, action)).rejects.toThrow(
+        /project skill cannot be managed/i,
+      );
+    },
+  );
 
   it("removes a clean managed project copy when an exact global skill now supersedes it", async () => {
     const config = new MockConfig();

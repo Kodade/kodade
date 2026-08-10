@@ -71,6 +71,7 @@ export type ConfigChange = {
   // An existing MCP entry is only updated after the merge layer proves it uses
   // the same Ködade command path; the preview must distinguish that from adding.
   mcpOperation?: "add" | "update" | "remove";
+  fileOperation?: "write" | "remove";
   // M10d: the guarded config IPC authorizes writes per project root, so a change
   // carries it end-to-end (apply/verify/restore all call guarded commands). The
   // plan sketch predated the per-call projectRoot allowlist.
@@ -114,9 +115,16 @@ export type VerifyResult = { ok: true } | { ok: false; reason: string };
 export type InstructionEditPayload = {
   path: string;
   newText: string;
+  format?: "markdown" | "json" | "jsonc" | "toml";
   // Optional plan-time ownership guard. Managed workflows use this to refuse
   // replacing instruction bytes that drifted before preview construction.
   expectedText?: string;
+};
+
+export type RemoveFilePayload = {
+  path: string;
+  expectedText: string;
+  format: "markdown" | "json" | "jsonc" | "toml";
 };
 
 // Payload for action "add-mcp-server" (M10e): which config file to merge into
@@ -129,6 +137,8 @@ export type McpServerPayload = {
   format: "json" | "jsonc" | "toml";
   keyPath: McpKeyPath;
   server: { name: string; config: Record<string, unknown> };
+  expectedText?: string;
+  expectedMissing?: boolean;
 };
 
 export type AddMcpServerPayload = McpServerPayload;
@@ -151,6 +161,7 @@ export type HarnessChangeRequest = {
     | "enable"
     | "disable"
     | "edit"
+    | "remove-file"
     | "add-mcp-server"
     | "remove-mcp-server"
     | "install-skill"
@@ -158,7 +169,7 @@ export type HarnessChangeRequest = {
     | "remove-skill";
   projectRoot: string;
   artifact?: HarnessArtifact;
-  payload?: InstructionEditPayload | AddMcpServerPayload | unknown;
+  payload?: InstructionEditPayload | RemoveFilePayload | AddMcpServerPayload | unknown;
 };
 
 // The contract every CLI adapter satisfies. detect/scan are the read half
