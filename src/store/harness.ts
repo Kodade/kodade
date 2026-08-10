@@ -120,6 +120,10 @@ async function stageBatch(
       });
     }
     const first = items[0];
+    if (!first) {
+      setState({ pendingChange: null, preparing: false });
+      return;
+    }
     setState({
       pendingChange: {
         cli: first.cli,

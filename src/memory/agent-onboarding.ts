@@ -33,6 +33,31 @@ ${KODMEM_BLOCK_END}`;
 
 const MANAGED_MARKER = /<!--\s*kodade:kodmem-project:[^>]+-->/g;
 
+type ManagedBlock = { start: number; after: number; eol: "\n" | "\r\n" };
+
+function managedBlock(text: string): ManagedBlock | null {
+  const markers = [...text.matchAll(MANAGED_MARKER)].map((match) => match[0]);
+  if (markers.length === 0) return null;
+  const start = text.indexOf(KODMEM_BLOCK_START);
+  const end = text.indexOf(KODMEM_BLOCK_END);
+  const after = end + KODMEM_BLOCK_END.length;
+  const blockText = start >= 0 && end >= start ? text.slice(start, after) : "";
+  const eol = blockText.includes("\r\n") ? "\r\n" : "\n";
+  if (
+    markers.length !== 2 ||
+    markers[0] !== KODMEM_BLOCK_START ||
+    markers[1] !== KODMEM_BLOCK_END ||
+    start < 0 ||
+    end < start ||
+    text.indexOf(KODMEM_BLOCK_START, start + 1) >= 0 ||
+    text.indexOf(KODMEM_BLOCK_END, end + 1) >= 0 ||
+    (text.slice(after) !== "" && text.slice(after) !== eol)
+  ) {
+    throw new Error("the KödMem instruction block is malformed or uses an unsupported version");
+  }
+  return { start, after, eol };
+}
+
 export type OnboardingAccess = "read-only" | "read-write";
 export type OnboardingAction = "connect" | "remove";
 
@@ -54,45 +79,31 @@ export type AgentOnboardingPlan = {
 };
 
 export function ensureKodmemBlock(text: string, body: string): string {
-  const markers = [...text.matchAll(MANAGED_MARKER)].map((match) => match[0]);
-  const start = text.indexOf(KODMEM_BLOCK_START);
-  const end = text.indexOf(KODMEM_BLOCK_END);
-  if (markers.length === 0) {
-    const base = text.trimEnd();
-    return `${base}${base ? "\n\n" : ""}${body}\n`;
+  const existing = managedBlock(text);
+  if (!existing) {
+    const eol = text.includes("\r\n") ? "\r\n" : "\n";
+    const rendered = body.replaceAll("\r\n", "\n").replaceAll("\n", eol);
+    return `${text}${text ? eol : ""}${rendered}${eol}`;
   }
-  if (
-    markers.length !== 2 ||
-    markers[0] !== KODMEM_BLOCK_START ||
-    markers[1] !== KODMEM_BLOCK_END ||
-    start < 0 ||
-    end < start ||
-    text.indexOf(KODMEM_BLOCK_START, start + 1) >= 0 ||
-    text.indexOf(KODMEM_BLOCK_END, end + 1) >= 0
-  ) {
-    throw new Error("the KödMem instruction block is malformed or uses an unsupported version");
+  const rendered = body.replaceAll("\r\n", "\n").replaceAll("\n", existing.eol);
+  if (text.slice(existing.start, existing.after) !== rendered) {
+    throw new Error("the managed KödMem instruction block differs from Ködade's contract");
   }
-  const after = end + KODMEM_BLOCK_END.length;
-  return `${text.slice(0, start)}${body}${text.slice(after)}`;
+  return `${text.slice(0, existing.start)}${rendered}${text.slice(existing.after)}`;
 }
 
-export function removeKodmemBlock(text: string): string {
-  const markers = [...text.matchAll(MANAGED_MARKER)].map((match) => match[0]);
-  if (markers.length === 0) return text;
-  const start = text.indexOf(KODMEM_BLOCK_START);
-  const end = text.indexOf(KODMEM_BLOCK_END);
-  if (
-    markers.length !== 2 ||
-    markers[0] !== KODMEM_BLOCK_START ||
-    markers[1] !== KODMEM_BLOCK_END ||
-    start < 0 ||
-    end < start
-  ) {
+export function removeKodmemBlock(text: string, body: string): string {
+  const existing = managedBlock(text);
+  if (!existing) return text;
+  const rendered = body.replaceAll("\r\n", "\n").replaceAll("\n", existing.eol);
+  if (text.slice(existing.start, existing.after) !== rendered) {
+    throw new Error("the managed KödMem instruction block differs from Ködade's contract");
+  }
+  const prefix = text.slice(0, existing.start);
+  if (prefix && !prefix.endsWith(existing.eol)) {
     throw new Error("the KödMem instruction block is malformed or uses an unsupported version");
   }
-  const after = end + KODMEM_BLOCK_END.length;
-  const joined = `${text.slice(0, start).trimEnd()}\n\n${text.slice(after).trimStart()}`.trim();
-  return joined ? `${joined}\n` : "";
+  return prefix ? prefix.slice(0, -existing.eol.length) : "";
 }
 
 function sourceBundle(): ProjectSkillSourceBundle {
@@ -130,15 +141,20 @@ async function externalSkillState(
   const result = {} as Record<MemoryMcpClient, "external" | "missing" | "conflict">;
   for (const client of ["claude", "codex"] as const) {
     result[client] = "missing";
+    let foundExact = false;
     for (const candidate of candidates[client]) {
       try {
         const snapshot = await config.externalSkillSnapshot(candidate, input.workspaceRoot);
-        result[client] = sameHashes(snapshot, expected) ? "external" : "conflict";
-        break;
+        if (!sameHashes(snapshot, expected)) {
+          result[client] = "conflict";
+          break;
+        }
+        foundExact = true;
       } catch {
         // An absent/non-symlink candidate is not an externally managed skill.
       }
     }
+    if (result[client] !== "conflict" && foundExact) result[client] = "external";
   }
   return result;
 }
@@ -167,20 +183,24 @@ function instructionRequest(
       artifactId: `${cli}:project:instruction:kodmem-project`,
       action: "edit",
       projectRoot: root,
-      payload: { path, newText: after },
+      payload: { path, newText: after, expectedText: before },
     },
   };
 }
 
-function mcpTarget(input: AgentOnboardingInput, client: MemoryMcpClient) {
+export function memoryMcpTarget(
+  home: string,
+  workspaceRoot: string,
+  client: MemoryMcpClient,
+) {
   return client === "claude"
     ? {
-        path: nativeJoin(input.home, ".claude.json"),
+        path: nativeJoin(home, ".claude.json"),
         format: "json" as const,
-        keyPath: ["projects", input.workspaceRoot, "mcpServers"] as const,
+        keyPath: ["projects", workspaceRoot, "mcpServers"] as const,
       }
     : {
-        path: join(input.home, ".codex", "config.toml"),
+        path: join(home, ".codex", "config.toml"),
         format: "toml" as const,
         keyPath: "mcp_servers" as const,
       };
@@ -280,21 +300,21 @@ export async function buildAgentOnboardingPlan(
       "codex",
       agentsPath,
       agentsBefore,
-      action === "connect" ? ensureKodmemBlock(agentsBefore, AGENTS_BLOCK) : removeKodmemBlock(agentsBefore),
+      action === "connect" ? ensureKodmemBlock(agentsBefore, AGENTS_BLOCK) : removeKodmemBlock(agentsBefore, AGENTS_BLOCK),
       input.workspaceRoot,
     ),
     instructionRequest(
       "claude",
       claudePath,
       claudeBefore,
-      action === "connect" ? ensureKodmemBlock(claudeBefore, CLAUDE_BLOCK) : removeKodmemBlock(claudeBefore),
+      action === "connect" ? ensureKodmemBlock(claudeBefore, CLAUDE_BLOCK) : removeKodmemBlock(claudeBefore, CLAUDE_BLOCK),
       input.workspaceRoot,
     ),
   ].filter((request): request is PlannedBatchRequest => request !== null);
 
   const mcpRequests: PlannedBatchRequest[] = [];
   for (const client of ["claude", "codex"] as const) {
-    const target = mcpTarget(input, client);
+    const target = memoryMcpTarget(input.home, input.workspaceRoot, client);
     let spec = setup.spec(client);
     const before = await readText(config, target.path, input.workspaceRoot);
     if (action === "connect" && before && memoryMcpConfigMatches(before, target.format, target.keyPath, spec)) {

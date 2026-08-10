@@ -658,7 +658,7 @@ describe("HarnessPane", () => {
 
     const dialog = container!.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
-    expect(dialog!.textContent).toContain("2 KödSkills changes");
+    expect(dialog!.textContent).toContain("2 changes as one reversible batch");
     expect(button("apply batch")).toBeDefined();
     expect(config.installDirCalls).toEqual([]); // confirmation is still plan-only
   });

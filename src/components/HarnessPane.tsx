@@ -705,7 +705,7 @@ function BatchSummary({
   return (
     <>
       <p className="text-text">
-        kodade will apply {items.length} KödSkills changes as one reversible batch.
+        Ködade will apply {items.length} changes as one reversible batch.
       </p>
       <div className="mt-2 max-h-80 space-y-2 overflow-auto">
         {items.map((item, index) => (
@@ -718,7 +718,7 @@ function BatchSummary({
         ))}
       </div>
       <p className="mt-2 text-text-dim">
-        each directory is verified; any failure restores already-applied changes in reverse order.
+        Each change is verified; any failure restores already-applied changes in reverse order.
       </p>
     </>
   );

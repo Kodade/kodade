@@ -114,6 +114,9 @@ export type VerifyResult = { ok: true } | { ok: false; reason: string };
 export type InstructionEditPayload = {
   path: string;
   newText: string;
+  // Optional plan-time ownership guard. Managed workflows use this to refuse
+  // replacing instruction bytes that drifted before preview construction.
+  expectedText?: string;
 };
 
 // Payload for action "add-mcp-server" (M10e): which config file to merge into

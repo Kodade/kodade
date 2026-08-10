@@ -22,8 +22,10 @@ import {
   memoryMcpConfigMatches,
   type MemoryMcpClient,
 } from "../memory/mcp-config";
-import { buildAgentOnboardingPlan } from "../memory/agent-onboarding";
-import { KODMEM_LOG_WORK_SKILL } from "../memory/log-work-skill";
+import {
+  buildAgentOnboardingPlan,
+  memoryMcpTarget,
+} from "../memory/agent-onboarding";
 import {
   buildDelegateMcpSetup,
   claudeDelegateMcpSnippet,
@@ -80,7 +82,6 @@ export function MemoryPane({
   const [showAgentSetup, setShowAgentSetup] = useState(false);
   const [workingMode, setWorkingMode] = useState<WorkingMemoryMode>("commit");
   const [exportExisting, setExportExisting] = useState(true);
-  const [skillSetupError, setSkillSetupError] = useState<string | null>(null);
   useEffect(() => {
     if (workspace?.id !== workspaceId) void memoryStore.getState().load(workspaceId);
   }, [workspace?.id, workspaceId]);
@@ -136,7 +137,6 @@ export function MemoryPane({
       .activateWorking(workingMode, exportExisting);
     if (activated) {
       await establishCommitBaseline(workspace);
-      setSkillSetupError(await prepareLogWorkSkill(workspace));
     }
   };
 
@@ -364,16 +364,6 @@ export function MemoryPane({
                   >
                     sync
                   </button>
-                  <button
-                    className="memory-action"
-                    disabled={saving}
-                    type="button"
-                    onClick={() =>
-                      void prepareLogWorkSkill(workspace).then(setSkillSetupError)
-                    }
-                  >
-                    install log-work skill
-                  </button>
                 </div>
               </>
             ) : (
@@ -410,11 +400,6 @@ export function MemoryPane({
                   activate working memory
                 </button>
               </div>
-            )}
-            {skillSetupError && (
-              <p role="alert" className="mt-2 text-[11px] text-[var(--kd-error)]">
-                {skillSetupError}
-              </p>
             )}
           </section>
 
@@ -694,22 +679,20 @@ function ConnectAgentsSection({
   const refreshConnections = async () => {
     if (setup.state !== "ready") return;
     setConnections({ claude: "checking", codex: "checking" });
-    const env = await configIpc.env();
+    const env = await configIpc.env().catch(() => null);
+    if (!env) {
+      setConnections({ claude: "not-connected", codex: "not-connected" });
+      return;
+    }
     setConfigHome(env.home);
     const checked = await Promise.all(
       MCP_CLIENTS.map(async (client) => {
         try {
-          const target = client.id === "claude"
-            ? {
-                path: nativeJoin(env.home, ".claude.json"),
-                format: "json" as const,
-                keyPath: ["projects", workspace.canonicalRoot, "mcpServers"] as const,
-              }
-            : {
-                path: nativeJoin(nativeJoin(env.home, ".codex"), "config.toml"),
-                format: "toml" as const,
-                keyPath: "mcp_servers" as const,
-              };
+          const target = memoryMcpTarget(
+            env.home,
+            workspace.canonicalRoot,
+            client.id,
+          );
           const read = await configIpc.read(
             target.path,
             workspace.canonicalRoot,
@@ -1262,24 +1245,6 @@ function workspaceRetention(workspace: MemoryWorkspace, capturePaused: boolean):
     auditDays: workspace.auditRetentionDays,
     tombstoneDays: workspace.tombstoneRetentionDays,
   };
-}
-
-async function prepareLogWorkSkill(workspace: MemoryWorkspace): Promise<string | null> {
-  const harness = harnessStore.getState();
-  if (harness.pendingChange) return "Finish the pending KödHarness change first.";
-  await harness.loadProjectSkill(
-    KODMEM_LOG_WORK_SKILL,
-    workspace.canonicalRoot,
-    ["claude", "codex"],
-  );
-  const loaded = harnessStore.getState();
-  const model = loaded.projectSkill;
-  if (!model) return loaded.projectSkillError ?? "Could not inspect log-work skill targets.";
-  const owner: PendingChangeOwner = { surface: "memory", scopeId: workspace.id };
-  await harnessStore
-    .getState()
-    .prepareProjectSkillReconcile(workspace.canonicalRoot, owner);
-  return harnessStore.getState().mutationError;
 }
 
 async function establishCommitBaseline(workspace: MemoryWorkspace) {

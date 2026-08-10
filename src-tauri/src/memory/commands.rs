@@ -86,13 +86,7 @@ pub async fn memory_mcp_health(
     read_only: bool,
 ) -> Result<McpHealth, String> {
     if client != "claude" && client != "codex" {
-        return Ok(failed_mcp_health(
-            &client,
-            read_only,
-            &workspace_id,
-            "request",
-            "unsupported agent client",
-        ));
+        return Err("unsupported agent client".into());
     }
     let (workspace, expected_project_id) = match run_memory(app.clone(), {
         let workspace_id = workspace_id.clone();
@@ -147,7 +141,8 @@ pub async fn memory_mcp_health(
             ))
         }
     };
-    let db = database_path(&app)?;
+    let db = database_path(&app)
+        .map_err(|_| "the KödMem database location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         run_mcp_health(
             binary,

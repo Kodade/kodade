@@ -79,8 +79,8 @@ The Memory pane's **Connect agents** setup prepares Claude Code and Codex in one
 reviewable transaction. It installs the versioned `kodmem-project` workflow for
 the current project (or reuses an exact externally managed copy), adds bounded
 managed blocks to `AGENTS.md` and `CLAUDE.md`, and registers the bundled KödMCP
-helper in each agent's machine-local configuration. Existing config entries and
-instruction text remain untouched.
+helper in each agent's machine-local configuration. Existing unrelated config
+entries and instruction text remain untouched.
 
 The user chooses read-only or read-write access before reviewing the batch. An
 apply is complete only after both agent CLIs discover the connection and a fresh

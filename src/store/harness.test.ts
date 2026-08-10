@@ -572,6 +572,20 @@ describe("harness store mutation (M10d)", () => {
 });
 
 describe("harness store KödSkills batches (M15)", () => {
+  it("treats an empty idempotent batch as already complete", async () => {
+    const store = createHarnessStore({ config: new MockConfig(), adapters: [] });
+
+    await store.getState().prepareBatch(
+      [],
+      "no changes",
+      { surface: "memory", scopeId: "ws_1" },
+    );
+
+    expect(store.getState().pendingChange).toBeNull();
+    expect(store.getState().preparing).toBe(false);
+    expect(store.getState().mutationError).toBeNull();
+  });
+
   it("rolls every receipt back when post-apply health verification fails", async () => {
     const config = new MockConfig();
     const change: ConfigChange = {

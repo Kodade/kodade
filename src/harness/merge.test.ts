@@ -383,6 +383,18 @@ describe("managed MCP removal and nested Claude config", () => {
     expect(parsed.projects["/projects/acme.with-dots"].mcpServers[spec.name]).toEqual(spec.config);
   });
 
+  it("redacts a machine-specific workspace segment from nested merge errors", () => {
+    const keyPath = ["projects", "/projects/acme.with-dots", "mcpServers"] as const;
+    let message = "";
+    try {
+      mergeMcpServer('{ "projects": "invalid" }', "json", keyPath, spec);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("projects.<workspace>.mcpServers");
+    expect(message).not.toContain("/projects/acme.with-dots");
+  });
+
   it("removes only the exact nested managed entry", () => {
     const keyPath = ["projects", "/projects/acme.with-dots", "mcpServers"] as const;
     const before = JSON.stringify({
@@ -411,6 +423,7 @@ describe("managed MCP removal and nested Claude config", () => {
       'command = "/Applications/Kodade/kodade-mcp"',
       'args = [ "--workspace", "/projects/acme", "--client", "codex" ]',
       "",
+      "# User-owned GitHub connection",
       "[mcp_servers.github]",
       'command = "gh-mcp"',
       "",
@@ -426,6 +439,7 @@ describe("managed MCP removal and nested Claude config", () => {
 
     expect(removed.after).not.toContain("kodade-mem-workspace");
     expect(removed.after).toContain("[mcp_servers.github]\r\n");
+    expect(removed.after).toContain("# User-owned GitHub connection\r\n");
     expect(removed.after).not.toMatch(/[^\r]\n/);
   });
 

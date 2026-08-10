@@ -239,6 +239,15 @@ pub(super) fn run_mcp_health(
             "KödMCP returned context for another logical project",
         );
     }
+    if !context_is_current(context) {
+        return failed_mcp_health(
+            &client,
+            read_only,
+            &workspace.id,
+            "context",
+            "KödMCP could not refresh the mapped project context",
+        );
+    }
     let state_hash = context
         .pointer("/projectKnowledge/sources")
         .and_then(Value::as_array)
@@ -332,6 +341,13 @@ fn context_project_id(context: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn context_is_current(context: &Value) -> bool {
+    context
+        .pointer("/projectKnowledge/sync/status")
+        .and_then(Value::as_str)
+        == Some("current")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,12 +383,19 @@ mod tests {
     fn health_reads_only_the_returned_logical_project_identity() {
         let context = json!({
             "workspace": { "id": "ws_01" },
-            "projectKnowledge": { "projectId": "kodade" }
+            "projectKnowledge": {
+                "projectId": "kodade",
+                "sync": { "status": "current" }
+            }
         });
         assert_eq!(context_project_id(&context).as_deref(), Some("kodade"));
+        assert!(context_is_current(&context));
         assert_eq!(
             context_project_id(&json!({ "workspace": { "id": "ws_01" } })),
             None
         );
+        assert!(!context_is_current(&json!({
+            "projectKnowledge": { "projectId": "kodade", "sync": { "status": "error" } }
+        })));
     }
 }

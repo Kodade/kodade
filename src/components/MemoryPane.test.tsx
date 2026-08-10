@@ -618,7 +618,7 @@ describe("KödMem pane", () => {
     });
     expect(harnessStore.getState().mutationError).toBeNull();
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(container.textContent).toContain("apply 6 KödSkills changes as one reversible batch");
+    expect(container.textContent).toContain("apply 6 changes as one reversible batch");
     expect(container.textContent).toContain("configure KödMCP for claude");
     expect(container.textContent).toContain("configure KödMCP for codex");
 

@@ -370,6 +370,9 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
   const current = await readText(config, payload.path, change.projectRoot);
   const before = current ?? "";
   const isNewFile = current === null;
+  if (payload.expectedText !== undefined && before !== payload.expectedText) {
+    throw new Error("instructions changed while Ködade was preparing the preview; review again");
+  }
   if (before === payload.newText) {
     throw new Error("no changes to save");
   }

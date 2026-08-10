@@ -205,7 +205,7 @@ function updateTomlServer(
   const headerIndex = lines.findIndex((line) => line.replace(/\r?\n$/, "").trim() === header);
   if (headerIndex < 0) {
     throw new Error(
-      `refusing to update "${keyPath}.${name}": the existing Ködade server is not a standalone TOML table`,
+      `refusing to update "${displayKeyPath(keyPath)}.${name}": the existing Ködade server is not a standalone TOML table`,
     );
   }
   const nextTable = lines.findIndex((line, index) => {
@@ -213,7 +213,7 @@ function updateTomlServer(
     const trimmed = line.replace(/\r?\n$/, "").trim();
     return trimmed.startsWith("[") && !trimmed.startsWith(descendantPrefix);
   });
-  const end = nextTable < 0 ? before.length : starts[nextTable];
+  const end = starts[preservedTomlSuffixStart(lines, headerIndex, nextTable)] ?? before.length;
   const eol = before.includes("\r\n") ? "\r\n" : "\n";
   const block = stringifyToml(nestByPath(keyPath, name, config)).trimEnd().replace(/\n/g, eol);
   return `${before.slice(0, starts[headerIndex])}${block}${eol}${before.slice(end)}`;
@@ -238,13 +238,30 @@ function removeTomlServer(before: string, keyPath: McpKeyPath, name: string): st
     return trimmed.startsWith("[") && !trimmed.startsWith(descendantPrefix);
   });
   const start = starts[headerIndex];
-  const end = nextTable < 0 ? before.length : starts[nextTable];
+  const end = starts[preservedTomlSuffixStart(lines, headerIndex, nextTable)] ?? before.length;
   const left = before.slice(0, start).replace(/[ \t]*(?:\r?\n)?$/, "");
   const right = before.slice(end).replace(/^(?:\r?\n)?/, "");
   if (!left) return right;
   if (!right) return `${left}${before.includes("\r\n") ? "\r\n" : "\n"}`;
   const eol = before.includes("\r\n") ? "\r\n" : "\n";
   return `${left}${eol}${eol}${right}`;
+}
+
+// Comments and blank lines immediately before the next table may document that
+// neighbor. Keep them byte-for-byte instead of treating them as part of the
+// managed server block merely because TOML has no explicit table terminator.
+function preservedTomlSuffixStart(
+  lines: readonly string[],
+  headerIndex: number,
+  nextTable: number,
+): number {
+  let index = nextTable < 0 ? lines.length : nextTable;
+  while (index > headerIndex + 1) {
+    const trimmed = lines[index - 1].replace(/\r?\n$/, "").trim();
+    if (trimmed !== "" && !trimmed.startsWith("#")) break;
+    index--;
+  }
+  return index;
 }
 
 // --- The single-key-changed invariant ---
@@ -274,7 +291,7 @@ function assertSingleServerAdded(
   } catch (error) {
     if (format === "toml") {
       throw new Error(
-        `refusing to write: "${keyPath}" is likely defined as an inline TOML table in this file, which cannot be extended with a "[${keyPath}.${name}]" header — edit the file directly to convert it to table headers first (${errText(error)})`,
+        `refusing to write: "${displayKeyPath(keyPath)}" is likely defined as an inline TOML table in this file, which cannot be extended with a "[${displayKeyPath(keyPath)}.${name}]" header — edit the file directly to convert it to table headers first (${errText(error)})`,
       );
     }
     throw error;
@@ -303,7 +320,7 @@ function assertSingleServerAdded(
   }
   // Nothing OUTSIDE the server map may change (other top-level tables/keys).
   if (!deepEqual(withoutKey(rootBefore, keyPath), withoutKey(rootAfter, keyPath))) {
-    throw new Error(`refusing to write: merge changed config outside "${keyPath}"`);
+    throw new Error(`refusing to write: merge changed config outside "${displayKeyPath(keyPath)}"`);
   }
 }
 
@@ -326,7 +343,7 @@ function assertSingleServerUpdated(
     beforeKeys.length !== afterKeys.length ||
     beforeKeys.some((key) => !Object.prototype.hasOwnProperty.call(mapAfter, key))
   ) {
-    throw new Error(`refusing to write: update changed the server key set under "${keyPath}"`);
+    throw new Error(`refusing to write: update changed the server key set under "${displayKeyPath(keyPath)}"`);
   }
   if (!deepEqual(mapAfter[name], config)) {
     throw new Error(`refusing to write: update did not produce the requested server config for "${name}"`);
@@ -337,7 +354,7 @@ function assertSingleServerUpdated(
     }
   }
   if (!deepEqual(withoutKey(rootBefore, keyPath), withoutKey(rootAfter, keyPath))) {
-    throw new Error(`refusing to write: update changed config outside "${keyPath}"`);
+    throw new Error(`refusing to write: update changed config outside "${displayKeyPath(keyPath)}"`);
   }
 }
 
@@ -413,14 +430,14 @@ function assertKeyPathIsObjectOrAbsent(root: unknown, keyPath: McpKeyPath, forma
     if (node === undefined || node === null) return; // absent — will be created
     if (!isObject(node)) {
       throw new Error(
-        `refusing to write: "${keyPath}" is not an object in this ${format.toUpperCase()} config — cannot add a server under it`,
+        `refusing to write: "${displayKeyPath(keyPath)}" is not an object in this ${format.toUpperCase()} config — cannot add a server under it`,
       );
     }
     node = node[segment];
   }
   if (node !== undefined && !isObject(node)) {
     throw new Error(
-      `refusing to write: "${keyPath}" is not an object in this ${format.toUpperCase()} config — cannot add a server under it`,
+      `refusing to write: "${displayKeyPath(keyPath)}" is not an object in this ${format.toUpperCase()} config — cannot add a server under it`,
     );
   }
 }

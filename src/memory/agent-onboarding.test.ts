@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createClaudeAdapter } from "../harness/adapters/claude";
+import { createCodexAdapter } from "../harness/adapters/codex";
 import { MockConfig } from "../ipc/mock";
 import { parseByFormat } from "../harness/merge";
+import { createHarnessStore } from "../store/harness";
 import { buildMemoryMcpSetup } from "./mcp-config";
 import {
   buildAgentOnboardingPlan,
@@ -28,16 +31,34 @@ describe("managed KödMem instruction blocks", () => {
     const inserted = ensureKodmemBlock("# Existing\n", body);
     expect(inserted).toBe(`# Existing\n\n${body}\n`);
     expect(ensureKodmemBlock(inserted, body)).toBe(inserted);
-    expect(removeKodmemBlock(inserted)).toBe("# Existing\n");
+    expect(removeKodmemBlock(inserted, body)).toBe("# Existing\n");
+  });
+
+  it("round-trips unrelated instruction bytes including CRLF and trailing whitespace", () => {
+    const body = `${KODMEM_BLOCK_START}\nmanaged v1\n${KODMEM_BLOCK_END}`;
+    for (const existing of [
+      "# Existing",
+      "# Existing\n",
+      "  # Existing  \n\n",
+      "# Existing\r\n",
+    ]) {
+      const inserted = ensureKodmemBlock(existing, body);
+      expect(removeKodmemBlock(inserted, body)).toBe(existing);
+      expect(ensureKodmemBlock(inserted, body)).toBe(inserted);
+    }
   });
 
   it("refuses malformed, duplicated, or unknown managed markers", () => {
     expect(() => ensureKodmemBlock(`${KODMEM_BLOCK_START}\nmissing end`, "x")).toThrow(/malformed/);
-    expect(() => removeKodmemBlock("<!-- kodade:kodmem-project:v2:start -->\nx")).toThrow(/unsupported/);
+    expect(() => removeKodmemBlock("<!-- kodade:kodmem-project:v2:start -->\nx", "x")).toThrow(/unsupported/);
     expect(() => ensureKodmemBlock(
       `${KODMEM_BLOCK_START}\na\n${KODMEM_BLOCK_END}\n${KODMEM_BLOCK_START}\nb\n${KODMEM_BLOCK_END}`,
       "x",
     )).toThrow(/malformed/);
+    const canonical = `${KODMEM_BLOCK_START}\nmanaged v1\n${KODMEM_BLOCK_END}`;
+    const modified = `${KODMEM_BLOCK_START}\nuser edit\n${KODMEM_BLOCK_END}\n`;
+    expect(() => ensureKodmemBlock(modified, canonical)).toThrow(/differs/);
+    expect(() => removeKodmemBlock(modified, canonical)).toThrow(/differs/);
   });
 });
 
@@ -62,6 +83,17 @@ describe("buildAgentOnboardingPlan", () => {
     const codex = plan.requests.find((request) => request.request.artifactId.includes("codex:mcp"))!;
     expect((codex.request.payload as any).server.name).toBe(`kodade-mem-${INPUT.workspaceId}`);
 
+    const workflow = plan.requests
+      .find((request) => request.request.action === "install-skill")!
+      .request.payload as { files: { path: string; contents: string }[] };
+    const skillText = workflow.files.find((file) => file.path === "SKILL.md")!.contents;
+    expect(skillText).toContain("get_context");
+    expect(skillText).toContain("search_memories");
+    expect(skillText).toContain("remember");
+    expect(skillText).toContain("checkpoint");
+    expect(skillText).toContain("expectedStateHash");
+    expect(skillText).not.toMatch(/\.kodade\/memory|BridgeMemory|projects\/worklog|WORKLOG\.md/i);
+
     const instructionText = plan.requests
       .filter((request) => request.request.action === "edit")
       .map((request) => (request.request.payload as any).newText)
@@ -69,6 +101,62 @@ describe("buildAgentOnboardingPlan", () => {
     expect(instructionText).not.toContain(ROOT);
     expect(instructionText).not.toContain(INPUT.binaryPath);
     expect(instructionText).not.toMatch(/BridgeMemory|projects\/worklog/i);
+  });
+
+  it("applies and verifies the complete Claude and Codex transaction end to end", async () => {
+    const config = new MockConfig();
+    config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Agents\n" });
+    config.reads.set(`${ROOT}/CLAUDE.md`, { kind: "text", content: "# Claude\n" });
+    config.reads.set(`${HOME}/.claude.json`, {
+      kind: "text",
+      content: JSON.stringify({ theme: "dark", projects: {} }),
+    });
+    config.reads.set(`${HOME}/.codex/config.toml`, {
+      kind: "text",
+      content: 'model = "gpt-5.6"\n',
+    });
+    const plan = await buildAgentOnboardingPlan(config, INPUT, "connect");
+    const store = createHarnessStore({
+      config,
+      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      hasFeature: () => true,
+    });
+    let healthChecks = 0;
+    await store.getState().prepareBatch(
+      plan.requests,
+      "connect agents",
+      { surface: "memory", scopeId: INPUT.workspaceId },
+      async () => {
+        healthChecks++;
+        return { ok: true };
+      },
+    );
+
+    expect(store.getState().pendingChange?.items).toHaveLength(6);
+    await store.getState().confirmPendingChange();
+
+    expect(store.getState().mutationError).toBeNull();
+    expect(store.getState().pendingChange).toBeNull();
+    expect(healthChecks).toBe(1);
+    expect(config.installDirCalls.map((call) => call.path)).toEqual([
+      `${ROOT}/.claude/skills/kodmem-project`,
+      `${ROOT}/.agents/skills/kodmem-project`,
+    ]);
+    const claudeRead = config.reads.get(`${HOME}/.claude.json`)!;
+    const claude = JSON.parse(claudeRead.kind === "text" ? claudeRead.content : "") as any;
+    expect(claude.theme).toBe("dark");
+    expect(claude.projects[ROOT].mcpServers["kodade-mem"].args).toEqual([
+      "--workspace", ROOT, "--client", "claude",
+    ]);
+    const codexRead = config.reads.get(`${HOME}/.codex/config.toml`)!;
+    const codex = parseByFormat(
+      codexRead.kind === "text" ? codexRead.content : "",
+      "toml",
+    ) as any;
+    expect(codex.model).toBe("gpt-5.6");
+    expect(codex.mcp_servers[`kodade-mem-${INPUT.workspaceId}`].args).toEqual([
+      "--workspace", ROOT, "--client", "codex",
+    ]);
   });
 
   it("reuses exact external skills and becomes idempotent when files and configs already match", async () => {
@@ -106,6 +194,61 @@ describe("buildAgentOnboardingPlan", () => {
     const plan = await buildAgentOnboardingPlan(config, INPUT, "connect");
     expect(plan.skill).toEqual({ claude: "external", codex: "external" });
     expect(plan.requests).toEqual([]);
+  });
+
+  it("refuses a differently versioned external workflow without writing through it", async () => {
+    const config = new MockConfig();
+    config.externalSkillSnapshots.set(`${HOME}/.claude/skills/kodmem-project`, [
+      { path: "SKILL.md", sha256: "different-contract" },
+    ]);
+
+    await expect(buildAgentOnboardingPlan(config, INPUT, "connect")).rejects.toThrow(
+      /externally managed.*differs/i,
+    );
+    expect(config.installDirCalls).toEqual([]);
+    expect(config.writeCalls).toEqual([]);
+  });
+
+  it("checks every Codex global skill candidate before reusing an exact one", async () => {
+    const config = new MockConfig();
+    const initial = await buildAgentOnboardingPlan(config, INPUT, "connect");
+    const workflow = initial.requests
+      .find((request) => request.request.action === "install-skill")!
+      .request.payload as { files: { path: string; sha256: string }[] };
+    config.externalSkillSnapshots.set(
+      `${HOME}/.agents/skills/kodmem-project`,
+      workflow.files.filter((file) => file.path === "SKILL.md"),
+    );
+    config.externalSkillSnapshots.set(`${HOME}/.codex/skills/kodmem-project`, [
+      { path: "SKILL.md", sha256: "conflicting-codex-contract" },
+    ]);
+
+    await expect(buildAgentOnboardingPlan(config, INPUT, "connect")).rejects.toThrow(
+      /externally managed.*differs/i,
+    );
+  });
+
+  it("refuses instruction drift that occurs before the preview is staged", async () => {
+    const config = new MockConfig();
+    config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Original\n" });
+    const plan = await buildAgentOnboardingPlan(config, INPUT, "connect");
+    config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Changed elsewhere\n" });
+    const store = createHarnessStore({
+      config,
+      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      hasFeature: () => true,
+    });
+
+    await store.getState().prepareBatch(
+      plan.requests,
+      "connect agents",
+      { surface: "memory", scopeId: INPUT.workspaceId },
+    );
+
+    expect(store.getState().pendingChange).toBeNull();
+    expect(store.getState().mutationError).toMatch(/instructions changed.*review again/i);
+    expect(config.installDirCalls).toEqual([]);
+    expect(config.writeCalls).toEqual([]);
   });
 
   it("removes a clean managed project copy when an exact global skill now supersedes it", async () => {
