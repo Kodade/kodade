@@ -2,7 +2,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use kodade_lib::memory::{MemoryKind, MemorySource, MemoryStore, NewMemory, WorkingMemoryMode};
+use kodade_lib::memory::{
+    MemoryKind, MemorySource, MemoryStore, NewCheckpoint, NewMemory, WorkingMemoryMode,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -602,6 +604,136 @@ fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
             .to_string()
             .contains(vault.to_string_lossy().as_ref()),
         "provider-facing sync errors must not reveal the machine-local vault origin"
+    );
+}
+
+#[test]
+fn stdio_get_context_bounds_the_complete_worst_case_response() {
+    let temp = tempfile::tempdir().expect("create bounded MCP fixture");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    let workspace = std::fs::canonicalize(workspace).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    let project = vault.join("10-Projects/bounded-project");
+    std::fs::create_dir_all(&project).expect("create mapped project");
+    let mapped_body = "m".repeat(255 * 1024);
+    std::fs::write(
+        project.join("Project.md"),
+        format!("# Bounded project\n\n{mapped_body}"),
+    )
+    .expect("write large project hub");
+    std::fs::write(
+        project.join("STATE.md"),
+        format!("# State\n\n{mapped_body}"),
+    )
+    .expect("write large mapped state");
+
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open bounded MCP store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register projects vault");
+    let registered = store
+        .register_workspace(&workspace, "Bounded MCP", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&registered.id, None, "bounded-project", "Bounded project")
+        .expect("map workspace");
+
+    let memory_body = "\"".repeat(256 * 1024);
+    for (kind, count, pinned, label) in [
+        (MemoryKind::Decision, 20, true, "decision"),
+        (MemoryKind::Task, 50, false, "task"),
+        (MemoryKind::Fact, 30, false, "recent"),
+    ] {
+        for index in 0..count {
+            store
+                .remember(NewMemory {
+                    workspace_id: registered.id.clone(),
+                    kind,
+                    title: format!("Worst-case {label} {index:02}"),
+                    body: memory_body.clone(),
+                    source: MemorySource::Agent,
+                    source_client: "bounded-mcp-fixture".into(),
+                    session_id: Some("worst-case-session".into()),
+                    pinned,
+                    idempotency_key: None,
+                    links: Vec::new(),
+                })
+                .expect("remember worst-case record");
+        }
+    }
+    store
+        .checkpoint(NewCheckpoint {
+            workspace_id: registered.id.clone(),
+            summary: "c".repeat(64 * 1024),
+            decisions: (0..100)
+                .map(|index| format!("decision-{index:03}-{}", "d".repeat(1_000)))
+                .collect(),
+            next_actions: (0..100)
+                .map(|index| format!("action-{index:03}-{}", "a".repeat(1_000)))
+                .collect(),
+            changed_paths: (0..100)
+                .map(|index| format!("path-{index:03}-{}", "p".repeat(1_000)))
+                .collect(),
+            source: MemorySource::Agent,
+            source_client: "bounded-mcp-fixture".into(),
+            session_id: Some("worst-case-session".into()),
+            idempotency_key: None,
+        })
+        .expect("checkpoint worst-case context");
+    drop(store);
+
+    let mut process = McpProcess::spawn(&db, true, "2026-07-28");
+    let response = process.call_tool(
+        "get_context",
+        json!({ "workspaceRoot": workspace.to_string_lossy() }),
+    );
+    let serialized = serde_json::to_vec(&response).expect("serialize actual MCP response");
+
+    assert!(
+        serialized.len() <= 64 * 1024,
+        "the complete MCP get_context response was {} bytes",
+        serialized.len()
+    );
+    let context = &response["result"]["structuredContent"];
+    assert!(context["latestCheckpoint"]["summary"]
+        .as_str()
+        .is_some_and(|summary| summary.ends_with('…')));
+    for (field, expected_items) in [
+        ("pinnedDecisions", 3),
+        ("openTasks", 5),
+        ("recentMemories", 5),
+    ] {
+        let memories = context[field].as_array().expect("bounded memory lane");
+        assert_eq!(memories.len(), expected_items);
+        assert!(memories[0]["body"]
+            .as_str()
+            .is_some_and(|body| body.ends_with('…')));
+        assert!(memories[0]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("mem_")));
+        assert_eq!(memories[0]["source"], "agent");
+        assert_eq!(memories[0]["sourceClient"], "bounded-mcp-fixture");
+    }
+    assert_eq!(
+        context["latestCheckpoint"]["decisions"]
+            .as_array()
+            .expect("bounded checkpoint decisions")
+            .len(),
+        3
+    );
+    assert_eq!(
+        context["projectKnowledge"]["sources"][0]["relativePath"],
+        "Project.md"
+    );
+    assert_eq!(
+        context["projectKnowledge"]["sources"][0]["sha256"]
+            .as_str()
+            .expect("mapped source provenance")
+            .len(),
+        64
     );
 }
 

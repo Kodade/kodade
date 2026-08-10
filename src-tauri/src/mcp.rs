@@ -17,11 +17,13 @@ use serde_json::{json, Value};
 
 use crate::memory::{
     MemoryError, MemoryKind, MemoryLink, MemoryQuery, MemoryRecord, MemoryRevision, MemorySource,
-    MemoryStore, MutationProvenance, NewCheckpoint, NewMemory, Workspace, WorkspaceContext,
-    MEMORY_TITLE_LIMIT,
+    MemoryStore, MutationProvenance, NewCheckpoint, NewMemory, Workspace, MEMORY_TITLE_LIMIT,
 };
 
+mod provider_context;
 pub mod secret_scan;
+
+use provider_context::structured_provider_context;
 
 const DATABASE_FILENAME: &str = "kodade-memory.sqlite3";
 const KODADE_WORKFLOW_INSTRUCTIONS: &str = "At the start of each work session, call get_context with the current workspace root before making plans. Search memories when you need a specific prior fact. Save only durable decisions, facts, preferences, tasks, or concise summaries with remember; use a stable idempotencyKey whenever a retry is possible. Do not store secrets, credentials, transient logs, or information already obvious from the repository. Use revise_memory with the version you read instead of overwriting newer work. Before ending or handing off a session, call checkpoint with a short summary, concrete next actions, a sessionId when available, and an idempotencyKey.";
@@ -613,36 +615,6 @@ fn structured(value: impl Serialize) -> CallToolResult {
         Err(error) => tool_error(
             "serialization_failed",
             &format!("failed to serialize KödMem result: {error}"),
-            Value::Null,
-        ),
-    }
-}
-
-fn structured_provider_context(context: WorkspaceContext) -> CallToolResult {
-    match serde_json::to_value(context) {
-        Ok(mut value) => {
-            if let Some(project) = value
-                .get_mut("projectKnowledge")
-                .and_then(Value::as_object_mut)
-            {
-                project.remove("origin");
-                if let Some(sync) = project.get_mut("sync").and_then(Value::as_object_mut) {
-                    if sync.get("status").and_then(Value::as_str) == Some("error") {
-                        sync.insert(
-                            "error".into(),
-                            Value::String(
-                                "Refresh failed. Repair the mapped project in the local Memory pane, then retry."
-                                    .into(),
-                            ),
-                        );
-                    }
-                }
-            }
-            CallToolResult::structured(value)
-        }
-        Err(error) => tool_error(
-            "serialization_failed",
-            &format!("failed to serialize KödMem context: {error}"),
             Value::Null,
         ),
     }
