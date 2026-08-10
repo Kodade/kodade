@@ -14,12 +14,16 @@ use serde::{Deserialize, Serialize};
 
 pub mod commands;
 mod projects;
+mod scaffold;
 mod working;
 
 pub use projects::{
     LogicalProject, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeProvenance,
     ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus, ProjectsVault,
     WorkspaceProjectMapping,
+};
+pub use scaffold::{
+    ProjectScaffoldApply, ProjectScaffoldPlan, ScaffoldOperation, ScaffoldOperationKind,
 };
 pub use working::{WorkingMemoryContext, WorkingMemoryMode, WorkingMemoryStatus};
 
