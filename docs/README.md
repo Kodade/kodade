@@ -46,5 +46,6 @@ project. Ködade does not inject the marker into an existing note. Scaffolding
 does not switch active KödMem storage authority; legacy migration and cutover
 remain a separate, explicitly validated workflow.
 
-After `Project.md` exists, **Open in Obsidian** uses an `obsidian://` deep link
-to open the mapped project hub in the registered vault.
+After `Project.md` exists, **Open in Obsidian** uses the note's absolute path in
+an `obsidian://` deep link. Obsidian can therefore select the correct registered
+vault even when two vault folders share the same name.

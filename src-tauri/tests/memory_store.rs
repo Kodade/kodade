@@ -18,7 +18,8 @@ struct TempProject {
 
 struct MappedProjectsVault {
     _app_data: TempProject,
-    vault: TempProject,
+    _vault: TempProject,
+    vault_root: PathBuf,
     checkout: PathBuf,
     store: MemoryStore,
     workspace: Workspace,
@@ -26,16 +27,34 @@ struct MappedProjectsVault {
 
 impl MappedProjectsVault {
     fn new(name: &str, project_display_name: &str) -> Self {
-        let app_data = TempProject::new(name);
         let vault = TempProject::new(&format!("{name}-vault"));
-        std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
-        std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+        let vault_root = vault.root().to_path_buf();
+        Self::with_vault_root(name, project_display_name, vault, vault_root)
+    }
+
+    fn with_vault_basename(name: &str, project_display_name: &str, basename: &str) -> Self {
+        let vault = TempProject::new(&format!("{name}-vault-parent"));
+        let vault_root = vault.root().join(basename);
+        std::fs::create_dir(&vault_root).expect("create named vault root");
+        Self::with_vault_root(name, project_display_name, vault, vault_root)
+    }
+
+    fn with_vault_root(
+        name: &str,
+        project_display_name: &str,
+        vault: TempProject,
+        vault_root: PathBuf,
+    ) -> Self {
+        let app_data = TempProject::new(name);
+        std::fs::create_dir(vault_root.join(".obsidian")).expect("create Obsidian config");
+        std::fs::create_dir(vault_root.join("10-Projects")).expect("create projects folder");
         let checkout = app_data.root().join("checkout");
         std::fs::create_dir(&checkout).expect("create checkout");
         let store = MemoryStore::open(app_data.db()).expect("open store");
-        store
-            .register_projects_vault(vault.root())
+        let registered_vault = store
+            .register_projects_vault(&vault_root)
             .expect("register projects vault");
+        let vault_root = PathBuf::from(registered_vault.canonical_root);
         let workspace = store
             .register_workspace(&checkout, "Portable project", None)
             .expect("register workspace");
@@ -49,7 +68,8 @@ impl MappedProjectsVault {
             .expect("map workspace");
         Self {
             _app_data: app_data,
-            vault,
+            _vault: vault,
+            vault_root,
             checkout,
             store,
             workspace,
@@ -57,7 +77,7 @@ impl MappedProjectsVault {
     }
 
     fn project_root(&self) -> PathBuf {
-        self.vault.root().join("10-Projects/portable-project")
+        self.vault_root.join("10-Projects/portable-project")
     }
 }
 
@@ -3986,17 +4006,73 @@ fn project_scaffold_builds_an_obsidian_deep_link_only_after_the_hub_exists() {
     assert_eq!(parsed.scheme(), "obsidian");
     assert_eq!(parsed.host_str(), Some("open"));
     assert_eq!(
-        query.get("vault").map(|value| value.as_ref()),
-        fixture
-            .vault
-            .root()
-            .file_name()
-            .and_then(|name| name.to_str())
+        parsed.query().and_then(|query| query.split('=').next()),
+        Some("path")
+    );
+    assert!(
+        !parsed.query().unwrap_or_default().contains('/'),
+        "the absolute path must be percent-encoded in the URI"
     );
     assert_eq!(
-        query.get("file").map(|value| value.as_ref()),
-        Some("10-Projects/portable-project/Project.md")
+        query.get("path").map(|value| value.as_ref()),
+        fixture.project_root().join("Project.md").to_str()
     );
+    assert!(!query.contains_key("vault"));
+    assert!(!query.contains_key("file"));
+}
+
+#[test]
+fn project_scaffold_obsidian_links_distinguish_vault_roots_with_the_same_basename() {
+    let first = MappedProjectsVault::with_vault_basename(
+        "project-scaffold-same-vault-name-a",
+        "Portable project",
+        "shared-vault",
+    );
+    let second = MappedProjectsVault::with_vault_basename(
+        "project-scaffold-same-vault-name-b",
+        "Portable project",
+        "shared-vault",
+    );
+    for fixture in [&first, &second] {
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .expect("preview scaffold");
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .expect("apply scaffold");
+    }
+
+    let first_uri = first
+        .store
+        .project_obsidian_uri(&first.workspace.id)
+        .expect("build first Obsidian URI");
+    let second_uri = second
+        .store
+        .project_obsidian_uri(&second.workspace.id)
+        .expect("build second Obsidian URI");
+
+    assert_eq!(
+        first.vault_root.file_name(),
+        second.vault_root.file_name(),
+        "fixture must exercise the ambiguous basename case"
+    );
+    assert_ne!(first_uri, second_uri);
+    for (uri, fixture) in [(&first_uri, &first), (&second_uri, &second)] {
+        let parsed = url::Url::parse(uri).expect("parse generated URI");
+        assert!(
+            !parsed.query().unwrap_or_default().contains('/'),
+            "the absolute path must be percent-encoded in the URI"
+        );
+        let path = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "path").then_some(value.into_owned()));
+        assert_eq!(
+            path.as_deref(),
+            fixture.project_root().join("Project.md").to_str()
+        );
+    }
 }
 
 #[test]

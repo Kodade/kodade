@@ -240,30 +240,26 @@ impl MemoryStore {
 
     pub fn project_obsidian_uri(&self, workspace_id: &str) -> Result<String> {
         let plan = self.preview_project_scaffold(workspace_id)?;
-        let project_note = format!("10-Projects/{}/Project.md", plan.project_id);
+        let project_note_relative = format!("10-Projects/{}/Project.md", plan.project_id);
         if plan
             .operations
             .iter()
-            .any(|operation| operation.relative_path == project_note)
+            .any(|operation| operation.relative_path == project_note_relative)
         {
             return Err(MemoryError::InvalidInput(
                 "create or repair project knowledge before opening it in Obsidian".into(),
             ));
         }
-        let vault_name = Path::new(&plan.vault_root)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| {
-                MemoryError::InvalidInput(
-                    "projects vault folder name must be valid UTF-8 to open it in Obsidian".into(),
-                )
-            })?;
+        let project_note = Path::new(&plan.vault_root).join(project_note_relative);
+        let project_note = project_note.to_str().ok_or_else(|| {
+            MemoryError::InvalidInput(
+                "project knowledge path must be valid UTF-8 to open it in Obsidian".into(),
+            )
+        })?;
         let mut uri = url::Url::parse("obsidian://open").map_err(|error| {
             MemoryError::InvalidInput(format!("cannot build Obsidian project link: {error}"))
         })?;
-        uri.query_pairs_mut()
-            .append_pair("vault", vault_name)
-            .append_pair("file", &project_note);
+        uri.query_pairs_mut().append_pair("path", project_note);
         Ok(uri.into())
     }
 }

@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn uri_builders_keep_the_target_in_one_literal_argument() {
-        let uri = "obsidian://open?vault=Project%20Vault&file=10-Projects%2Fportable-project%2FProject.md";
+        let uri = "obsidian://open?path=%2FProjects%2FProject%20Vault%2F10-Projects%2Fportable-project%2FProject.md";
 
         let macos = open_uri_command(DesktopPlatform::MacOs, uri);
         assert_eq!(macos.program, "open");
