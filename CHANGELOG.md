@@ -15,10 +15,10 @@
   exact-once daily Worklog checkpoints, content-hash-protected STATE updates,
   portable Decisions and Knowledge records, recoverable journaling, and full
   SQLite projection rebuilds from validated canonical notes.
-- Preserved canonical source, pin, version, and timestamp metadata in fresh
-  read-only searches; literal Obsidian template syntax now round-trips without
-  substitution, and bounded authority/journal reads plus durable lane moves
-  harden portable recovery.
+- Preserved canonical source, pin, version, and timestamp metadata in fresh or
+  already-projected read-only searches without stale duplicate hits; literal
+  Obsidian template syntax now round-trips without substitution, and bounded
+  authority/journal reads plus durable lane moves harden portable recovery.
 
 ## 1.5.1 - 2026-08-08
 

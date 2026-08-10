@@ -4144,6 +4144,89 @@ fn fresh_read_only_store_preserves_canonical_source_and_marker_metadata() {
 }
 
 #[test]
+fn same_database_read_only_search_prefers_fresh_canonical_markdown_without_duplicates() {
+    let fixture = MappedProjectsVault::new("portable-read-same-db-dedupe", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let created = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Projected canonical title".into(),
+            body: "same-db-duplicate-token remains searchable after a human edit.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: Some("same-db-dedupe".into()),
+            pinned: true,
+            idempotency_key: Some("same-db-dedupe".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let source = created.project_source.as_ref().unwrap();
+    let canonical_path = fixture.project_root().join(&source.relative_path);
+    let edited = std::fs::read_to_string(&canonical_path).unwrap().replacen(
+        "title: \"Projected canonical title\"",
+        "title: \"Fresh human title\"",
+        1,
+    );
+    std::fs::write(&canonical_path, edited).unwrap();
+    let edited_hash = file_hash(&canonical_path);
+    std::fs::write(
+        fixture.project_root().join("Knowledge/manual.md"),
+        "---\ntitle: Manual project note\ntype: knowledge\nstatus: approved\n---\n# Manual project note\n\nordinary-project-doc-token\n",
+    )
+    .unwrap();
+    let read_only = MemoryStore::open_read_only(fixture._app_data.db()).unwrap();
+    let canonical = read_only
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "same-db-duplicate-token".into(),
+            kinds: Vec::new(),
+            sources: vec![MemorySource::Agent],
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(canonical.total, 1);
+    assert_eq!(canonical.items.len(), 1);
+    assert_eq!(canonical.items[0].id, created.id);
+    assert_eq!(canonical.items[0].title, "Fresh human title");
+    assert_eq!(canonical.items[0].source, MemorySource::Agent);
+    assert!(canonical.items[0].pinned);
+    assert_eq!(canonical.items[0].version, created.version);
+    assert_eq!(
+        canonical.items[0]
+            .project_source
+            .as_ref()
+            .map(|source| source.sha256.as_str()),
+        Some(edited_hash.as_str())
+    );
+
+    let ordinary = read_only
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "ordinary-project-doc-token".into(),
+            kinds: Vec::new(),
+            sources: vec![MemorySource::Kodade],
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(ordinary.total, 1);
+    assert_eq!(ordinary.items[0].title, "Manual project note");
+    assert_eq!(ordinary.items[0].source, MemorySource::Kodade);
+}
+
+#[test]
 fn read_only_store_refreshes_mapped_markdown_without_writing_the_index() {
     let app_data = TempProject::new("mapped-project-read-only");
     let vault = TempProject::new("mapped-project-read-only-vault");

@@ -115,6 +115,12 @@ pub(crate) struct ProjectKnowledgeRefresh {
     documents: Vec<IndexedProjectDocument>,
 }
 
+impl ProjectKnowledgeRefresh {
+    pub(crate) fn project_id(&self) -> &str {
+        &self.context.project_id
+    }
+}
+
 impl MemoryStore {
     pub(crate) fn project_knowledge_context(
         &self,

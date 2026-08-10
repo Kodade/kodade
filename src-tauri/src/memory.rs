@@ -1977,6 +1977,13 @@ impl MemoryStore {
             self.sync_working_memory(&query.workspace_id)?;
         }
         let project_refresh = self.refresh_project_knowledge(&query.workspace_id)?;
+        let fresh_markdown_project = if matches!(self.access, StoreAccess::ReadOnly) {
+            project_refresh
+                .as_ref()
+                .map(|refresh| refresh.project_id().to_string())
+        } else {
+            None
+        };
         self.run_with_recovery(|| {
             let limit = query.limit.clamp(1, 100);
             let needed = query.offset.saturating_add(limit);
@@ -1987,7 +1994,8 @@ impl MemoryStore {
                     let mut database_query = query.clone();
                     database_query.limit = needed.saturating_sub(offset).clamp(1, 100);
                     database_query.offset = offset;
-                    let page = self.search_database_once(&database_query)?;
+                    let page = self
+                        .search_database_once(&database_query, fresh_markdown_project.as_deref())?;
                     let page_len = page.items.len() as u32;
                     offset = offset.saturating_add(page_len);
                     items.extend(page.items);
@@ -2058,13 +2066,22 @@ impl MemoryStore {
         })
     }
 
-    fn search_database_once(&self, query: &MemoryQuery) -> Result<Page<MemorySearchHit>> {
+    fn search_database_once(
+        &self,
+        query: &MemoryQuery,
+        fresh_markdown_project: Option<&str>,
+    ) -> Result<Page<MemorySearchHit>> {
         let limit = query.limit.clamp(1, 100);
         let connection = self.connection()?;
         let fts_query = fts_query(&query.text);
         let mut values = Vec::<Value>::new();
         let mut filters = String::from("m.workspace_id = ? AND m.deleted_at IS NULL");
         values.push(query.workspace_id.clone().into());
+        if let Some(project_id) = fresh_markdown_project {
+            filters
+                .push_str(" AND (m.canonical_project_id IS NULL OR m.canonical_project_id <> ?)");
+            values.push(Value::Text(project_id.into()));
+        }
         if !query.kinds.is_empty() {
             filters.push_str(" AND m.kind IN (");
             filters.push_str(&placeholders(query.kinds.len()));
