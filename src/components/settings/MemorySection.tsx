@@ -5,6 +5,7 @@ import { memory as memoryIpc } from "../../ipc/transport";
 import { nativeEquals } from "../../platform/native-path";
 import { appStore, memoryStore } from "../../store/appStore";
 import { MemoryPane } from "../MemoryPane";
+import { ProjectsVaultSetup } from "./ProjectsVaultSetup";
 
 type SetupState = "checking" | "disabled" | "enabling" | "ready";
 
@@ -122,17 +123,23 @@ export function MemorySection() {
     return (
       <div
         data-settings-memory="true"
-        className="flex h-full items-center justify-center text-xs text-text-dim"
+        className="flex h-full min-h-0 flex-col"
       >
-        Open a project to set up KödMem.
+        <ProjectsVaultSetup workspace={null} />
+        <div className="flex flex-1 items-center justify-center text-xs text-text-dim">
+          Open a project to set up KödMem.
+        </div>
       </div>
     );
   }
 
   if (workspaceMatches && setupState === "ready") {
     return (
-      <div data-settings-memory="true" className="h-full min-h-0">
-        <MemoryPane workspaceId={workspace.id} databasePath={databasePath} />
+      <div data-settings-memory="true" className="flex h-full min-h-0 flex-col">
+        <ProjectsVaultSetup workspace={workspace} />
+        <div className="min-h-0 flex-1">
+          <MemoryPane workspaceId={workspace.id} databasePath={databasePath} />
+        </div>
       </div>
     );
   }
@@ -140,9 +147,10 @@ export function MemorySection() {
   return (
     <div
       data-settings-memory="true"
-      className="flex h-full items-center justify-center p-6"
+      className="flex h-full min-h-0 flex-col"
     >
-      <div className="w-full max-w-lg rounded border border-border bg-surface p-5">
+      <ProjectsVaultSetup workspace={null} />
+      <div className="m-auto w-full max-w-lg rounded border border-border bg-surface p-5">
         <div className="text-sm font-medium text-text">{project.name}</div>
         <p className="mt-1 text-xs text-text-dim">
           Memory for this project. Stored outside the repo to keep it out of Git

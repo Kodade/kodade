@@ -10,8 +10,8 @@ use super::{
     ActivityEvent, AuditEntry, AuditQuery, Checkpoint, CheckpointQuery, CheckpointSearchHit,
     DeletedMemoryQuery, ExportBundle, MemoryError, MemoryQuery, MemoryRecord, MemoryRevision,
     MemorySearchHit, MemoryStore, MutationProvenance, NewActivity, NewCheckpoint, NewMemory, Page,
-    RetentionReport, RetentionSettings, Tombstone, WorkingMemoryMode, WorkingMemoryStatus,
-    Workspace, WorkspaceContext,
+    ProjectsVault, RetentionReport, RetentionSettings, Tombstone, WorkingMemoryMode,
+    WorkingMemoryStatus, Workspace, WorkspaceContext, WorkspaceProjectMapping,
 };
 
 #[derive(Serialize)]
@@ -180,6 +180,60 @@ pub async fn memory_relink_workspace(
 ) -> Result<Workspace, String> {
     run_memory(app, move |store| {
         store.relink_workspace(&workspace_id, &expected_root, new_root, &source_client)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_projects_vault(app: AppHandle) -> Result<Option<ProjectsVault>, String> {
+    run_memory(app, move |store| store.projects_vault()).await
+}
+
+#[tauri::command]
+pub async fn memory_register_projects_vault(
+    app: AppHandle,
+    root: String,
+) -> Result<ProjectsVault, String> {
+    run_memory(app, move |store| store.register_projects_vault(root)).await
+}
+
+#[tauri::command]
+pub async fn memory_workspace_project_mapping(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<Option<WorkspaceProjectMapping>, String> {
+    run_memory(app, move |store| {
+        store.workspace_project_mapping(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_map_workspace_to_project(
+    app: AppHandle,
+    workspace_id: String,
+    expected_project_id: Option<String>,
+    project_id: String,
+    project_display_name: String,
+) -> Result<WorkspaceProjectMapping, String> {
+    run_memory(app, move |store| {
+        store.map_workspace_to_project(
+            &workspace_id,
+            expected_project_id.as_deref(),
+            &project_id,
+            &project_display_name,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_project_workspace_mappings(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<WorkspaceProjectMapping>, String> {
+    run_memory(app, move |store| {
+        store.project_workspace_mappings(&project_id)
     })
     .await
 }

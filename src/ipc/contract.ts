@@ -76,6 +76,11 @@ export const CMD = {
   memoryResolveWorkspace: "memory_resolve_workspace",
   memoryListWorkspaces: "memory_list_workspaces",
   memoryRelinkWorkspace: "memory_relink_workspace",
+  memoryProjectsVault: "memory_projects_vault",
+  memoryRegisterProjectsVault: "memory_register_projects_vault",
+  memoryWorkspaceProjectMapping: "memory_workspace_project_mapping",
+  memoryMapWorkspaceToProject: "memory_map_workspace_to_project",
+  memoryProjectWorkspaceMappings: "memory_project_workspace_mappings",
   memoryContext: "memory_context",
   memorySearch: "memory_search",
   memoryGet: "memory_get",
@@ -680,6 +685,29 @@ export type MemoryWorkspace = {
   updatedAt: number;
 };
 
+export type LogicalProject = {
+  id: string;
+  displayName: string;
+  folderExists: boolean;
+};
+
+export type ProjectsVault = {
+  canonicalRoot: string;
+  projects: LogicalProject[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type WorkspaceProjectMapping = {
+  workspaceId: string;
+  projectId: string;
+  workspaceRoot: string;
+  workspaceDisplayName: string;
+  projectDisplayName: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 // The bundled KödMCP helper resolved by the desktop app. `path` stays nullable
 // so callers can model an unavailable helper without inventing a sentinel path.
 export type MemoryMcpBinaryPath = {
@@ -922,6 +950,20 @@ export interface MemoryIpc {
     newRoot: string,
     sourceClient: string,
   ): Promise<MemoryWorkspace>;
+  projectsVault(): Promise<ProjectsVault | null>;
+  registerProjectsVault(root: string): Promise<ProjectsVault>;
+  workspaceProjectMapping(
+    workspaceId: string,
+  ): Promise<WorkspaceProjectMapping | null>;
+  mapWorkspaceToProject(
+    workspaceId: string,
+    expectedProjectId: string | null,
+    projectId: string,
+    projectDisplayName: string,
+  ): Promise<WorkspaceProjectMapping>;
+  projectWorkspaceMappings(
+    projectId: string,
+  ): Promise<WorkspaceProjectMapping[]>;
   context(workspaceId: string): Promise<WorkspaceContext>;
   search(query: MemoryQuery): Promise<Page<MemorySearchHit>>;
   get(id: string): Promise<MemoryRecord>;

@@ -14,10 +14,12 @@ import {
   type MemorySearchHit,
   type MemoryWorkspace,
   type Page,
+  type ProjectsVault,
   type RetentionReport,
   type Tombstone,
   type WorkspaceContext,
   type WorkingMemoryStatus,
+  type WorkspaceProjectMapping,
 } from "./contract";
 
 // KödMem's sole frontend-to-native boundary. All database work stays behind
@@ -35,6 +37,30 @@ export const tauriMemory: MemoryIpc = {
       expectedRoot,
       newRoot,
       sourceClient,
+    }),
+  projectsVault: () =>
+    invoke<ProjectsVault | null>(CMD.memoryProjectsVault),
+  registerProjectsVault: (root) =>
+    invoke<ProjectsVault>(CMD.memoryRegisterProjectsVault, { root }),
+  workspaceProjectMapping: (workspaceId) =>
+    invoke<WorkspaceProjectMapping | null>(CMD.memoryWorkspaceProjectMapping, {
+      workspaceId,
+    }),
+  mapWorkspaceToProject: (
+    workspaceId,
+    expectedProjectId,
+    projectId,
+    projectDisplayName,
+  ) =>
+    invoke<WorkspaceProjectMapping>(CMD.memoryMapWorkspaceToProject, {
+      workspaceId,
+      expectedProjectId,
+      projectId,
+      projectDisplayName,
+    }),
+  projectWorkspaceMappings: (projectId) =>
+    invoke<WorkspaceProjectMapping[]>(CMD.memoryProjectWorkspaceMappings, {
+      projectId,
     }),
   context: (workspaceId) =>
     invoke<WorkspaceContext>(CMD.memoryContext, { workspaceId }),

@@ -40,6 +40,13 @@ fn activating_working_memory_creates_readable_files_and_indexes_them() {
         .activate_working_memory(&workspace.id, WorkingMemoryMode::Commit, true)
         .expect("activate project working memory");
 
+    assert_eq!(
+        store
+            .workspace_project_mapping(&workspace.id)
+            .expect("read optional project mapping"),
+        None,
+        "unmapped workspaces keep using repo-local working memory during transition"
+    );
     assert!(status.enabled);
     assert_eq!(status.mode, WorkingMemoryMode::Commit);
     assert_eq!(status.directory, ".kodade/memory");
@@ -1350,7 +1357,7 @@ fn schema_version_6_fixture_backfills_activity_sequence_without_reordering_histo
     );
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     );
 }
 
@@ -1441,7 +1448,7 @@ fn concurrent_first_open_serializes_the_complete_migration_sequence() {
         .expect("query migrations")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect migrations");
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 }
 
 macro_rules! historical_schema_upgrade_test {
@@ -1598,7 +1605,7 @@ macro_rules! historical_schema_upgrade_test {
             drop(store);
             assert_eq!(
                 schema_versions(project.db()),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
             );
         }
     };
@@ -3205,6 +3212,255 @@ fn relinking_a_moved_workspace_preserves_its_generated_identity() {
         store.audit(&workspace.id, 20).expect("relink audit")[0].action,
         "relink_workspace"
     );
+}
+
+#[test]
+fn projects_vault_mapping_persists_stable_identity_across_workspace_locations() {
+    let app_data = TempProject::new("projects-vault-mapping");
+    let vault = TempProject::new("projects-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+    let first_checkout = app_data.root().join("checkout-a");
+    let second_checkout = app_data.root().join("checkout-b");
+    std::fs::create_dir(&first_checkout).expect("create first checkout");
+    std::fs::create_dir(&second_checkout).expect("create second checkout");
+
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+    let registered_vault = store
+        .register_projects_vault(vault.root())
+        .expect("register projects vault");
+    let first = store
+        .register_workspace(&first_checkout, "First checkout", None)
+        .expect("register first checkout");
+    let second = store
+        .register_workspace(&second_checkout, "Second checkout", None)
+        .expect("register second checkout");
+
+    let first_mapping = store
+        .map_workspace_to_project(&first.id, None, "portable-project", "Portable project")
+        .expect("map first checkout");
+    let second_mapping = store
+        .map_workspace_to_project(&second.id, None, "portable-project", "Portable project")
+        .expect("map second checkout");
+
+    assert_eq!(first_mapping.project_id, "portable-project");
+    assert_eq!(second_mapping.project_id, first_mapping.project_id);
+    assert_ne!(first_mapping.workspace_id, second_mapping.workspace_id);
+    let current_vault = store
+        .projects_vault()
+        .expect("read registered vault")
+        .expect("vault remains configured");
+    assert_eq!(current_vault.projects[0].id, "portable-project");
+    assert!(current_vault.projects[0].folder_exists);
+    assert!(
+        std::fs::read_dir(vault.root().join("10-Projects/portable-project"))
+            .expect("read portable identity folder")
+            .next()
+            .is_none(),
+        "identity registration must not scaffold project knowledge before issue #35"
+    );
+
+    drop(store);
+    let reopened = MemoryStore::open(app_data.db()).expect("reopen store");
+    let persisted_vault = reopened
+        .projects_vault()
+        .expect("read projects vault")
+        .expect("projects vault remains configured");
+    assert_eq!(
+        persisted_vault.canonical_root,
+        registered_vault.canonical_root
+    );
+    assert_eq!(persisted_vault.projects[0].id, "portable-project");
+    assert_eq!(
+        reopened
+            .workspace_project_mapping(&second.id)
+            .expect("read mapping")
+            .expect("mapping remains configured")
+            .project_id,
+        "portable-project"
+    );
+    assert_eq!(
+        reopened
+            .project_workspace_mappings("portable-project")
+            .expect("list project workspaces")
+            .len(),
+        2
+    );
+
+    let other_machine = TempProject::new("projects-vault-other-machine");
+    let other_checkout = other_machine.root().join("checkout");
+    std::fs::create_dir(&other_checkout).expect("create checkout on another machine");
+    let other_store = MemoryStore::open(other_machine.db()).expect("open fresh machine store");
+    let discovered = other_store
+        .register_projects_vault(vault.root())
+        .expect("register the same projects vault on another machine");
+    assert_eq!(
+        discovered
+            .projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["portable-project"]
+    );
+    let other_workspace = other_store
+        .register_workspace(&other_checkout, "Portable checkout", None)
+        .expect("register another machine checkout");
+    let other_mapping = other_store
+        .map_workspace_to_project(
+            &other_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .expect("map the fresh machine by portable identity");
+    assert_eq!(other_mapping.project_id, "portable-project");
+}
+
+#[test]
+fn mapped_project_identity_survives_relinking_a_workspace_root() {
+    let app_data = TempProject::new("mapped-workspace-relink");
+    let vault = TempProject::new("mapped-workspace-relink-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+    let old_root = app_data.root().join("old-checkout");
+    let new_root = app_data.root().join("new-checkout");
+    std::fs::create_dir(&old_root).expect("create old checkout");
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+    store
+        .register_projects_vault(vault.root())
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&old_root, "Portable checkout", None)
+        .expect("register checkout");
+    store
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+        .expect("map checkout");
+
+    std::fs::rename(&old_root, &new_root).expect("move checkout");
+    let relinked = store
+        .relink_workspace(
+            &workspace.id,
+            &workspace.canonical_root,
+            &new_root,
+            "kodade-ui",
+        )
+        .expect("relink checkout on this machine");
+    let mapping = store
+        .workspace_project_mapping(&workspace.id)
+        .expect("read mapping")
+        .expect("mapping remains configured");
+
+    assert_eq!(mapping.project_id, "portable-project");
+    assert_eq!(mapping.workspace_root, relinked.canonical_root);
+}
+
+#[test]
+fn projects_vault_registration_and_mapping_reject_unsafe_or_conflicting_inputs() {
+    let app_data = TempProject::new("projects-vault-validation");
+    let invalid_vault = TempProject::new("not-an-obsidian-vault");
+    let vault = TempProject::new("validated-projects-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+    let checkout = app_data.root().join("checkout");
+    std::fs::create_dir(&checkout).expect("create checkout");
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+
+    let inaccessible = store
+        .register_projects_vault(app_data.root().join("missing-vault"))
+        .expect_err("reject an inaccessible vault root");
+    assert!(inaccessible
+        .to_string()
+        .contains("projects vault is inaccessible"));
+
+    let invalid = store
+        .register_projects_vault(invalid_vault.root())
+        .expect_err("reject a directory that is not an Obsidian projects vault");
+    assert!(invalid.to_string().contains(".obsidian"));
+
+    store
+        .register_projects_vault(vault.root())
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&checkout, "Checkout", None)
+        .expect("register checkout");
+    store
+        .map_workspace_to_project(&workspace.id, None, "first-project", "First project")
+        .expect("create initial mapping");
+    let other_checkout = app_data.root().join("other-checkout");
+    std::fs::create_dir(&other_checkout).expect("create another checkout");
+    let other_workspace = store
+        .register_workspace(&other_checkout, "Other checkout", None)
+        .expect("register another checkout");
+    let project_conflict = store
+        .map_workspace_to_project(
+            &other_workspace.id,
+            None,
+            "first-project",
+            "Conflicting project name",
+        )
+        .expect_err("reject conflicting definitions for one shared project ID");
+    assert!(project_conflict
+        .to_string()
+        .contains("already exists as First project"));
+    let conflict = store
+        .map_workspace_to_project(&workspace.id, None, "other-project", "Other project")
+        .expect_err("reject a stale mapping edit");
+    assert!(conflict
+        .to_string()
+        .contains("already mapped to first-project"));
+
+    let updated = store
+        .map_workspace_to_project(
+            &workspace.id,
+            Some("first-project"),
+            "other-project",
+            "Other project",
+        )
+        .expect("edit the mapping with its current project identity");
+    assert_eq!(updated.project_id, "other-project");
+
+    let invalid_id = store
+        .map_workspace_to_project(
+            &workspace.id,
+            Some("other-project"),
+            "Machine Project",
+            "Machine project",
+        )
+        .expect_err("reject a path-like or unstable project identity");
+    assert!(invalid_id.to_string().contains("lowercase letters"));
+}
+
+#[cfg(unix)]
+#[test]
+fn projects_vault_mapping_rejects_symlinked_project_folders() {
+    let app_data = TempProject::new("projects-vault-symlink");
+    let vault = TempProject::new("projects-vault-symlink-root");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+    let outside = vault.root().join("outside-project");
+    std::fs::create_dir(&outside).expect("create outside project");
+    std::os::unix::fs::symlink(
+        &outside,
+        vault.root().join("10-Projects").join("unsafe-project"),
+    )
+    .expect("create project symlink");
+    let checkout = app_data.root().join("checkout");
+    std::fs::create_dir(&checkout).expect("create checkout");
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+    store
+        .register_projects_vault(vault.root())
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&checkout, "Checkout", None)
+        .expect("register checkout");
+
+    let error = store
+        .map_workspace_to_project(&workspace.id, None, "unsafe-project", "Unsafe project")
+        .expect_err("reject symlinked project folder");
+
+    assert!(error
+        .to_string()
+        .contains("project folder cannot be a symlink"));
 }
 
 #[test]

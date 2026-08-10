@@ -176,6 +176,36 @@ describe("typed memory IPC", () => {
     expect(invoke).toHaveBeenCalledWith(CMD.memoryListWorkspaces);
   });
 
+  it("keeps portable project identity separate from machine-local workspace roots", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await tauriMemory.registerProjectsVault("vault-root");
+    await tauriMemory.workspaceProjectMapping("ws_checkout");
+    await tauriMemory.mapWorkspaceToProject(
+      "ws_checkout",
+      "previous-project",
+      "portable-project",
+      "Portable project",
+    );
+    await tauriMemory.projectWorkspaceMappings("portable-project");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, CMD.memoryRegisterProjectsVault, {
+      root: "vault-root",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, CMD.memoryWorkspaceProjectMapping, {
+      workspaceId: "ws_checkout",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, CMD.memoryMapWorkspaceToProject, {
+      workspaceId: "ws_checkout",
+      expectedProjectId: "previous-project",
+      projectId: "portable-project",
+      projectDisplayName: "Portable project",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(4, CMD.memoryProjectWorkspaceMappings, {
+      projectId: "portable-project",
+    });
+  });
+
   it("maps the bundled KödMCP helper lookup without a payload", async () => {
     invoke.mockResolvedValue({ path: "/Applications/Ködade/kodade-mcp", exists: true });
 

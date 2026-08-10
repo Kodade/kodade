@@ -53,6 +53,11 @@ function mockMemoryIpc(): MemoryIpc {
     resolveWorkspace: vi.fn().mockResolvedValue(workspace),
     listWorkspaces: vi.fn().mockResolvedValue([workspace]),
     relinkWorkspace: vi.fn().mockResolvedValue(workspace),
+    projectsVault: vi.fn().mockResolvedValue(null),
+    registerProjectsVault: vi.fn(),
+    workspaceProjectMapping: vi.fn().mockResolvedValue(null),
+    mapWorkspaceToProject: vi.fn(),
+    projectWorkspaceMappings: vi.fn().mockResolvedValue([]),
     context: vi.fn().mockResolvedValue(context),
     search: vi
       .fn()

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added KödMem projects-vault registration and portable logical project
+  mappings so multiple local workspaces can share one stable project identity
+  without using checkout paths as identity.
+
 ## 1.5.1 - 2026-08-08
 
 - Added OpenCode as a first-class KödChat provider with native session resume,
