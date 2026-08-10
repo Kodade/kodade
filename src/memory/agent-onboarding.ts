@@ -181,12 +181,12 @@ async function readText(config: ConfigIpc, path: string, root: string): Promise<
 function instructionRequest(
   cli: MemoryMcpClient,
   path: string,
-  before: string,
+  before: OptionalText,
   after: string,
   root: string,
   removeFile = false,
 ): PlannedBatchRequest | null {
-  if (before === after) return null;
+  if (before.text === after) return null;
   return {
     cli,
     title: `update managed KödMem instructions for ${cli}`,
@@ -195,8 +195,13 @@ function instructionRequest(
       action: removeFile ? "remove-file" : "edit",
       projectRoot: root,
       payload: removeFile
-        ? { path, expectedText: before, format: "markdown" }
-        : { path, newText: after, expectedText: before },
+        ? { path, expectedText: before.text, expectedMissing: false, format: "markdown" }
+        : {
+            path,
+            newText: after,
+            expectedText: before.text,
+            expectedMissing: !before.exists,
+          },
     },
   };
 }
@@ -212,6 +217,16 @@ function removeInstructionBlock(
   }
   const removed = removeKodmemBlock(text, createdFileBlock(regular));
   return { text: removed, removeFile: removed === "" };
+}
+
+function ensureInstructionBlock(before: OptionalText, regular: string): string {
+  if (!before.exists) return ensureKodmemBlock(before.text, createdFileBlock(regular));
+  try {
+    return ensureKodmemBlock(before.text, regular);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("differs")) throw error;
+  }
+  return ensureKodmemBlock(before.text, createdFileBlock(regular));
 }
 
 export function memoryMcpTarget(
@@ -328,19 +343,13 @@ export async function buildAgentOnboardingPlan(
   const claudeBefore = await readText(config, claudePath, input.workspaceRoot);
   const agentsAfter = action === "connect"
     ? {
-        text: ensureKodmemBlock(
-          agentsBefore.text,
-          agentsBefore.exists ? AGENTS_BLOCK : createdFileBlock(AGENTS_BLOCK),
-        ),
+        text: ensureInstructionBlock(agentsBefore, AGENTS_BLOCK),
         removeFile: false,
       }
     : removeInstructionBlock(agentsBefore.text, AGENTS_BLOCK);
   const claudeAfter = action === "connect"
     ? {
-        text: ensureKodmemBlock(
-          claudeBefore.text,
-          claudeBefore.exists ? CLAUDE_BLOCK : createdFileBlock(CLAUDE_BLOCK),
-        ),
+        text: ensureInstructionBlock(claudeBefore, CLAUDE_BLOCK),
         removeFile: false,
       }
     : removeInstructionBlock(claudeBefore.text, CLAUDE_BLOCK);
@@ -348,7 +357,7 @@ export async function buildAgentOnboardingPlan(
     instructionRequest(
       "codex",
       agentsPath,
-      agentsBefore.text,
+      agentsBefore,
       agentsAfter.text,
       input.workspaceRoot,
       agentsAfter.removeFile,
@@ -356,7 +365,7 @@ export async function buildAgentOnboardingPlan(
     instructionRequest(
       "claude",
       claudePath,
-      claudeBefore.text,
+      claudeBefore,
       claudeAfter.text,
       input.workspaceRoot,
       claudeAfter.removeFile,
@@ -433,11 +442,17 @@ export async function buildAgentOnboardingPlan(
             action: baseline === null ? "remove-file" : "edit",
             projectRoot: input.workspaceRoot,
             payload: baseline === null
-              ? { path: target.path, expectedText: before.text, format: target.format }
+              ? {
+                  path: target.path,
+                  expectedText: before.text,
+                  expectedMissing: false,
+                  format: target.format,
+                }
               : {
                   path: target.path,
                   newText: baseline,
                   expectedText: before.text,
+                  expectedMissing: false,
                   format: target.format,
                 },
           } satisfies HarnessChangeRequest,

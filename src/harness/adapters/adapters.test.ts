@@ -669,7 +669,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
       artifactId: "claude:remove-created-config",
       action: "remove-file",
       projectRoot: ROOT,
-      payload: { path: MCP, format: "json", expectedText: managed },
+      payload: { path: MCP, format: "json", expectedText: managed, expectedMissing: false },
     });
     expect(change.fileOperation).toBe("remove");
 

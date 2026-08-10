@@ -420,6 +420,12 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
   const current = await readOptionalText(config, payload.path, change.projectRoot);
   const before = current.text;
   const isNewFile = !current.exists;
+  if (
+    payload.expectedMissing !== undefined &&
+    current.exists === payload.expectedMissing
+  ) {
+    throw new Error("managed file existence changed while Ködade was preparing the preview; review again");
+  }
   if (payload.expectedText !== undefined && before !== payload.expectedText) {
     throw new Error("instructions changed while Ködade was preparing the preview; review again");
   }
@@ -441,11 +447,18 @@ async function planEdit(config: ConfigIpc, change: HarnessChangeRequest): Promis
 
 async function planRemoveFile(config: ConfigIpc, change: HarnessChangeRequest): Promise<ConfigChange> {
   const payload = change.payload as RemoveFilePayload | undefined;
-  if (!payload || typeof payload.path !== "string" || typeof payload.expectedText !== "string") {
-    throw new Error("remove-file needs a { path, format, expectedText } payload");
+  if (
+    !payload ||
+    typeof payload.path !== "string" ||
+    typeof payload.expectedText !== "string" ||
+    typeof payload.expectedMissing !== "boolean"
+  ) {
+    throw new Error("remove-file needs a { path, format, expectedText, expectedMissing } payload");
   }
   const current = await readOptionalText(config, payload.path, change.projectRoot);
-  if (!current.exists) throw new Error("the managed file is already absent");
+  if (current.exists === payload.expectedMissing) {
+    throw new Error("managed file existence changed while Ködade was preparing the preview; review again");
+  }
   if (current.text !== payload.expectedText) {
     throw new Error("the managed file changed while Ködade was preparing the preview; review again");
   }

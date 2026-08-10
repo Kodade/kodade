@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -23,6 +24,14 @@ pub struct McpHealth {
     tools: Vec<String>,
     stage: String,
     message: String,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct McpDiscoveryProcess {
+    pub executable: PathBuf,
+    pub path: Option<OsString>,
+    pub timeout: Duration,
 }
 
 pub(super) fn failed_mcp_health(
@@ -53,6 +62,16 @@ pub(super) fn run_mcp_health(
     client: String,
     read_only: bool,
 ) -> McpHealth {
+    let shell = ShellEnvironment::current();
+    let Some((executable, path)) = shell.resolve_executable_with_login_path(&client) else {
+        return failed_mcp_health(
+            &client,
+            read_only,
+            &workspace.id,
+            "discovery",
+            "the agent CLI is unavailable for KödMCP discovery",
+        );
+    };
     run_mcp_health_with_discovery(
         binary,
         db,
@@ -60,31 +79,26 @@ pub(super) fn run_mcp_health(
         expected_project_id,
         client,
         read_only,
-        client_discovers_mcp,
+        McpDiscoveryProcess {
+            executable,
+            path,
+            timeout: Duration::from_secs(5),
+        },
     )
 }
 
 #[doc(hidden)]
-pub fn run_mcp_health_with_discovery<F>(
+pub fn run_mcp_health_with_discovery(
     binary: PathBuf,
     db: PathBuf,
     workspace: Workspace,
     expected_project_id: String,
     client: String,
     read_only: bool,
-    discovers: F,
-) -> McpHealth
-where
-    F: FnOnce(&Workspace, &str) -> bool,
-{
-    if !discovers(&workspace, &client) {
-        return failed_mcp_health(
-            &client,
-            read_only,
-            &workspace.id,
-            "discovery",
-            "the agent CLI did not discover this KödMCP connection",
-        );
+    discovery: McpDiscoveryProcess,
+) -> McpHealth {
+    if let Err(message) = client_discovers_mcp(&workspace, &client, &discovery) {
+        return failed_mcp_health(&client, read_only, &workspace.id, "discovery", message);
     }
     let mut command = Command::new(binary);
     command
@@ -294,13 +308,13 @@ where
     }
 }
 
-fn client_discovers_mcp(workspace: &Workspace, client: &str) -> bool {
-    let shell = ShellEnvironment::current();
-    let Some((executable, login_path)) = shell.resolve_executable_with_login_path(client) else {
-        return false;
-    };
+fn client_discovers_mcp(
+    workspace: &Workspace,
+    client: &str,
+    discovery: &McpDiscoveryProcess,
+) -> Result<(), &'static str> {
     let server_name = server_name(client, &workspace.id);
-    let mut command = Command::new(executable);
+    let mut command = Command::new(&discovery.executable);
     command
         .current_dir(&workspace.canonical_root)
         .arg("mcp")
@@ -312,21 +326,22 @@ fn client_discovers_mcp(workspace: &Workspace, client: &str) -> bool {
     if client == "codex" {
         command.arg("--json");
     }
-    if let Some(path) = login_path {
+    if let Some(path) = &discovery.path {
         command.env("PATH", path);
     }
     let Ok(mut child) = command.spawn() else {
-        return false;
+        return Err("the agent CLI discovery process could not be started");
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + discovery.timeout;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err("the agent CLI did not discover this KödMCP connection"),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return false;
+                return Err("the agent CLI discovery check timed out");
             }
         }
     }

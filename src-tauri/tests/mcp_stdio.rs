@@ -3,8 +3,8 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use kodade_lib::memory::{
-    run_mcp_health_with_discovery, MemoryKind, MemorySource, MemoryStore, NewCheckpoint, NewMemory,
-    WorkingMemoryMode,
+    run_mcp_health_with_discovery, McpDiscoveryProcess, MemoryKind, MemorySource, MemoryStore,
+    NewCheckpoint, NewMemory, WorkingMemoryMode,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -183,6 +183,18 @@ fn registered_store() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     (temp, db, workspace)
 }
 
+#[cfg(unix)]
+fn discovery_script(temp: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = temp.path().join(name);
+    std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write discovery client");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("make discovery client executable");
+    script
+}
+
+#[cfg(unix)]
 #[test]
 fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
     let temp = tempfile::tempdir().expect("create health fixture");
@@ -215,33 +227,70 @@ fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
         .expect("load registered workspace");
     drop(store);
 
-    for client in ["claude", "codex"] {
+    let arguments = temp.path().join("discovery-arguments");
+    let current_dir = temp.path().join("discovery-current-dir");
+    let observed_path = temp.path().join("discovery-path");
+    let client = discovery_script(
+        &temp,
+        "fake-agent-client",
+        &format!(
+            "printf '%s\\n' \"$@\" > '{}'\npwd > '{}'\nprintf '%s' \"$PATH\" > '{}'\nexit 0",
+            arguments.display(),
+            current_dir.display(),
+            observed_path.display(),
+        ),
+    );
+    let controlled_path = temp.path().join("controlled-path");
+
+    for agent_client in ["claude", "codex"] {
         for read_only in [true, false] {
-            let discovered_client = std::sync::Mutex::new(None::<String>);
             let health = run_mcp_health_with_discovery(
                 env!("CARGO_BIN_EXE_kodade-mcp").into(),
                 db.clone(),
                 workspace.clone(),
                 "health-project".into(),
-                client.into(),
+                agent_client.into(),
                 read_only,
-                |discovered_workspace, discovered| {
-                    assert_eq!(discovered_workspace.id, registered.id);
-                    *discovered_client.lock().expect("record discovery") =
-                        Some(discovered.to_owned());
-                    true
+                McpDiscoveryProcess {
+                    executable: client.clone(),
+                    path: Some(controlled_path.clone().into_os_string()),
+                    timeout: std::time::Duration::from_secs(2),
                 },
             );
+            let actual_arguments = std::fs::read_to_string(&arguments)
+                .expect("read discovery arguments")
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let mut expected_arguments = vec![
+                "mcp".to_owned(),
+                "get".to_owned(),
+                if agent_client == "claude" {
+                    "kodade-mem".to_owned()
+                } else {
+                    format!("kodade-mem-{}", workspace.id)
+                },
+            ];
+            if agent_client == "codex" {
+                expected_arguments.push("--json".to_owned());
+            }
+            assert_eq!(actual_arguments, expected_arguments);
             assert_eq!(
-                discovered_client.into_inner().expect("read discovery"),
-                Some(client.to_owned())
+                std::fs::read_to_string(&current_dir)
+                    .expect("read discovery current directory")
+                    .trim(),
+                workspace_root.to_string_lossy(),
+            );
+            assert_eq!(
+                std::fs::read_to_string(&observed_path).expect("read discovery PATH"),
+                controlled_path.to_string_lossy(),
             );
             let health = serde_json::to_value(health).expect("serialize health");
             let serialized = health.to_string();
             assert!(!serialized.contains(&workspace_root.to_string_lossy().to_string()));
             assert!(!serialized.contains(&vault.to_string_lossy().to_string()));
-            assert_eq!(health["ok"], true, "{client} health should pass");
-            assert_eq!(health["client"], client);
+            assert_eq!(health["ok"], true, "{agent_client} health should pass");
+            assert_eq!(health["client"], agent_client);
             assert_eq!(
                 health["access"],
                 if read_only { "read-only" } else { "read-write" }
@@ -253,6 +302,64 @@ fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
             assert_eq!(has_checkpoint, !read_only);
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn onboarding_discovery_requires_a_zero_exit_and_enforces_its_timeout() {
+    let (temp, db, workspace_root) = registered_store();
+    let store = MemoryStore::open(&db).expect("open discovery fixture");
+    let workspace = store
+        .resolve_workspace(&workspace_root)
+        .expect("resolve discovery workspace");
+    drop(store);
+    let binary = std::path::PathBuf::from(env!("CARGO_BIN_EXE_kodade-mcp"));
+
+    let failing = discovery_script(&temp, "failing-client", "exit 9");
+    let health = run_mcp_health_with_discovery(
+        binary.clone(),
+        db.clone(),
+        workspace.clone(),
+        "unused-project".into(),
+        "claude".into(),
+        false,
+        McpDiscoveryProcess {
+            executable: failing,
+            path: None,
+            timeout: std::time::Duration::from_secs(2),
+        },
+    );
+    let health = serde_json::to_value(health).expect("serialize failed discovery");
+    assert_eq!(health["ok"], false);
+    assert_eq!(health["stage"], "discovery");
+    assert!(health["message"]
+        .as_str()
+        .expect("failed discovery message")
+        .contains("did not discover"));
+
+    let hanging = discovery_script(&temp, "hanging-client", "while :; do :; done");
+    let started = std::time::Instant::now();
+    let health = run_mcp_health_with_discovery(
+        binary,
+        db,
+        workspace,
+        "unused-project".into(),
+        "codex".into(),
+        true,
+        McpDiscoveryProcess {
+            executable: hanging,
+            path: None,
+            timeout: std::time::Duration::from_millis(100),
+        },
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let health = serde_json::to_value(health).expect("serialize timed out discovery");
+    assert_eq!(health["ok"], false);
+    assert_eq!(health["stage"], "discovery");
+    assert!(health["message"]
+        .as_str()
+        .expect("timed out discovery message")
+        .contains("timed out"));
 }
 
 fn file_hash(path: &Path) -> Vec<u8> {

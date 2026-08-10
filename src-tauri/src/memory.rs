@@ -20,7 +20,7 @@ mod scaffold;
 mod working;
 
 #[doc(hidden)]
-pub use onboarding::run_mcp_health_with_discovery;
+pub use onboarding::{run_mcp_health_with_discovery, McpDiscoveryProcess};
 pub use portable::migration::{
     LegacyMigrationAction, LegacyMigrationApply, LegacyMigrationCounts, LegacyMigrationOperation,
     LegacyMigrationPlan, LegacyMigrationRecovery, LegacyMigrationRecoveryPhase,

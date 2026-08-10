@@ -7,6 +7,7 @@
 // Confinement is applied by the command layer (commands.rs) through configguard
 // BEFORE these run, so `scan_dir` takes an already-authorized canonical path.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -165,7 +166,11 @@ pub fn remove_config(target: &Path, expected_hash: &str) -> Result<(), String> {
 // Atomically write `bytes` to `target`: a uniquely-named exclusive temp in the
 // target's directory, fsync'd, then renamed over the target. Mirrors
 // fs::write_file's durability, at the byte level so backups are exact copies.
-fn atomic_write_bytes(target: &Path, bytes: &[u8]) -> Result<(), String> {
+fn atomic_write_bytes(
+    target: &Path,
+    bytes: &[u8],
+    security_source: Option<&Path>,
+) -> Result<(), String> {
     use std::io::Write as _;
     let parent = target
         .parent()
@@ -176,6 +181,9 @@ fn atomic_write_bytes(target: &Path, bytes: &[u8]) -> Result<(), String> {
     }
     let (mut file, tmp) = crate::fs::create_temp_excl(parent, ".kodade.tmp")?;
     let result = (|| {
+        if let Some(source) = security_source {
+            preserve_file_security(source, &tmp, &file)?;
+        }
         file.write_all(bytes)
             .map_err(|e| format!("write {}: {e}", tmp.display()))?;
         file.sync_all()
@@ -188,6 +196,123 @@ fn atomic_write_bytes(target: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+fn preserve_file_security(
+    source: &Path,
+    _destination_path: &Path,
+    destination: &File,
+) -> Result<(), String> {
+    let source_file = File::open(source)
+        .map_err(|error| format!("open file security source {}: {error}", source.display()))?;
+    #[cfg(target_os = "macos")]
+    copy_macos_acl(&source_file, destination)?;
+    #[cfg(windows)]
+    copy_windows_dacl(source, _destination_path)?;
+    let permissions = source_file
+        .metadata()
+        .map_err(|error| format!("read file permissions {}: {error}", source.display()))?
+        .permissions();
+    destination
+        .set_permissions(permissions)
+        .map_err(|error| format!("preserve file permissions {}: {error}", source.display()))
+}
+
+#[cfg(windows)]
+fn copy_windows_dacl(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::{
+        GetFileSecurityW, SetFileSecurityW, DACL_SECURITY_INFORMATION,
+    };
+
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    let source = wide(source);
+    let destination = wide(destination);
+    let mut needed = 0u32;
+    unsafe {
+        GetFileSecurityW(
+            source.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+    }
+    if needed == 0 {
+        return Err(format!(
+            "read file access controls: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SECURITY_DESCRIPTOR requires pointer alignment; a usize buffer provides
+    // that while still reserving the exact byte capacity Windows requested.
+    let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
+    let mut descriptor = vec![0usize; words];
+    let read = unsafe {
+        GetFileSecurityW(
+            source.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            descriptor.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        )
+    };
+    if read == 0 {
+        return Err(format!(
+            "read file access controls: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let applied = unsafe {
+        SetFileSecurityW(
+            destination.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            descriptor.as_mut_ptr().cast(),
+        )
+    };
+    if applied == 0 {
+        return Err(format!(
+            "preserve file access controls: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn copy_macos_acl(source: &File, destination: &File) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+
+    // `fcopyfile` can preserve the access-control list without copying data.
+    // Mode bits are applied separately below so every supported platform keeps
+    // at least the same basic permissions.
+    let state = unsafe { libc::copyfile_state_alloc() };
+    if state.is_null() {
+        return Err("allocate file security copy state failed".into());
+    }
+    let result = unsafe {
+        libc::fcopyfile(
+            source.as_raw_fd(),
+            destination.as_raw_fd(),
+            state,
+            libc::COPYFILE_ACL,
+        )
+    };
+    let error = std::io::Error::last_os_error();
+    unsafe {
+        libc::copyfile_state_free(state);
+    }
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!("preserve file access controls: {error}"))
+    }
 }
 
 // M10g: fail up front with a clear error when `path` exists and is read-only,
@@ -246,7 +371,7 @@ pub fn write_config(
             ));
         }
         let backup_path = backup_path_for(canonical, now);
-        atomic_write_bytes(&backup_path, &prior)?;
+        atomic_write_bytes(&backup_path, &prior, Some(canonical))?;
         backup_path.to_string_lossy().to_string()
     } else {
         if !expected_hash.is_empty() {
@@ -257,7 +382,8 @@ pub fn write_config(
         }
         String::new()
     };
-    atomic_write_bytes(canonical, contents.as_bytes())?;
+    let security_source = canonical.exists().then_some(canonical);
+    atomic_write_bytes(canonical, contents.as_bytes(), security_source)?;
     Ok(backup)
 }
 
@@ -267,7 +393,7 @@ pub fn backup_config(canonical: &Path, now: SystemTime) -> Result<String, String
     let bytes =
         std::fs::read(canonical).map_err(|e| format!("read {}: {e}", canonical.display()))?;
     let backup_path = backup_path_for(canonical, now);
-    atomic_write_bytes(&backup_path, &bytes)?;
+    atomic_write_bytes(&backup_path, &bytes, Some(canonical))?;
     Ok(backup_path.to_string_lossy().to_string())
 }
 
@@ -279,7 +405,7 @@ pub fn restore_config(target: &Path, backup: &Path) -> Result<(), String> {
     }
     let bytes =
         std::fs::read(backup).map_err(|e| format!("read backup {}: {e}", backup.display()))?;
-    atomic_write_bytes(target, &bytes)
+    atomic_write_bytes(target, &bytes, Some(backup))
 }
 
 // --- KödSkills directory resources and reversible mutations (M15) ---
@@ -1122,6 +1248,41 @@ mod tests {
         let name = Path::new(&backup).file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("config.toml.kodade-bak-"), "name: {name}");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "servers");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_replacements_backups_and_restores_preserve_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("config-private-permissions");
+        let target = dir.join("config.toml");
+        std::fs::write(&target, "private baseline").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let backup = write_config(
+            &target,
+            "private replacement",
+            &sha256_hex(b"private baseline"),
+            SystemTime::now(),
+        )
+        .unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode(&target),
+            0o600,
+            "replacement must preserve source mode"
+        );
+        assert_eq!(
+            mode(Path::new(&backup)),
+            0o600,
+            "backup must not become more permissive"
+        );
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        restore_config(&target, Path::new(&backup)).unwrap();
+        assert_eq!(mode(&target), 0o600, "restore must recover the backup mode");
         let _ = std::fs::remove_dir_all(dir);
     }
 

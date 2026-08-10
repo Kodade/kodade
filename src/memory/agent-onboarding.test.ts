@@ -171,6 +171,20 @@ describe("buildAgentOnboardingPlan", () => {
     }
   });
 
+  it("is idempotent when reconnecting files Ködade created with ownership markers", async () => {
+    const config = new MockConfig();
+    const connected = await applyPlan(config, INPUT, "connect");
+    exposeInstalledSkills(config, connected);
+
+    const agents = config.reads.get(`${ROOT}/AGENTS.md`);
+    const claude = config.reads.get(`${ROOT}/CLAUDE.md`);
+    expect(agents?.kind === "text" ? agents.content : "").toContain("kodade:artifact-origin:created-file");
+    expect(claude?.kind === "text" ? claude.content : "").toContain("kodade:artifact-origin:created-file");
+
+    const reconnect = await buildAgentOnboardingPlan(config, INPUT, "connect");
+    expect(reconnect.requests).toEqual([]);
+  });
+
   it("previews skill, instructions, and both client configs as one ordered transaction", async () => {
     const config = new MockConfig();
     config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Agents\n" });
@@ -357,6 +371,53 @@ describe("buildAgentOnboardingPlan", () => {
     expect(store.getState().mutationError).toMatch(/instructions changed.*review again/i);
     expect(config.installDirCalls).toEqual([]);
     expect(config.writeCalls).toEqual([]);
+  });
+
+  it.each([
+    { name: "missing became empty", initiallyExists: false },
+    { name: "empty became missing", initiallyExists: true },
+  ])("refuses an instruction existence race when $name", async ({ initiallyExists }) => {
+    const config = new MockConfig();
+    if (initiallyExists) {
+      config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "" });
+    }
+    const plan = await buildAgentOnboardingPlan(config, INPUT, "connect");
+    const agents = plan.requests.find((request) =>
+      request.request.artifactId === "codex:project:instruction:kodmem-project"
+    )!;
+    expect((agents.request.payload as { expectedMissing?: boolean }).expectedMissing)
+      .toBe(!initiallyExists);
+    if (initiallyExists) config.reads.delete(`${ROOT}/AGENTS.md`);
+    else config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "" });
+    const store = createHarnessStore({
+      config,
+      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      hasFeature: () => true,
+    });
+
+    await store.getState().prepareBatch(
+      plan.requests,
+      "connect agents",
+      { surface: "memory", scopeId: INPUT.workspaceId },
+    );
+
+    expect(store.getState().pendingChange).toBeNull();
+    expect(store.getState().mutationError).toMatch(/managed file existence changed.*review again/i);
+    expect(config.installDirCalls).toEqual([]);
+    expect(config.writeCalls).toEqual([]);
+  });
+
+  it("marks instruction removal as requiring an existing owned file", async () => {
+    const config = new MockConfig();
+    const connected = await applyPlan(config, INPUT, "connect");
+    exposeInstalledSkills(config, connected);
+
+    const removal = await buildAgentOnboardingPlan(config, INPUT, "remove");
+    const agents = removal.requests.find((request) =>
+      request.request.artifactId === "codex:project:instruction:kodmem-project"
+    )!;
+    expect(agents.request.action).toBe("remove-file");
+    expect((agents.request.payload as { expectedMissing?: boolean }).expectedMissing).toBe(false);
   });
 
   it.each(["connect", "remove"] as const)(
