@@ -17,7 +17,8 @@ use serde_json::{json, Value};
 
 use crate::memory::{
     MemoryError, MemoryKind, MemoryLink, MemoryQuery, MemoryRecord, MemoryRevision, MemorySource,
-    MemoryStore, MutationProvenance, NewCheckpoint, NewMemory, Workspace, MEMORY_TITLE_LIMIT,
+    MemoryStore, MutationProvenance, NewCheckpoint, NewMemory, Workspace, WorkspaceContext,
+    MEMORY_TITLE_LIMIT,
 };
 
 pub mod secret_scan;
@@ -198,7 +199,7 @@ impl KodadeMcp {
                     Err(error) => return Ok(error),
                 };
                 match self.store.context(&workspace.id) {
-                    Ok(context) => Ok(structured(context)),
+                    Ok(context) => Ok(structured_provider_context(context)),
                     Err(error) => Ok(memory_error(error)),
                 }
             }
@@ -612,6 +613,36 @@ fn structured(value: impl Serialize) -> CallToolResult {
         Err(error) => tool_error(
             "serialization_failed",
             &format!("failed to serialize KödMem result: {error}"),
+            Value::Null,
+        ),
+    }
+}
+
+fn structured_provider_context(context: WorkspaceContext) -> CallToolResult {
+    match serde_json::to_value(context) {
+        Ok(mut value) => {
+            if let Some(project) = value
+                .get_mut("projectKnowledge")
+                .and_then(Value::as_object_mut)
+            {
+                project.remove("origin");
+                if let Some(sync) = project.get_mut("sync").and_then(Value::as_object_mut) {
+                    if sync.get("status").and_then(Value::as_str) == Some("error") {
+                        sync.insert(
+                            "error".into(),
+                            Value::String(
+                                "Refresh failed. Repair the mapped project in the local Memory pane, then retry."
+                                    .into(),
+                            ),
+                        );
+                    }
+                }
+            }
+            CallToolResult::structured(value)
+        }
+        Err(error) => tool_error(
+            "serialization_failed",
+            &format!("failed to serialize KödMem context: {error}"),
             Value::Null,
         ),
     }

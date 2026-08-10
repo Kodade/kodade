@@ -71,7 +71,7 @@ describe("a turn", () => {
   });
 
   it("injects bounded mapped project memory for a local CLI without persisting it", async () => {
-    const memory = "mapped-context-marker\n" + "m".repeat(20_000);
+    const memory = "mapped-context-marker\n" + "🧠".repeat(20_000);
     const { agent, store } = setup({
       memoryContext: async (root) => `${root}\n${memory}`,
     });
@@ -82,7 +82,7 @@ describe("a turn", () => {
     const stdin = agent.starts[0]?.stdin ?? "";
     expect(stdin).toContain("mapped-context-marker");
     expect(stdin).toContain("## Current request\ninspect the project");
-    expect(stdin.length).toBeLessThanOrEqual(12_100);
+    expect(Array.from(stdin).length).toBeLessThanOrEqual(12_100);
     expect(store.getState().threads.t1.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatProjectMemory, type ProjectMemoryContext } from "./memory";
+import {
+  boundProviderMemory,
+  formatProjectMemory,
+  type ProjectMemoryContext,
+} from "./memory";
 
 function mappedContext(content: string): ProjectMemoryContext {
   return {
@@ -32,13 +36,21 @@ function mappedContext(content: string): ProjectMemoryContext {
 }
 
 describe("formatProjectMemory", () => {
-  it("includes bounded mapped Markdown with explicit origin and provenance", () => {
+  it("includes bounded mapped Markdown provenance without the local origin", () => {
     const formatted = formatProjectMemory(mappedContext("The mapped state is ready."));
 
     expect(formatted).toContain("Mapped project · Ködade (kodade)");
-    expect(formatted).toContain("Origin · /projects-vault/10-Projects/kodade");
+    expect(formatted).not.toContain("/projects-vault/10-Projects/kodade");
     expect(formatted).toContain("STATE.md · sha256:aaaaaaaaaaaa");
     expect(formatted).toContain("The mapped state is ready.");
+  });
+
+  it("uses one Unicode-character budget for every provider path", () => {
+    const bounded = boundProviderMemory("🧠".repeat(20_000));
+
+    expect(bounded).not.toBeNull();
+    expect(Array.from(bounded ?? "")).toHaveLength(12_000);
+    expect(bounded?.endsWith("…")).toBe(true);
   });
 
   it("keeps the complete agent context within the 12k boundary", () => {
@@ -62,7 +74,9 @@ describe("formatProjectMemory", () => {
 
     const formatted = formatProjectMemory(context);
     expect(formatted).toContain("Mapped project sync error");
-    expect(formatted).toContain("STATE.md is missing");
+    expect(formatted).toContain("Repair the mapped project in the local Memory pane");
+    expect(formatted).not.toContain("STATE.md is missing");
+    expect(formatted).not.toContain("/projects-vault/10-Projects/kodade");
     expect(formatted).not.toContain("must not appear");
   });
 });

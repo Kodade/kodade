@@ -552,6 +552,10 @@ fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
         context["result"]["structuredContent"]["projectKnowledge"]["projectId"],
         "mcp-project"
     );
+    assert!(
+        context["result"]["structuredContent"]["projectKnowledge"]["origin"].is_null(),
+        "standalone KödMCP must not expose the machine-local vault origin to providers"
+    );
     assert_eq!(
         context["result"]["structuredContent"]["projectKnowledge"]["sync"]["status"],
         "current"
@@ -581,6 +585,23 @@ fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
             .expect("bounded source hash")
             .len(),
         64
+    );
+
+    std::fs::remove_file(project.join("STATE.md")).expect("break mapped state externally");
+    let failed = process.call_tool("get_context", json!({ "workspaceRoot": root }));
+    assert_eq!(
+        failed["result"]["structuredContent"]["projectKnowledge"]["sync"]["status"],
+        "error"
+    );
+    assert_eq!(
+        failed["result"]["structuredContent"]["projectKnowledge"]["sync"]["error"],
+        "Refresh failed. Repair the mapped project in the local Memory pane, then retry."
+    );
+    assert!(
+        !failed
+            .to_string()
+            .contains(vault.to_string_lossy().as_ref()),
+        "provider-facing sync errors must not reveal the machine-local vault origin"
     );
 }
 

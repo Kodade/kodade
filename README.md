@@ -46,10 +46,7 @@ Windows support is under active development; Linux is planned.
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.
 - **KödMem and KödMCP** preserve local project context in readable files and a
-  searchable local index. A registered projects vault can give workspaces a
-  portable project identity and provide bounded read-only context from mapped
-  project hubs, state, recent worklogs, approved knowledge, and selected
-  decisions to KödMCP and local KödChat providers.
+  searchable local index.
 - **KödHarness and KödSkills** make agent instructions and skills inspectable.
 - **Browser and GitHub panes** keep previews, assistant links, and repository
   context in editor tabs without replacing the desktop workspace.
@@ -60,10 +57,9 @@ Ollama, install/start the local service and pull a model yourself.
 
 ## Development features
 
-The source contains active development work for projects-vault KödMem
-write-through and migration workflows, KödLocal, KödWhisper, KödSSH, Remote,
-and Windows. These unfinished surfaces remain absent from public release
-builds until they are ready to support. See [ROADMAP.md](ROADMAP.md).
+The source contains active development work for KödLocal, KödWhisper, KödSSH,
+Remote, and Windows. These surfaces remain absent from public release builds
+until they are ready to support. See [ROADMAP.md](ROADMAP.md).
 
 Ködade is a native desktop application. A hosted browser application is not
 part of this repository or the current product.

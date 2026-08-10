@@ -20,6 +20,7 @@ import type { ChatMessage } from "../inference/backend";
 import type { AgentStreamAdapter, AgentStreamEvent } from "../agents/contract";
 import { adapterFor } from "../agents/registry";
 import type { AgentIpc, StorageIpc, Unlisten } from "../ipc/contract";
+import { boundProviderMemory } from "../memory/provider-context";
 import { buildRemoteAgentSpawn } from "../ssh/command";
 import type { RemoteTarget } from "../ssh/model";
 import {
@@ -132,16 +133,6 @@ const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_MODEL_DISCOVERY_LINES = 2_048;
 const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
 const MAX_DISCOVERED_MODELS = 512;
-const MAX_CHAT_MEMORY_CHARS = 12_000;
-
-function boundedMemory(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  if (!normalized) return null;
-  return normalized.length <= MAX_CHAT_MEMORY_CHARS
-    ? normalized
-    : `${normalized.slice(0, MAX_CHAT_MEMORY_CHARS - 1).trimEnd()}…`;
-}
-
 function promptWithMemory(prompt: string, memory: string | null): string {
   return memory
     ? `${memory}\n\n## Current request\n${prompt}`
@@ -777,7 +768,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         const localRoot = deps.projectRoot(thread.projectId);
         if (localRoot && deps.memoryContext) {
           try {
-            projectMemory = boundedMemory(await deps.memoryContext(localRoot));
+            projectMemory = boundProviderMemory(await deps.memoryContext(localRoot));
           } catch {
             projectMemory = null;
           }

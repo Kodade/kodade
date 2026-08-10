@@ -15,7 +15,7 @@ import {
 } from "../../src/local/harness";
 import { LocalAgentLoop } from "../../src/local/agent";
 import { OpenAIHttpBackend, type ChatMessage } from "../../src/local/backend";
-import { formatProjectMemory } from "../../src/local/memory";
+import { formatProjectMemory } from "../../src/memory/provider-context";
 import {
   toolCapabilityTier,
   type ToolCapabilityTier,

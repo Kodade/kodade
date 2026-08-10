@@ -27,7 +27,7 @@ import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
 import { createOllamaChatRuntime } from "../chat/ollama";
-import { formatProjectMemory } from "../local/memory";
+import { formatProjectMemory } from "../memory/provider-context";
 import { createProvidersStore } from "../providers/store";
 import { ensureBrowserAgentSetup } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";

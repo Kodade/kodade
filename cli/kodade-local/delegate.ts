@@ -12,10 +12,8 @@ import {
   OpenAIHttpBackend,
   type InferenceBackend,
 } from "../../src/local/backend";
-import {
-  formatProjectMemory,
-  type MemoryCheckpointClient,
-} from "../../src/local/memory";
+import type { MemoryCheckpointClient } from "../../src/local/memory";
+import { formatProjectMemory } from "../../src/memory/provider-context";
 import {
   LOCAL_AGENT_TOOLS,
   projectToolPath,

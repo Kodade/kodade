@@ -23,6 +23,10 @@ const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SCAN_FILES: usize = 512;
 const MAX_CONTEXT_SOURCE_CHARS: usize = 4_000;
 const MAX_CONTEXT_CHARS: usize = 24_000;
+const MAX_CONTEXT_TITLE_CHARS: usize = 200;
+// KödMCP runs without the frontend, so its mapped Markdown projection owns a
+// native serialized-size ceiling that includes metadata and JSON escaping.
+const MAX_CONTEXT_JSON_BYTES: usize = 32 * 1024;
 
 pub(super) fn collect_project_documents(
     location: &ProjectLocation,
@@ -205,6 +209,7 @@ fn read_document(
                 .unwrap_or("Project knowledge")
                 .to_string()
         });
+    let title = bounded_chars(&title, MAX_CONTEXT_TITLE_CHARS).0;
     let modified_at = std::fs::metadata(&canonical)?
         .modified()
         .unwrap_or(UNIX_EPOCH)
@@ -369,28 +374,6 @@ pub(super) fn project_context(
                 .any(|candidate| candidate.id == document.id),
         })
         .collect::<Vec<_>>();
-    let mut remaining = MAX_CONTEXT_CHARS;
-    let mut truncated = selected.len() < documents.len();
-    let mut sources = Vec::new();
-    for document in selected {
-        if remaining == 0 {
-            truncated = true;
-            break;
-        }
-        let limit = remaining.min(MAX_CONTEXT_SOURCE_CHARS);
-        let (content, source_truncated) = bounded_chars(&document.body, limit);
-        remaining = remaining.saturating_sub(content.chars().count());
-        truncated |= source_truncated;
-        sources.push(ProjectKnowledgeSource {
-            kind: document.kind,
-            relative_path: document.relative_path.clone(),
-            title: document.title.clone(),
-            content,
-            sha256: document.sha256.clone(),
-            modified_at: document.modified_at,
-            truncated: source_truncated,
-        });
-    }
     let mut index_hasher = Sha256::new();
     for document in documents {
         index_hasher.update(document.relative_path.as_bytes());
@@ -398,20 +381,104 @@ pub(super) fn project_context(
         index_hasher.update(document.sha256.as_bytes());
         index_hasher.update([0]);
     }
-    ProjectKnowledgeContext {
+    let (project_display_name, display_name_truncated) =
+        bounded_chars(&location.project_display_name, MAX_CONTEXT_TITLE_CHARS);
+    let mut context = ProjectKnowledgeContext {
         project_id: location.project_id.clone(),
-        project_display_name: location.project_display_name.clone(),
+        project_display_name,
         origin: location.project_root.to_string_lossy().into_owned(),
         sync: ProjectKnowledgeSync {
             status: ProjectKnowledgeSyncStatus::Current,
             refreshed_at,
             indexed_documents: documents.len() as u32,
             index_hash: Some(format!("{:x}", index_hasher.finalize())),
-            truncated,
+            truncated: selected.len() < documents.len() || display_name_truncated,
             error: None,
         },
-        sources,
+        sources: Vec::new(),
+    };
+    let mut remaining = MAX_CONTEXT_CHARS;
+    for document in selected {
+        if remaining == 0 {
+            context.sync.truncated = true;
+            break;
+        }
+        let max_content_chars = remaining.min(MAX_CONTEXT_SOURCE_CHARS);
+        let (title, title_truncated) = bounded_chars(&document.title, MAX_CONTEXT_TITLE_CHARS);
+        let source = ProjectKnowledgeSource {
+            kind: document.kind,
+            relative_path: document.relative_path.clone(),
+            title,
+            content: String::new(),
+            sha256: document.sha256.clone(),
+            modified_at: document.modified_at,
+            truncated: title_truncated,
+        };
+        let Some((source, serialized_truncated)) =
+            fit_source_to_context_budget(&context, source, &document.body, max_content_chars)
+        else {
+            context.sync.truncated = true;
+            break;
+        };
+        remaining = remaining.saturating_sub(source.content.chars().count());
+        context.sync.truncated |= source.truncated;
+        context.sources.push(source);
+        if serialized_truncated {
+            context.sync.truncated = true;
+            break;
+        }
     }
+    debug_assert!(serialized_context_bytes(&context) <= MAX_CONTEXT_JSON_BYTES);
+    context
+}
+
+fn fit_source_to_context_budget(
+    context: &ProjectKnowledgeContext,
+    source: ProjectKnowledgeSource,
+    body: &str,
+    max_content_chars: usize,
+) -> Option<(ProjectKnowledgeSource, bool)> {
+    let mut candidate = source.clone();
+    let (content, body_truncated) = bounded_chars(body, max_content_chars);
+    candidate.content = content;
+    candidate.truncated |= body_truncated;
+    if serialized_context_with_source_bytes(context, &candidate) <= MAX_CONTEXT_JSON_BYTES {
+        return Some((candidate, false));
+    }
+
+    let mut low = 0_usize;
+    let mut high = max_content_chars;
+    let mut best = None;
+    while low <= high {
+        let midpoint = low + (high - low) / 2;
+        let mut bounded = source.clone();
+        bounded.content = bounded_chars(body, midpoint).0;
+        bounded.truncated = true;
+        if serialized_context_with_source_bytes(context, &bounded) <= MAX_CONTEXT_JSON_BYTES {
+            best = Some(bounded);
+            low = midpoint.saturating_add(1);
+        } else if midpoint == 0 {
+            break;
+        } else {
+            high = midpoint - 1;
+        }
+    }
+    best.map(|bounded| (bounded, true))
+}
+
+fn serialized_context_with_source_bytes(
+    context: &ProjectKnowledgeContext,
+    source: &ProjectKnowledgeSource,
+) -> usize {
+    let mut candidate = context.clone();
+    candidate.sources.push(source.clone());
+    serialized_context_bytes(&candidate)
+}
+
+fn serialized_context_bytes(context: &ProjectKnowledgeContext) -> usize {
+    serde_json::to_vec(context)
+        .map(|serialized| serialized.len())
+        .unwrap_or(usize::MAX)
 }
 
 pub(super) fn bounded_chars(value: &str, limit: usize) -> (String, bool) {

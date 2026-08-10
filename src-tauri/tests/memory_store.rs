@@ -3405,6 +3405,15 @@ fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits
         "---\ntitle: Draft knowledge\ntype: knowledge\nstatus: draft\n---\n# Draft knowledge\n\nDo not expose this draft.\n",
     )
     .expect("write draft knowledge");
+    std::fs::write(
+        project_root.join("Knowledge/oversized.md"),
+        format!(
+            "---\ntitle: {}\ntype: knowledge\nstatus: approved\n---\n# Oversized knowledge\n\n{}",
+            "T".repeat(10_000),
+            "\u{0001}".repeat(20_000),
+        ),
+    )
+    .expect("write serialization stress knowledge");
 
     let checkout = app_data.root().join("checkout");
     std::fs::create_dir(&checkout).expect("create checkout");
@@ -3420,8 +3429,14 @@ fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits
         .expect("map workspace");
 
     let context = store.context(&workspace.id).expect("load mapped context");
+    let serialized_context = serde_json::to_vec(&context).expect("serialize get_context result");
+    assert!(
+        serialized_context.len() <= 34 * 1024,
+        "the complete structured get_context response must stay within its explicit bound"
+    );
     let knowledge = context
         .project_knowledge
+        .as_ref()
         .expect("mapped project knowledge context");
     assert_eq!(knowledge.project_id, "portable-project");
     assert_eq!(knowledge.sync.status, ProjectKnowledgeSyncStatus::Current);
@@ -3447,6 +3462,7 @@ fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits
             "Worklog/2026/2026-08-02.md",
             "Decisions/accepted.md",
             "Knowledge/approved.md",
+            "Knowledge/oversized.md",
         ],
         "context includes required notes, three recent days, and only approved durable notes"
     );
@@ -3469,6 +3485,12 @@ fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits
             .sum::<usize>()
             <= 24_000
     );
+    let oversized = knowledge
+        .sources
+        .iter()
+        .find(|source| source.relative_path == "Knowledge/oversized.md")
+        .expect("bounded stress source");
+    assert!(oversized.title.chars().count() <= 200);
     let state = knowledge
         .sources
         .iter()
