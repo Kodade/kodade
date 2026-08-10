@@ -755,6 +755,47 @@ export type WorkspaceContext = {
   openTasks: MemoryRecord[];
   recentMemories: MemoryRecord[];
   workingMemory?: WorkingMemoryContext | null;
+  projectKnowledge?: ProjectKnowledgeContext | null;
+};
+
+export type ProjectKnowledgeKind =
+  | "project"
+  | "state"
+  | "worklog"
+  | "decision"
+  | "knowledge";
+
+export type ProjectKnowledgeSync = {
+  status: "current" | "error";
+  refreshedAt: number;
+  indexedDocuments: number;
+  indexHash: string | null;
+  truncated: boolean;
+  error: string | null;
+};
+
+export type ProjectKnowledgeSource = {
+  kind: ProjectKnowledgeKind;
+  relativePath: string;
+  title: string;
+  content: string;
+  sha256: string;
+  modifiedAt: number;
+  truncated: boolean;
+};
+
+export type ProjectKnowledgeProvenance = {
+  projectId: string;
+  relativePath: string;
+  sha256: string;
+};
+
+export type ProjectKnowledgeContext = {
+  projectId: string;
+  projectDisplayName: string;
+  origin: string;
+  sync: ProjectKnowledgeSync;
+  sources: ProjectKnowledgeSource[];
 };
 
 export type WorkingMemoryMode = "commit" | "local";
@@ -810,6 +851,7 @@ export type MemorySearchHit = {
   version: number;
   updatedAt: number;
   filePath?: string | null;
+  projectSource?: ProjectKnowledgeProvenance | null;
 };
 
 export type CheckpointQuery = {

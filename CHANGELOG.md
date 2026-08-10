@@ -5,6 +5,9 @@
 - Added KödMem projects-vault registration and portable logical project
   mappings so multiple local workspaces can share one stable project identity
   without using checkout paths as identity.
+- Added bounded, provenance-tagged project context refreshed from mapped
+  Obsidian Markdown in KödMem, KödMCP, local KödChat providers, and the Memory
+  pane while preserving the existing unmapped workflow.
 
 ## 1.5.1 - 2026-08-08
 

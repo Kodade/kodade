@@ -120,12 +120,12 @@ export function MemoryPane({
     setCreating(true);
   };
 
-  const openWorkingFile = async (relativePath: string) => {
-    if (!workspace) return;
+  const openWorkingFile = async (relativePath: string, root = workspace?.canonicalRoot) => {
+    if (!root) return;
     const path = relativePath
       .split("/")
       .filter(Boolean)
-      .reduce((parent, name) => nativeJoin(parent, name), workspace.canonicalRoot);
+      .reduce((parent, name) => nativeJoin(parent, name), root);
     await filesStore.getState().selectFile(path);
     settingsViewStore.getState().close();
   };
@@ -295,6 +295,45 @@ export function MemoryPane({
             )}
           </div>
 
+          {context?.projectKnowledge && (
+            <section className="border-b border-border p-3" aria-label="Mapped project knowledge">
+              <div className="memory-heading">Mapped project knowledge</div>
+              <p className="mt-1 truncate text-[11px] text-text-dim">
+                {context.projectKnowledge.projectDisplayName} · {context.projectKnowledge.origin}
+              </p>
+              {context.projectKnowledge.sync.status === "error" ? (
+                <p role="alert" className="mt-2 text-[11px] leading-4 text-[var(--kd-error)]">
+                  {context.projectKnowledge.sync.error ?? "Mapped Markdown refresh failed."}
+                </p>
+              ) : (
+                <>
+                  <p className="mt-1 text-[11px] text-text-dim">
+                    current · {context.projectKnowledge.sync.indexedDocuments} documents
+                    {context.projectKnowledge.sync.truncated ? " · bounded" : ""}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {context.projectKnowledge.sources.map((source) => (
+                      <button
+                        key={source.relativePath}
+                        className="memory-action"
+                        type="button"
+                        title={`sha256:${source.sha256}`}
+                        onClick={() =>
+                          void openWorkingFile(
+                            source.relativePath,
+                            context.projectKnowledge?.origin,
+                          )
+                        }
+                      >
+                        {source.relativePath}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
           <section className="border-b border-border p-3" aria-label="Project working memory">
             <div className="memory-heading">Project working memory</div>
             {workingMemory ? (
@@ -443,7 +482,12 @@ export function MemoryPane({
                 key={item.id}
                 onClick={() => {
                   setCreating(false);
-                  if (item.filePath) void openWorkingFile(item.filePath);
+                  if (item.filePath) {
+                    void openWorkingFile(
+                      item.filePath,
+                      item.projectSource ? context?.projectKnowledge?.origin : undefined,
+                    );
+                  }
                   else void memoryStore.getState().select(item.id);
                 }}
                 className={`block w-full border-b border-border px-3 py-2.5 text-left hover:bg-surface-hover ${selected?.id === item.id ? "bg-surface-hover" : ""}`}

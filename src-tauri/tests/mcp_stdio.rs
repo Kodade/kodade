@@ -513,6 +513,78 @@ fn stdio_drives_the_registered_workspace_memory_workflow() {
 }
 
 #[test]
+fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
+    let temp = tempfile::tempdir().expect("create mapped MCP fixture");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    let workspace = std::fs::canonicalize(workspace).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    let project = vault.join("10-Projects/mcp-project");
+    std::fs::create_dir_all(&project).expect("create mapped project");
+    std::fs::write(
+        project.join("Project.md"),
+        "# MCP project\n\nStable charter.\n",
+    )
+    .expect("write project hub");
+    std::fs::write(
+        project.join("STATE.md"),
+        "# State\n\nInitial mapped state.\n",
+    )
+    .expect("write state");
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open mapped MCP store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register vault");
+    let registered = store
+        .register_workspace(&workspace, "Mapped MCP", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&registered.id, None, "mcp-project", "MCP project")
+        .expect("map workspace");
+    drop(store);
+
+    let root = workspace.to_string_lossy();
+    let mut process = McpProcess::spawn(&db, true, "2026-07-28");
+    let context = process.call_tool("get_context", json!({ "workspaceRoot": root }));
+    assert_eq!(
+        context["result"]["structuredContent"]["projectKnowledge"]["projectId"],
+        "mcp-project"
+    );
+    assert_eq!(
+        context["result"]["structuredContent"]["projectKnowledge"]["sync"]["status"],
+        "current"
+    );
+    assert_eq!(
+        context["result"]["structuredContent"]["projectKnowledge"]["sources"][1]["relativePath"],
+        "STATE.md"
+    );
+
+    std::fs::write(
+        project.join("STATE.md"),
+        "# State\n\nExternal mcp-refresh-nebula edit.\n",
+    )
+    .expect("edit mapped state externally");
+    let search = process.call_tool(
+        "search_memories",
+        json!({ "workspaceRoot": root, "query": "mcp-refresh-nebula" }),
+    );
+    assert_eq!(search["result"]["structuredContent"]["total"], 1);
+    assert_eq!(
+        search["result"]["structuredContent"]["items"][0]["projectSource"]["relativePath"],
+        "STATE.md"
+    );
+    assert_eq!(
+        search["result"]["structuredContent"]["items"][0]["projectSource"]["sha256"]
+            .as_str()
+            .expect("bounded source hash")
+            .len(),
+        64
+    );
+}
+
+#[test]
 fn stdio_context_search_and_checkpoint_round_trip_project_working_files() {
     let (_temp, db, workspace_root) = registered_store();
     let store = MemoryStore::open(&db).expect("open fixture store");
@@ -651,7 +723,7 @@ fn read_only_stdio_rejects_an_older_schema_without_migrating() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("schema 6 is older than current version 10"),
+            .contains("schema 6 is older than current version 11"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );

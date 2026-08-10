@@ -1,4 +1,6 @@
 /** The small, client-facing subset of KödMCP's get_context response. */
+import type { ProjectKnowledgeContext } from "../ipc/contract";
+
 export type ProjectMemoryRecord = {
   title?: string;
   body?: string;
@@ -15,6 +17,7 @@ export type ProjectMemoryContext = {
   pinnedDecisions?: ProjectMemoryRecord[];
   openTasks?: ProjectMemoryRecord[];
   recentMemories?: ProjectMemoryRecord[];
+  projectKnowledge?: ProjectKnowledgeContext | null;
 };
 
 export type MemoryCheckpointInput = {
@@ -32,6 +35,7 @@ export type MemoryCheckpointClient = {
 
 const MAX_RECORD_CHARS = 600;
 const MAX_MEMORY_CHARS = 12_000;
+const MAX_PROJECT_SOURCE_CHARS = 4_000;
 
 function short(value: string | undefined): string {
   if (!value) return "";
@@ -54,6 +58,37 @@ function records(
   return `### ${title}\n${lines.join("\n")}`;
 }
 
+function bounded(value: string, limit: number): string {
+  return value.length <= limit
+    ? value
+    : `${value.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function mappedProject(context: ProjectKnowledgeContext | null | undefined): string | null {
+  if (!context) return null;
+  const heading = [
+    `### Mapped project · ${context.projectDisplayName} (${context.projectId})`,
+    `Origin · ${context.origin}`,
+  ];
+  if (context.sync.status === "error") {
+    return [
+      ...heading,
+      "Mapped project sync error",
+      context.sync.error ?? "The mapped Markdown index could not be refreshed.",
+    ].join("\n");
+  }
+  const sources = context.sources.map((source) => [
+    `#### ${source.title}`,
+    `${source.relativePath} · sha256:${source.sha256.slice(0, 12)}`,
+    bounded(source.content, MAX_PROJECT_SOURCE_CHARS),
+  ].join("\n"));
+  return [
+    ...heading,
+    `Indexed ${context.sync.indexedDocuments} Markdown documents${context.sync.truncated ? " · bounded" : ""}.`,
+    ...sources,
+  ].join("\n\n");
+}
+
 /** Render a bounded, explicitly-delimited KödMem section for the agent's system context. */
 export function formatProjectMemory(context: ProjectMemoryContext): string {
   const checkpoint = context.latestCheckpoint;
@@ -74,6 +109,7 @@ export function formatProjectMemory(context: ProjectMemoryContext): string {
   const sections = [
     "## Project memory (KödMem)",
     "Use this local, durable project context when it is relevant. It may be incomplete or stale; verify before making risky claims.",
+    mappedProject(context.projectKnowledge),
     checkpointSection,
     records("Pinned decisions", context.pinnedDecisions),
     records("Open tasks", context.openTasks),

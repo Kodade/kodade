@@ -52,6 +52,9 @@ export type ChatDeps = {
   // Resolve a thread's project root at send time (projects are renameable and
   // removable, so this is read fresh rather than copied into the thread).
   projectRoot(projectId: string): string | null;
+  // Bounded KödMem context for local projects. Failures are non-fatal: chat
+  // still runs without memory when the local index cannot be read.
+  memoryContext?(projectRoot: string): Promise<string | null>;
   // A pinned target makes this a remote project. The adapter still constructs
   // the provider argv; this store wraps it in a direct OpenSSH spawn.
   remoteTarget?(projectId: string): RemoteTarget | null;
@@ -129,6 +132,21 @@ const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_MODEL_DISCOVERY_LINES = 2_048;
 const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
 const MAX_DISCOVERED_MODELS = 512;
+const MAX_CHAT_MEMORY_CHARS = 12_000;
+
+function boundedMemory(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  return normalized.length <= MAX_CHAT_MEMORY_CHARS
+    ? normalized
+    : `${normalized.slice(0, MAX_CHAT_MEMORY_CHARS - 1).trimEnd()}…`;
+}
+
+function promptWithMemory(prompt: string, memory: string | null): string {
+  return memory
+    ? `${memory}\n\n## Current request\n${prompt}`
+    : prompt;
+}
 
 // OpenCode model output is plugin-influenced. Keep only bounded, plausible
 // provider/model ids; logs, terminal decoration, duplicates, and oversized
@@ -755,6 +773,16 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         if (!prompt) return;
         const thread = get().threads[threadId];
         if (!thread || runs.has(threadId)) return;
+        let projectMemory: string | null = null;
+        const localRoot = deps.projectRoot(thread.projectId);
+        if (localRoot && deps.memoryContext) {
+          try {
+            projectMemory = boundedMemory(await deps.memoryContext(localRoot));
+          } catch {
+            projectMemory = null;
+          }
+          if (!get().threads[threadId] || runs.has(threadId)) return;
+        }
 
         if (thread.providerId === "ollama") {
           const runtime = deps.ollama;
@@ -821,7 +849,14 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           deps.activity?.attention?.(current.projectId, threadId, null);
           deps.activity?.streamed?.(current.projectId, threadId);
           void persistNow(threadId);
-          void streamOllama({ threadId, run, runtime, model, controller });
+          void streamOllama({
+            threadId,
+            run,
+            runtime,
+            model,
+            controller,
+            memoryContext: projectMemory,
+          });
           return;
         }
 
@@ -836,7 +871,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           return;
         }
         const remoteTarget = deps.remoteTarget?.(thread.projectId) ?? null;
-        const projectRoot = deps.projectRoot(thread.projectId);
+        const projectRoot = localRoot;
         if (projectRoot === null && remoteTarget === null) return;
         const cwd = remoteTarget ? "" : projectRoot!;
 
@@ -875,7 +910,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         void persistNow(threadId);
 
         const spawn = adapter.spawn({
-          prompt,
+          prompt: promptWithMemory(prompt, projectMemory),
           cwd: remoteTarget?.path ?? projectRoot!,
           resumeId: thread.resumeId,
           model: thread.model,
@@ -973,14 +1008,18 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       runtime: OllamaChatRuntime;
       model: string;
       controller: AbortController;
+      memoryContext: string | null;
     }) {
       const thread = get().threads[input.threadId];
       if (!thread) return;
-      const messages: ChatMessage[] = thread.entries
+      const history: ChatMessage[] = thread.entries
         .filter((entry): entry is Extract<ChatEntry, { kind: "message" }> => entry.kind === "message")
         .filter((entry) => (entry.conversationId ?? 0) === thread.conversationId)
         .filter((entry) => entry.role === "user" || entry.role === "assistant")
         .map((entry) => ({ role: entry.role, content: entry.text }));
+      const messages: ChatMessage[] = input.memoryContext
+        ? [{ role: "system", content: input.memoryContext }, ...history]
+        : history;
       try {
         for await (const delta of input.runtime.chat({
           model: input.model,

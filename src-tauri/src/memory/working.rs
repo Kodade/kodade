@@ -318,6 +318,7 @@ impl MemoryStore {
                     version: 1,
                     updated_at: row.get(5)?,
                     file_path: Some(row.get(6)?),
+                    project_source: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

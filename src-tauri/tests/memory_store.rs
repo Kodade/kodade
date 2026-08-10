@@ -7,8 +7,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use kodade_lib::memory::{
     ActivityKind, AuditQuery, CheckpointQuery, DeletedMemoryQuery, MemoryError, MemoryKind,
     MemoryLink, MemoryQuery, MemoryRevision, MemorySource, MemoryStore, MutationProvenance,
-    NewActivity, NewCheckpoint, NewMemory, RetentionSettings, WorkingMemoryMode,
+    NewActivity, NewCheckpoint, NewMemory, ProjectKnowledgeSyncStatus, RetentionSettings,
+    WorkingMemoryMode,
 };
+use sha2::{Digest, Sha256};
 
 struct TempProject {
     dir: PathBuf,
@@ -90,6 +92,10 @@ fn activating_working_memory_creates_readable_files_and_indexes_them() {
     let context = store
         .context(&workspace.id)
         .expect("load file-backed context");
+    assert_eq!(
+        context.project_knowledge, None,
+        "unmapped workspaces retain the repo-local working-memory contract"
+    );
     let working = context.working_memory.expect("working memory context");
     assert!(working.state.contains("satellite migration"));
     assert_eq!(working.directory, ".kodade/memory");
@@ -1357,7 +1363,7 @@ fn schema_version_6_fixture_backfills_activity_sequence_without_reordering_histo
     );
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
 }
 
@@ -1448,7 +1454,7 @@ fn concurrent_first_open_serializes_the_complete_migration_sequence() {
         .expect("query migrations")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect migrations");
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 }
 
 macro_rules! historical_schema_upgrade_test {
@@ -1605,7 +1611,7 @@ macro_rules! historical_schema_upgrade_test {
             drop(store);
             assert_eq!(
                 schema_versions(project.db()),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
             );
         }
     };
@@ -1616,6 +1622,35 @@ historical_schema_upgrade_test!(schema_version_2_upgrades_to_current, 2);
 historical_schema_upgrade_test!(schema_version_3_upgrades_to_current, 3);
 historical_schema_upgrade_test!(schema_version_4_upgrades_to_current, 4);
 historical_schema_upgrade_test!(schema_version_5_upgrades_to_current, 5);
+
+#[test]
+fn schema_version_10_adds_the_rebuildable_project_document_index() {
+    let project = TempProject::new("schema-v10-project-index");
+    install_historical_fixture(&project, include_str!("fixtures/memory_v10.sql"));
+
+    let store = MemoryStore::open(project.db()).expect("upgrade version 10 schema");
+    assert_eq!(
+        store
+            .workspace("ws_legacy")
+            .expect("preserve v10 workspace")
+            .display_name,
+        "Legacy KödMem"
+    );
+    drop(store);
+    let connection = rusqlite::Connection::open(project.db()).expect("inspect upgraded database");
+    let project_documents: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'project_documents'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("inspect project document index");
+    assert_eq!(project_documents, 1);
+    assert_eq!(
+        schema_versions(project.db()),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+}
 
 #[test]
 fn failed_migration_rolls_back_its_schema_and_version_marker() {
@@ -3318,6 +3353,377 @@ fn projects_vault_mapping_persists_stable_identity_across_workspace_locations() 
         )
         .expect("map the fresh machine by portable identity");
     assert_eq!(other_mapping.project_id, "portable-project");
+}
+
+#[test]
+fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits() {
+    let app_data = TempProject::new("mapped-project-context");
+    let vault = TempProject::new("mapped-project-context-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    let project_root = vault.root().join("10-Projects/portable-project");
+    std::fs::create_dir_all(project_root.join("Worklog/2026")).expect("create worklog folder");
+    std::fs::create_dir(project_root.join("Decisions")).expect("create decisions folder");
+    std::fs::create_dir(project_root.join("Knowledge")).expect("create knowledge folder");
+    let project_hub = format!(
+        "---\ntitle: Portable project\ntype: project\n---\n# Portable project\n\nStable project charter.\n{}",
+        "p".repeat(5_000)
+    );
+    std::fs::write(project_root.join("Project.md"), project_hub).expect("write project hub");
+    let initial_state = "---\ntitle: Portable state\ntype: state\n---\n# Current state\n\nObsidian edit alpha is current.\n";
+    std::fs::write(project_root.join("STATE.md"), initial_state).expect("write state");
+    for day in 1..=4 {
+        std::fs::write(
+            project_root.join(format!("Worklog/2026/2026-08-0{day}.md")),
+            format!(
+                "---\ntitle: Day {day}\ntype: worklog\n---\n# Day {day}\n\nDaily result {day}.\n"
+            ),
+        )
+        .expect("write daily worklog");
+    }
+    std::fs::write(
+        project_root.join("Worklog/README.md"),
+        "# Worklog guide\n\nThis is not a daily worklog entry.\n",
+    )
+    .expect("write non-daily worklog documentation");
+    std::fs::write(
+        project_root.join("Decisions/accepted.md"),
+        "---\ntitle: Accepted choice\ntype: decision\nstatus: accepted\n---\n# Accepted choice\n\nUse the bounded vault index.\n",
+    )
+    .expect("write accepted decision");
+    std::fs::write(
+        project_root.join("Decisions/proposed.md"),
+        "---\ntitle: Proposed choice\ntype: decision\nstatus: proposed\n---\n# Proposed choice\n\nDo not expose this proposal.\n",
+    )
+    .expect("write proposed decision");
+    std::fs::write(
+        project_root.join("Knowledge/approved.md"),
+        "---\ntitle: Approved knowledge\ntype: knowledge\nstatus: approved\n---\n# Approved knowledge\n\nThe stable knowledge phrase is searchable.\n",
+    )
+    .expect("write approved knowledge");
+    std::fs::write(
+        project_root.join("Knowledge/draft.md"),
+        "---\ntitle: Draft knowledge\ntype: knowledge\nstatus: draft\n---\n# Draft knowledge\n\nDo not expose this draft.\n",
+    )
+    .expect("write draft knowledge");
+
+    let checkout = app_data.root().join("checkout");
+    std::fs::create_dir(&checkout).expect("create checkout");
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+    store
+        .register_projects_vault(vault.root())
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&checkout, "Portable checkout", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+        .expect("map workspace");
+
+    let context = store.context(&workspace.id).expect("load mapped context");
+    let knowledge = context
+        .project_knowledge
+        .expect("mapped project knowledge context");
+    assert_eq!(knowledge.project_id, "portable-project");
+    assert_eq!(knowledge.sync.status, ProjectKnowledgeSyncStatus::Current);
+    assert!(knowledge.sync.truncated);
+    assert_eq!(
+        knowledge.origin,
+        project_root
+            .canonicalize()
+            .expect("canonical mapped project root")
+            .to_string_lossy()
+    );
+    assert_eq!(
+        knowledge
+            .sources
+            .iter()
+            .map(|source| source.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Project.md",
+            "STATE.md",
+            "Worklog/2026/2026-08-04.md",
+            "Worklog/2026/2026-08-03.md",
+            "Worklog/2026/2026-08-02.md",
+            "Decisions/accepted.md",
+            "Knowledge/approved.md",
+        ],
+        "context includes required notes, three recent days, and only approved durable notes"
+    );
+    assert!(knowledge
+        .sources
+        .iter()
+        .all(|source| source.sha256.len() == 64));
+    let project_source = knowledge
+        .sources
+        .iter()
+        .find(|source| source.relative_path == "Project.md")
+        .expect("bounded project source");
+    assert!(project_source.truncated);
+    assert_eq!(project_source.content.chars().count(), 4_000);
+    assert!(
+        knowledge
+            .sources
+            .iter()
+            .map(|source| source.content.chars().count())
+            .sum::<usize>()
+            <= 24_000
+    );
+    let state = knowledge
+        .sources
+        .iter()
+        .find(|source| source.relative_path == "STATE.md")
+        .expect("state provenance");
+    assert_eq!(
+        state.sha256,
+        format!("{:x}", Sha256::digest(initial_state.as_bytes()))
+    );
+
+    let approved = store
+        .search(MemoryQuery {
+            workspace_id: workspace.id.clone(),
+            text: "stable knowledge phrase".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .expect("search approved mapped knowledge");
+    assert_eq!(approved.total, 1);
+    let provenance = approved.items[0]
+        .project_source
+        .as_ref()
+        .expect("mapped search provenance");
+    assert_eq!(provenance.project_id, "portable-project");
+    assert_eq!(provenance.relative_path, "Knowledge/approved.md");
+    assert_eq!(provenance.sha256.len(), 64);
+
+    let edited_state = initial_state.replace("Obsidian edit alpha", "Obsidian edit beta");
+    std::fs::write(project_root.join("STATE.md"), &edited_state).expect("edit state in Obsidian");
+    let refreshed = store
+        .context(&workspace.id)
+        .expect("refresh mapped context");
+    let refreshed_state = refreshed
+        .project_knowledge
+        .expect("refreshed mapped context")
+        .sources
+        .into_iter()
+        .find(|source| source.relative_path == "STATE.md")
+        .expect("refreshed state source");
+    assert!(refreshed_state.content.contains("Obsidian edit beta"));
+    assert_ne!(refreshed_state.sha256, state.sha256);
+    assert_eq!(
+        store
+            .search(MemoryQuery {
+                workspace_id: workspace.id,
+                text: "Obsidian edit beta".into(),
+                kinds: Vec::new(),
+                sources: Vec::new(),
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .expect("search externally edited state")
+            .total,
+        1
+    );
+}
+
+#[test]
+fn mapped_project_context_is_confined_and_isolated_between_projects() {
+    let app_data = TempProject::new("mapped-project-isolation");
+    let vault = TempProject::new("mapped-project-isolation-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.root().join("10-Projects")).expect("create projects folder");
+    for (project_id, marker) in [
+        ("alpha-project", "alpha-only-orchid"),
+        ("beta-project", "beta-only-lantern"),
+    ] {
+        let root = vault.root().join("10-Projects").join(project_id);
+        std::fs::create_dir(&root).expect("create mapped project");
+        std::fs::write(
+            root.join("Project.md"),
+            format!("---\ntitle: {project_id}\n---\n# {project_id}\n\n{marker}\n"),
+        )
+        .expect("write project hub");
+        std::fs::write(root.join("STATE.md"), "# State\n\nReady.\n").expect("write state");
+    }
+
+    let alpha_checkout = app_data.root().join("alpha-checkout");
+    let beta_checkout = app_data.root().join("beta-checkout");
+    std::fs::create_dir(&alpha_checkout).expect("create alpha checkout");
+    std::fs::create_dir(&beta_checkout).expect("create beta checkout");
+    let store = MemoryStore::open(app_data.db()).expect("open store");
+    store
+        .register_projects_vault(vault.root())
+        .expect("register vault");
+    let alpha = store
+        .register_workspace(&alpha_checkout, "Alpha", None)
+        .expect("register alpha");
+    let beta = store
+        .register_workspace(&beta_checkout, "Beta", None)
+        .expect("register beta");
+    store
+        .map_workspace_to_project(&alpha.id, None, "alpha-project", "Alpha")
+        .expect("map alpha");
+    store
+        .map_workspace_to_project(&beta.id, None, "beta-project", "Beta")
+        .expect("map beta");
+
+    let alpha_context = store.context(&alpha.id).expect("load alpha context");
+    let alpha_knowledge = alpha_context.project_knowledge.expect("alpha knowledge");
+    assert!(alpha_knowledge
+        .sources
+        .iter()
+        .any(|source| source.content.contains("alpha-only-orchid")));
+    assert!(!alpha_knowledge
+        .sources
+        .iter()
+        .any(|source| source.content.contains("beta-only-lantern")));
+    let alpha_search = store
+        .search(MemoryQuery {
+            workspace_id: alpha.id.clone(),
+            text: "beta-only-lantern".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .expect("search alpha");
+    assert_eq!(alpha_search.total, 0, "alpha cannot search beta knowledge");
+
+    std::fs::remove_file(vault.root().join("10-Projects/alpha-project/STATE.md"))
+        .expect("remove required alpha state");
+    let error_context = store
+        .context(&alpha.id)
+        .expect("load structured sync error");
+    let error = error_context.project_knowledge.expect("mapped sync state");
+    assert_eq!(error.sync.status, ProjectKnowledgeSyncStatus::Error);
+    assert!(error.sync.error.as_deref().is_some_and(|message| {
+        message.contains("STATE.md") && message.contains("Repair the mapped project folder")
+    }));
+    assert!(error.sources.is_empty());
+    assert_eq!(
+        store
+            .search(MemoryQuery {
+                workspace_id: alpha.id.clone(),
+                text: "alpha-only-orchid".into(),
+                kinds: Vec::new(),
+                sources: Vec::new(),
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .expect("search failed mapping")
+            .total,
+        0,
+        "a failed refresh never serves stale indexed project knowledge"
+    );
+    assert_eq!(
+        store
+            .search(MemoryQuery {
+                workspace_id: beta.id,
+                text: "beta-only-lantern".into(),
+                kinds: Vec::new(),
+                sources: Vec::new(),
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .expect("search beta after alpha failure")
+            .total,
+        1
+    );
+
+    let alpha_root = vault.root().join("10-Projects/alpha-project");
+    std::fs::write(alpha_root.join("STATE.md"), "# State\n\nRestored.\n")
+        .expect("restore required state");
+    std::fs::create_dir(alpha_root.join("Knowledge")).expect("create knowledge folder");
+    let likely_credential = format!("{}{}", "ghp_", "a".repeat(30));
+    std::fs::write(
+        alpha_root.join("Knowledge/private.md"),
+        format!(
+            "---\ntitle: Private token\nstatus: approved\n---\n# Private token\n\n{likely_credential}\n"
+        ),
+    )
+    .expect("write unsafe approved knowledge");
+    let credential_error = store.context(&alpha.id).expect("reject likely credential");
+    let credential_sync = credential_error
+        .project_knowledge
+        .expect("mapped credential sync state")
+        .sync;
+    assert_eq!(credential_sync.status, ProjectKnowledgeSyncStatus::Error);
+    assert!(credential_sync
+        .error
+        .as_deref()
+        .is_some_and(|message| message.contains("contains likely credentials")));
+}
+
+#[test]
+fn read_only_store_refreshes_mapped_markdown_without_writing_the_index() {
+    let app_data = TempProject::new("mapped-project-read-only");
+    let vault = TempProject::new("mapped-project-read-only-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).expect("create Obsidian config");
+    let project_root = vault.root().join("10-Projects/portable-project");
+    std::fs::create_dir_all(&project_root).expect("create project folder");
+    std::fs::write(
+        project_root.join("Project.md"),
+        "# Portable\n\nInitial beacon.\n",
+    )
+    .expect("write project hub");
+    std::fs::write(project_root.join("STATE.md"), "# State\n\nInitial state.\n")
+        .expect("write state");
+    let checkout = app_data.root().join("checkout");
+    std::fs::create_dir(&checkout).expect("create checkout");
+    let writable = MemoryStore::open(app_data.db()).expect("open writable store");
+    writable
+        .register_projects_vault(vault.root())
+        .expect("register vault");
+    let workspace = writable
+        .register_workspace(&checkout, "Portable", None)
+        .expect("register workspace");
+    writable
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable")
+        .expect("map workspace");
+    writable.context(&workspace.id).expect("seed derived index");
+    drop(writable);
+
+    std::fs::write(
+        project_root.join("STATE.md"),
+        "# State\n\nExternal readonly-refresh-comet edit.\n",
+    )
+    .expect("edit mapped state");
+    let read_only = MemoryStore::open_read_only(app_data.db()).expect("open read-only store");
+    let context = read_only
+        .context(&workspace.id)
+        .expect("refresh read-only context");
+    assert!(context
+        .project_knowledge
+        .expect("mapped project knowledge")
+        .sources
+        .iter()
+        .any(|source| source.content.contains("readonly-refresh-comet")));
+    let search = read_only
+        .search(MemoryQuery {
+            workspace_id: workspace.id,
+            text: "readonly-refresh-comet".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .expect("search read-only mapped project");
+    assert_eq!(search.total, 1);
+    assert_eq!(
+        search.items[0]
+            .project_source
+            .as_ref()
+            .map(|source| source.relative_path.as_str()),
+        Some("STATE.md")
+    );
 }
 
 #[test]

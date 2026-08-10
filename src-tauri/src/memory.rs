@@ -16,13 +16,17 @@ pub mod commands;
 mod projects;
 mod working;
 
-pub use projects::{LogicalProject, ProjectsVault, WorkspaceProjectMapping};
+pub use projects::{
+    LogicalProject, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeProvenance,
+    ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus, ProjectsVault,
+    WorkspaceProjectMapping,
+};
 pub use working::{WorkingMemoryContext, WorkingMemoryMode, WorkingMemoryStatus};
 
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
 pub const MEMORY_TITLE_LIMIT: usize = 200;
-const MEMORY_SCHEMA_VERSION: u32 = 10;
+const MEMORY_SCHEMA_VERSION: u32 = 11;
 const SEARCH_OFFSET_LIMIT: u32 = 10_000;
 
 #[derive(Debug)]
@@ -454,6 +458,8 @@ pub struct WorkspaceContext {
     pub open_tasks: Vec<MemoryRecord>,
     pub recent_memories: Vec<MemoryRecord>,
     pub working_memory: Option<WorkingMemoryContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_knowledge: Option<ProjectKnowledgeContext>,
 }
 
 #[derive(Serialize)]
@@ -511,6 +517,8 @@ pub struct MemorySearchHit {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_source: Option<ProjectKnowledgeProvenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -849,9 +857,11 @@ impl MemoryStore {
                 open_tasks,
                 recent_memories,
                 working_memory: None,
+                project_knowledge: None,
             })
         })?;
         context.working_memory = self.working_memory_context(&context.workspace)?;
+        context.project_knowledge = self.project_knowledge_context(&context.workspace.id)?;
         Ok(context)
     }
 
@@ -1866,6 +1876,7 @@ impl MemoryStore {
         {
             self.sync_working_memory(&query.workspace_id)?;
         }
+        let project_refresh = self.refresh_project_knowledge(&query.workspace_id)?;
         self.run_with_recovery(|| {
             let limit = query.limit.clamp(1, 100);
             let needed = query.offset.saturating_add(limit);
@@ -1901,8 +1912,26 @@ impl MemoryStore {
                     }
                 }
             };
+            let (project_items, project_total) = {
+                let mut items = Vec::new();
+                let mut offset = 0_u32;
+                loop {
+                    let mut project_query = query.clone();
+                    project_query.limit = needed.saturating_sub(offset).clamp(1, 100);
+                    project_query.offset = offset;
+                    let page = self
+                        .project_knowledge_search_hits(&project_query, project_refresh.as_ref())?;
+                    let page_len = page.items.len() as u32;
+                    offset = offset.saturating_add(page_len);
+                    items.extend(page.items);
+                    if offset >= needed || u64::from(offset) >= page.total || page_len == 0 {
+                        break (items, page.total);
+                    }
+                }
+            };
             let mut items = if query.text.trim().is_empty() {
-                let mut merged = file_items;
+                let mut merged = project_items;
+                merged.extend(file_items);
                 merged.extend(database_items);
                 merged.sort_by(|left, right| {
                     right
@@ -1912,9 +1941,11 @@ impl MemoryStore {
                 });
                 merged
             } else {
-                interleave_ranked(file_items, database_items)
+                interleave_ranked(project_items, interleave_ranked(file_items, database_items))
             };
-            let total = file_total.saturating_add(database_total);
+            let total = project_total
+                .saturating_add(file_total)
+                .saturating_add(database_total);
             let start = (query.offset as usize).min(items.len());
             let end = start.saturating_add(limit as usize).min(items.len());
             let page_items = items.drain(start..end).collect();
@@ -2006,6 +2037,7 @@ impl MemoryStore {
                 version: row.get(7)?,
                 updated_at: row.get(8)?,
                 file_path: None,
+                project_source: None,
             })
         })?;
         let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3160,6 +3192,43 @@ fn migrate(connection: &mut Connection) -> Result<()> {
          );
          CREATE INDEX workspace_project_mappings_project_idx
             ON workspace_project_mappings(project_id, workspace_id);",
+    )?;
+    apply_migration(
+        &transaction,
+        11,
+        "CREATE TABLE project_documents (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES logical_projects(id) ON DELETE CASCADE,
+            relative_path TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('project', 'state', 'worklog', 'decision', 'knowledge')),
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            modified_at INTEGER NOT NULL,
+            indexed_at INTEGER NOT NULL,
+            UNIQUE(project_id, relative_path)
+         );
+         CREATE INDEX project_documents_project_modified_idx
+            ON project_documents(project_id, modified_at DESC, relative_path);
+         CREATE VIRTUAL TABLE project_document_fts USING fts5(
+            document_id UNINDEXED,
+            project_id UNINDEXED,
+            title,
+            body,
+            tokenize = 'unicode61'
+         );
+         CREATE TRIGGER project_documents_fts_insert AFTER INSERT ON project_documents BEGIN
+            INSERT INTO project_document_fts(document_id, project_id, title, body)
+            VALUES (new.id, new.project_id, new.title, new.body);
+         END;
+         CREATE TRIGGER project_documents_fts_update AFTER UPDATE ON project_documents BEGIN
+            DELETE FROM project_document_fts WHERE document_id = old.id;
+            INSERT INTO project_document_fts(document_id, project_id, title, body)
+            VALUES (new.id, new.project_id, new.title, new.body);
+         END;
+         CREATE TRIGGER project_documents_fts_delete AFTER DELETE ON project_documents BEGIN
+            DELETE FROM project_document_fts WHERE document_id = old.id;
+         END;",
     )?;
     transaction.commit()?;
     Ok(())

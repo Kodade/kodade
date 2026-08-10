@@ -9,7 +9,7 @@ const openDialog = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 
-import { harnessStore, memoryStore } from "../store/appStore";
+import { filesStore, harnessStore, memoryStore } from "../store/appStore";
 import { MemoryPane } from "./MemoryPane";
 
 const workspace: MemoryWorkspace = {
@@ -85,6 +85,9 @@ describe("KödMem pane", () => {
     invoke.mockReset();
     openDialog.mockReset();
     mockInvoke((command: string) => {
+      if (command === CMD.readFile) {
+        return Promise.resolve({ kind: "text", content: "# Current state" });
+      }
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -103,6 +106,28 @@ describe("KödMem pane", () => {
           pinnedDecisions: [decision],
           openTasks: [],
           recentMemories: [decision],
+          projectKnowledge: {
+            projectId: "kodade",
+            projectDisplayName: "Ködade",
+            origin: "C:\\ProjectsVault\\10-Projects\\kodade",
+            sync: {
+              status: "current",
+              refreshedAt: 5,
+              indexedDocuments: 7,
+              indexHash: "a".repeat(64),
+              truncated: false,
+              error: null,
+            },
+            sources: [{
+              kind: "state",
+              relativePath: "STATE.md",
+              title: "Current state",
+              content: "The mapped project is ready.",
+              sha256: "b".repeat(64),
+              modifiedAt: 5,
+              truncated: false,
+            }],
+          },
         });
       }
       if (command === CMD.memoryAudit) {
@@ -154,6 +179,7 @@ describe("KödMem pane", () => {
       applying: false,
       mutationError: null,
     });
+    filesStore.setState({ selectedPath: null });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -173,9 +199,24 @@ describe("KödMem pane", () => {
 
     expect(container.textContent).toContain("Ködade app data");
     expect(container.textContent).toContain("Core storage is ready.");
+    expect(container.textContent).toContain("Mapped project knowledge");
+    expect(container.textContent).toContain("current · 7 documents");
+    expect(container.textContent).toContain("C:\\ProjectsVault\\10-Projects\\kodade");
+    expect(container.textContent).toContain("STATE.md");
     expect(container.textContent).toContain("Use SQLite WAL");
     expect(container.textContent).toContain("Ködade app data");
     expect(invoke).toHaveBeenCalledWith(CMD.memoryContext, { workspaceId: "ws_1" });
+
+    const mappedState = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "STATE.md",
+    );
+    await act(async () => {
+      mappedState?.click();
+      await Promise.resolve();
+    });
+    expect(invoke).toHaveBeenCalledWith(CMD.readFile, {
+      path: "C:\\ProjectsVault\\10-Projects\\kodade\\STATE.md",
+    });
 
     const recordButton = [...container.querySelectorAll("button")].find(
       (button) => button.textContent?.includes("Use SQLite WAL"),
@@ -196,6 +237,48 @@ describe("KödMem pane", () => {
       `Last updated ${new Date(decision.updatedAt).toLocaleString()}`,
     );
     expect(container.textContent).toContain("revise · kodade-ui");
+  });
+
+  it("shows an actionable mapped-project refresh error", async () => {
+    mockInvoke((command: string) => {
+      if (command === CMD.memoryContext) {
+        return Promise.resolve({
+          workspace,
+          latestCheckpoint: null,
+          pinnedDecisions: [],
+          openTasks: [],
+          recentMemories: [],
+          projectKnowledge: {
+            projectId: "kodade",
+            projectDisplayName: "Ködade",
+            origin: "C:\\ProjectsVault\\10-Projects\\kodade",
+            sync: {
+              status: "error",
+              refreshedAt: 5,
+              indexedDocuments: 0,
+              indexHash: null,
+              truncated: false,
+              error: "STATE.md is missing. Repair the mapped project folder and retry.",
+            },
+            sources: [],
+          },
+        });
+      }
+      if (command === CMD.memoryAudit || command === CMD.memoryListDeleted) {
+        return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
+      }
+      throw new Error(`unexpected Tauri command: ${command}`);
+    });
+
+    await act(async () => {
+      root.render(<MemoryPane workspaceId={workspace.id} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("STATE.md is missing");
+    expect(alert?.textContent).toContain("Repair the mapped project folder");
   });
 
   it("keeps the empty state concise and opens a new memory", async () => {

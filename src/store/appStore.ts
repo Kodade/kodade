@@ -27,6 +27,7 @@ import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
 import { createOllamaChatRuntime } from "../chat/ollama";
+import { formatProjectMemory } from "../local/memory";
 import { createProvidersStore } from "../providers/store";
 import { ensureBrowserAgentSetup } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
@@ -591,6 +592,11 @@ export const chatStore = createChatStore({
   projectRoot: (projectId) =>
     appStore.getState().projects.find((project) => project.id === projectId)
       ?.path ?? null,
+  memoryContext: async (projectRoot) => {
+    const workspace = await tauriMemory.resolveWorkspace(projectRoot);
+    if (!workspace) return null;
+    return formatProjectMemory(await tauriMemory.context(workspace.id));
+  },
   remoteTarget: (projectId) =>
     RELEASE_MANIFEST.features.ssh &&
     entitlements.hasFeature(FEATURES.sshPro)

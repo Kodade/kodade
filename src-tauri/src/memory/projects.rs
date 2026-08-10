@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
-use std::path::Path;
-
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use super::{
     audit_mutation, now_millis, validate_no_likely_credential, AuditMutation, MemoryError,
@@ -36,6 +35,21 @@ pub struct WorkspaceProjectMapping {
     pub project_display_name: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+mod knowledge;
+
+pub use knowledge::{
+    ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeProvenance,
+    ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus,
+};
+
+#[derive(Clone, Debug)]
+struct ProjectLocation {
+    project_id: String,
+    project_display_name: String,
+    vault_root: PathBuf,
+    project_root: PathBuf,
 }
 
 impl MemoryStore {

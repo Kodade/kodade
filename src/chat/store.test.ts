@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockAgentIpc, MockStorage } from "../ipc/mock";
 import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN } from "../agents/fixtures";
+import type { ChatMessage } from "../inference/backend";
 import { chatDocName, parsePersistedThread, titleFromMessage } from "./model";
 import {
   createChatStore,
@@ -67,6 +68,33 @@ describe("a turn", () => {
       stdin: "read the file",
     });
     expect(store.getState().threads.t1.status).toBe("working");
+  });
+
+  it("injects bounded mapped project memory for a local CLI without persisting it", async () => {
+    const memory = "mapped-context-marker\n" + "m".repeat(20_000);
+    const { agent, store } = setup({
+      memoryContext: async (root) => `${root}\n${memory}`,
+    });
+    await store.getState().start();
+    await openThread(store);
+    await store.getState().send("t1", "inspect the project");
+
+    const stdin = agent.starts[0]?.stdin ?? "";
+    expect(stdin).toContain("mapped-context-marker");
+    expect(stdin).toContain("## Current request\ninspect the project");
+    expect(stdin.length).toBeLessThanOrEqual(12_100);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "message",
+          role: "user",
+          text: "inspect the project",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(store.getState().threads.t1.entries)).not.toContain(
+      "mapped-context-marker",
+    );
   });
 
   it("runs a remote project's agent through SSH in its pinned path", async () => {
@@ -483,6 +511,32 @@ describe("failures", () => {
       { role: "user", content: "hi" },
       { role: "assistant", content: "local answer" },
       { role: "user", content: "again" },
+    ]);
+  });
+
+  it("injects mapped project memory as bounded Ollama system context", async () => {
+    const calls: Array<{ messages: ChatMessage[] }> = [];
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return [{ id: "qwen3:8b", label: "qwen3:8b" }];
+      },
+      async *chat(input) {
+        calls.push({ messages: input.messages });
+        yield { content: "done" };
+      },
+    };
+    const { store } = setup({
+      ollama,
+      memoryContext: async () => "mapped-ollama-memory",
+    });
+    await store.getState().start();
+    await openThread(store, "ollama");
+    await store.getState().send("t1", "use the project state");
+
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.messages).toEqual([
+      { role: "system", content: "mapped-ollama-memory" },
+      { role: "user", content: "use the project state" },
     ]);
   });
 
