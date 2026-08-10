@@ -5,7 +5,9 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use super::super::super::{validate_no_likely_credential, MemoryError, MemoryKind, Result};
+use super::super::super::{
+    validate_no_likely_credential, MemoryError, MemoryKind, MemorySource, Result,
+};
 use super::super::{validate_projects_vault_root, ProjectLocation};
 use super::{
     IndexedProjectDocument, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeSource,
@@ -79,8 +81,11 @@ pub(super) fn collect_project_documents(
             ProjectKnowledgeKind::Decision,
         )? {
             document.memory_kind = marker.kind;
+            document.memory_source = marker.source;
+            document.memory_pinned = marker.pinned;
             document.canonical_record_id = Some(marker.record_id);
             document.canonical_version = Some(marker.version);
+            document.canonical_updated_at = Some(marker.updated_at);
         }
         if frontmatter_value(&document.body, "status").as_deref() == Some("accepted")
             || frontmatter_bool(&document.body, "agent_context")
@@ -109,8 +114,11 @@ pub(super) fn collect_project_documents(
             ProjectKnowledgeKind::Knowledge,
         )? {
             document.memory_kind = marker.kind;
+            document.memory_source = marker.source;
+            document.memory_pinned = marker.pinned;
             document.canonical_record_id = Some(marker.record_id);
             document.canonical_version = Some(marker.version);
+            document.canonical_updated_at = Some(marker.updated_at);
         }
         if frontmatter_value(&document.body, "status").as_deref() == Some("approved") {
             documents.push(document);
@@ -244,8 +252,11 @@ fn read_document(
         relative_path,
         kind,
         memory_kind: kind.memory_kind(),
+        memory_source: MemorySource::Kodade,
+        memory_pinned: false,
         canonical_record_id: None,
         canonical_version: None,
+        canonical_updated_at: None,
         title,
         body,
         sha256,
@@ -366,7 +377,10 @@ fn frontmatter_bool(body: &str, key: &str) -> bool {
 struct CanonicalMemoryMarker {
     record_id: String,
     kind: MemoryKind,
+    source: MemorySource,
+    pinned: bool,
     version: u64,
+    updated_at: i64,
 }
 
 fn canonical_memory_marker(
@@ -467,17 +481,37 @@ fn canonical_memory_marker(
         Some("preference") => MemoryKind::Preference,
         _ => unreachable!("lane validation accepts every memory kind"),
     };
+    let source = object
+        .get("source")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| MemoryError::InvalidInput("canonical memory source is invalid".into()))
+        .and_then(MemorySource::parse)?;
+    let pinned = object
+        .get("pinned")
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| {
+            MemoryError::InvalidInput("canonical memory pinned flag is invalid".into())
+        })?;
     let version = object
         .get("version")
         .and_then(|value| value.as_u64())
         .filter(|version| *version > 0)
         .ok_or_else(|| MemoryError::InvalidInput("canonical memory version is invalid".into()))?;
+    let updated_at = object
+        .get("updatedAt")
+        .and_then(|value| value.as_i64())
+        .filter(|updated_at| *updated_at >= 0)
+        .ok_or_else(|| MemoryError::InvalidInput("canonical memory updatedAt is invalid".into()))?;
     Ok(Some(CanonicalMemoryMarker {
         record_id: record_id
             .expect("validated canonical record id")
             .to_string(),
         kind: memory_kind,
+        source,
+        pinned,
         version,
+        updated_at,
     }))
 }
 

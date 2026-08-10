@@ -1886,14 +1886,28 @@ fn schema_version_11_fixture_adds_portable_projection_columns_and_kind_backfill(
     let store = MemoryStore::open(project.db()).expect("upgrade version 11 fixture");
     drop(store);
     let connection = rusqlite::Connection::open(project.db()).unwrap();
-    let memory_kind: String = connection
+    let project_metadata: (String, String, bool, u64, Option<i64>, Option<String>) = connection
         .query_row(
-            "SELECT memory_kind FROM project_documents WHERE id = 'project-doc'",
+            "SELECT memory_kind, memory_source, memory_pinned, memory_version,
+                    memory_updated_at, canonical_record_id
+             FROM project_documents WHERE id = 'project-doc'",
             [],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .unwrap();
-    assert_eq!(memory_kind, "fact");
+    assert_eq!(
+        project_metadata,
+        ("fact".into(), "kodade".into(), false, 1, None, None)
+    );
     let canonical_columns: u32 = connection
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name LIKE 'canonical_%'",
@@ -3776,6 +3790,38 @@ fn mapped_project_context_indexes_approved_markdown_and_refreshes_external_edits
     assert_eq!(provenance.project_id, "portable-project");
     assert_eq!(provenance.relative_path, "Knowledge/approved.md");
     assert_eq!(provenance.sha256.len(), 64);
+    assert_eq!(
+        store
+            .search(MemoryQuery {
+                workspace_id: workspace.id.clone(),
+                text: "stable knowledge phrase".into(),
+                kinds: Vec::new(),
+                sources: vec![MemorySource::Kodade],
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .unwrap()
+            .total,
+        1,
+        "ordinary approved project notes retain Ködade provenance"
+    );
+    assert_eq!(
+        store
+            .search(MemoryQuery {
+                workspace_id: workspace.id.clone(),
+                text: "stable knowledge phrase".into(),
+                kinds: Vec::new(),
+                sources: vec![MemorySource::Agent],
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .unwrap()
+            .total,
+        0,
+        "ordinary project notes never masquerade as canonical agent memories"
+    );
 
     let edited_state = initial_state.replace("Obsidian edit alpha", "Obsidian edit beta");
     std::fs::write(project_root.join("STATE.md"), &edited_state).expect("edit state in Obsidian");
@@ -3991,6 +4037,110 @@ fn portable_idempotency_is_scoped_to_each_logical_project() {
             .join(&record.project_source.as_ref().unwrap().relative_path)
             .is_file());
     }
+}
+
+#[test]
+fn fresh_read_only_store_preserves_canonical_source_and_marker_metadata() {
+    let fixture = MappedProjectsVault::new("portable-read-metadata-writer", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let user = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "User-owned portable fact".into(),
+            body: "fresh-user-source-token".into(),
+            source: MemorySource::User,
+            source_client: "memory-store-test".into(),
+            session_id: Some("metadata-source".into()),
+            pinned: false,
+            idempotency_key: Some("metadata-user".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let agent = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Agent-owned portable decision".into(),
+            body: "fresh-agent-source-token".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: Some("metadata-source".into()),
+            pinned: true,
+            idempotency_key: Some("metadata-agent".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+
+    let reader_data = TempProject::new("portable-read-metadata-reader");
+    let reader_checkout = reader_data.root().join("checkout");
+    std::fs::create_dir(&reader_checkout).unwrap();
+    let reader = MemoryStore::open(reader_data.db()).unwrap();
+    reader.register_projects_vault(&fixture.vault_root).unwrap();
+    let reader_workspace = reader
+        .register_workspace(&reader_checkout, "Portable reader", None)
+        .unwrap();
+    reader
+        .map_workspace_to_project(
+            &reader_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    drop(reader);
+
+    let read_only = MemoryStore::open_read_only(reader_data.db()).unwrap();
+    let user_hits = read_only
+        .search(MemoryQuery {
+            workspace_id: reader_workspace.id.clone(),
+            text: "fresh-user-source-token".into(),
+            kinds: Vec::new(),
+            sources: vec![MemorySource::User],
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(user_hits.total, 1);
+    assert_eq!(user_hits.items[0].source, MemorySource::User);
+    assert_eq!(user_hits.items[0].pinned, user.pinned);
+    assert_eq!(user_hits.items[0].version, user.version);
+    assert_eq!(user_hits.items[0].updated_at, user.updated_at);
+
+    let agent_hits = read_only
+        .search(MemoryQuery {
+            workspace_id: reader_workspace.id,
+            text: "fresh-agent-source-token".into(),
+            kinds: Vec::new(),
+            sources: vec![MemorySource::Agent],
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(agent_hits.total, 1);
+    let hit = &agent_hits.items[0];
+    assert_eq!(hit.source, MemorySource::Agent);
+    assert_eq!(hit.pinned, agent.pinned);
+    assert_eq!(hit.version, agent.version);
+    assert_eq!(hit.updated_at, agent.updated_at);
+    assert_ne!(hit.id, agent.id, "projection IDs stay workspace-local");
+    assert_eq!(
+        hit.project_source
+            .as_ref()
+            .map(|source| source.sha256.len()),
+        Some(64)
+    );
 }
 
 #[test]
@@ -4252,6 +4402,72 @@ fn mapped_authority_checkpoint_writes_markdown_first_and_retries_once() {
 }
 
 #[test]
+fn mapped_checkpoint_rejects_stale_state_hash_without_any_residue() {
+    let fixture = MappedProjectsVault::new("mapped-checkpoint-stale-state", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let state_path = fixture.project_root().join("STATE.md");
+    let state_before = std::fs::read(&state_path).unwrap();
+    let vault_before = tree_hashes(&fixture.project_root());
+    let audit_before = fixture.store.audit(&fixture.workspace.id, 100).unwrap();
+    let connection = rusqlite::Connection::open(fixture._app_data.db()).unwrap();
+    let projection_before: (u64, u64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM checkpoints),
+                    (SELECT COUNT(*) FROM project_documents)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+
+    let stale = "0".repeat(64);
+    let rejected = fixture.store.checkpoint_with_state_hash(
+        NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "Must leave no checkpoint residue".into(),
+            decisions: vec!["Must leave no decision residue".into()],
+            next_actions: vec!["Refresh STATE before retry".into()],
+            changed_paths: vec!["STATE.md".into()],
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: Some("stale-state".into()),
+            idempotency_key: Some("stale-state-rejected".into()),
+        },
+        Some(&stale),
+    );
+    let actual = file_hash(&state_path);
+    assert!(matches!(
+        rejected,
+        Err(MemoryError::ContentConflict { expected, actual: conflict_actual })
+            if expected == stale && conflict_actual == actual
+    ));
+    assert_eq!(std::fs::read(&state_path).unwrap(), state_before);
+    assert_eq!(tree_hashes(&fixture.project_root()), vault_before);
+    assert!(!portable_journal_path(&fixture.project_root()).exists());
+    assert_eq!(
+        fixture.store.audit(&fixture.workspace.id, 100).unwrap(),
+        audit_before
+    );
+    let connection = rusqlite::Connection::open(fixture._app_data.db()).unwrap();
+    let projection_after: (u64, u64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM checkpoints),
+                    (SELECT COUNT(*) FROM project_documents)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(projection_after, projection_before);
+}
+
+#[test]
 fn mapped_memory_lifecycle_uses_hash_conflicts_archive_and_markdown_rebuild() {
     let fixture = MappedProjectsVault::new("mapped-record-lifecycle", "Portable project");
     let plan = fixture
@@ -4389,6 +4605,99 @@ fn mapped_memory_lifecycle_uses_hash_conflicts_archive_and_markdown_rebuild() {
 }
 
 #[test]
+fn portable_templates_preserve_literal_user_tokens_across_round_trips() {
+    let fixture = MappedProjectsVault::new("mapped-literal-template-content", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+
+    let declared_tokens = "{{title_json}} {{type}} {{status}} {{project_id}} {{marker}} {{title}} {{body}} {{record_id}} {{year}} {{date}} {{checkpoint_id}} {{index}} {{timestamp}} {{summary}} {{project_name}} {{decision}}";
+    let created = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "{{body}}".into(),
+            body: format!(
+                "Literal memory tokens: {declared_tokens}\nTemplater: <% tp.file.title %>"
+            ),
+            source: MemorySource::User,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("literal-template-memory".into()),
+            links: Vec::new(),
+        })
+        .expect("remember literal template syntax");
+    assert_eq!(created.title, "{{body}}");
+    assert!(created.body.contains(declared_tokens));
+
+    let revised_title = declared_tokens.to_string();
+    let revised_body = format!(
+        "Revised literal tokens: {declared_tokens}\nObsidian: {{{{project}}}}\nTemplater: <%* tR += '{{{{summary}}}}' %>"
+    );
+    let revised = fixture
+        .store
+        .revise_with_content_hash(
+            MemoryRevision {
+                id: created.id.clone(),
+                expected_version: created.version,
+                kind: MemoryKind::Fact,
+                title: revised_title.clone(),
+                body: revised_body.clone(),
+                pinned: true,
+                source_client: "memory-store-test".into(),
+                session_id: None,
+                links: Vec::new(),
+            },
+            Some(&created.project_source.as_ref().unwrap().sha256),
+        )
+        .expect("revise literal template syntax");
+    assert_eq!(revised.title, revised_title);
+    assert_eq!(revised.body, revised_body);
+
+    let summary = declared_tokens;
+    let decision = declared_tokens;
+    let state_path = fixture.project_root().join("STATE.md");
+    let state_hash = file_hash(&state_path);
+    let checkpoint = fixture
+        .store
+        .checkpoint_with_state_hash(
+            NewCheckpoint {
+                workspace_id: fixture.workspace.id.clone(),
+                summary: summary.into(),
+                decisions: vec![decision.into()],
+                next_actions: vec!["Keep {{project}} and <% tp.date.now() %> literal".into()],
+                changed_paths: vec!["templates/{{body}}.md".into()],
+                source: MemorySource::Agent,
+                source_client: "memory-store-test".into(),
+                session_id: None,
+                idempotency_key: Some("literal-template-checkpoint".into()),
+            },
+            Some(&state_hash),
+        )
+        .expect("checkpoint literal template syntax");
+    assert_eq!(checkpoint.summary, summary);
+    assert_eq!(checkpoint.decisions, vec![decision]);
+
+    fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id)
+        .unwrap();
+    let rebuilt = fixture.store.memory(&revised.id).unwrap();
+    assert_eq!(rebuilt.title, revised_title);
+    assert_eq!(rebuilt.body, revised_body);
+    let rebuilt_checkpoint = fixture.store.checkpoint_by_id(&checkpoint.id).unwrap();
+    assert_eq!(rebuilt_checkpoint.summary, summary);
+    assert_eq!(rebuilt_checkpoint.decisions, vec![decision]);
+}
+
+#[test]
 fn mapped_checkpoint_recovers_every_persisted_phase_in_a_child_process() {
     let fixture = MappedProjectsVault::new("mapped-checkpoint-recovery", "Portable project");
     let plan = fixture
@@ -4514,6 +4823,106 @@ fn fresh_machine_fails_closed_on_partial_checkpoint_and_rebuilds_complete_markdo
 }
 
 #[test]
+fn mapped_lane_revision_recovers_after_durable_destination_before_source_delete() {
+    let fixture = MappedProjectsVault::new("mapped-revise-durable-delete", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let created = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Move lanes durably".into(),
+            body: "The destination must be durable before source deletion.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("durable-lane-source".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let source = fixture
+        .project_root()
+        .join(&created.project_source.as_ref().unwrap().relative_path);
+    let logical_id = source.file_stem().unwrap().to_string_lossy();
+    let destination = fixture
+        .project_root()
+        .join("Decisions")
+        .join(format!("{logical_id}.md"));
+
+    let status = portable_revise_command(
+        fixture._app_data.db(),
+        &created.id,
+        created.version,
+        &created.project_source.as_ref().unwrap().sha256,
+        "markdown-1",
+    )
+    .status()
+    .expect("run portable revise child");
+    assert!(status.success());
+    assert!(
+        destination.is_file(),
+        "the replacement lane must be durable at the first phase boundary"
+    );
+    assert!(
+        source.is_file(),
+        "the old lane must remain until the destination is durable"
+    );
+    assert!(portable_journal_path(&fixture.project_root()).exists());
+
+    fixture
+        .store
+        .context(&fixture.workspace.id)
+        .expect("recover interrupted lane revision");
+    assert!(!source.exists());
+    assert!(destination.is_file());
+    assert!(!portable_journal_path(&fixture.project_root()).exists());
+    let recovered = fixture.store.memory(&created.id).unwrap();
+    assert_eq!(recovered.kind, MemoryKind::Decision);
+    assert_eq!(recovered.version, 2);
+}
+
+#[test]
+fn portable_revise_child_process_helper() {
+    let Ok(db) = std::env::var("KODADE_PORTABLE_REVISE_DB") else {
+        return;
+    };
+    std::env::set_var(
+        "KODADE_TEST_PORTABLE_FAIL_AFTER",
+        std::env::var("KODADE_PORTABLE_REVISE_FAILPOINT").unwrap(),
+    );
+    let store = MemoryStore::open(db).unwrap();
+    let result = store.revise_with_content_hash(
+        MemoryRevision {
+            id: std::env::var("KODADE_PORTABLE_REVISE_ID").unwrap(),
+            expected_version: std::env::var("KODADE_PORTABLE_REVISE_VERSION")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            kind: MemoryKind::Decision,
+            title: "Moved lane durably".into(),
+            body: "The destination is written and synced first.".into(),
+            pinned: true,
+            source_client: "portable-revise-child".into(),
+            session_id: None,
+            links: Vec::new(),
+        },
+        Some(&std::env::var("KODADE_PORTABLE_REVISE_HASH").unwrap()),
+    );
+    assert!(
+        result.is_err(),
+        "failpoint must interrupt the lane revision"
+    );
+}
+
+#[test]
 fn portable_checkpoint_child_process_helper() {
     let Ok(db) = std::env::var("KODADE_PORTABLE_CHILD_DB") else {
         return;
@@ -4616,6 +5025,113 @@ fn mapped_writes_reject_secrets_read_only_access_and_project_root_swaps_without_
     });
     assert!(matches!(swapped, Err(MemoryError::InvalidInput(_))));
     assert!(walk_files(&outside).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_authority_rejects_oversized_and_symlinked_project_notes_before_writing() {
+    for case in ["oversized", "symlink"] {
+        let fixture = MappedProjectsVault::new(
+            &format!("mapped-project-note-boundary-{case}"),
+            "Portable project",
+        );
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .unwrap();
+        let project_note = fixture.project_root().join("Project.md");
+        match case {
+            "oversized" => {
+                let file = OpenOptions::new().write(true).open(&project_note).unwrap();
+                file.set_len(256 * 1024 + 1).unwrap();
+            }
+            "symlink" => {
+                let real = fixture.project_root().join("Project-real.md");
+                std::fs::rename(&project_note, &real).unwrap();
+                std::os::unix::fs::symlink(&real, &project_note).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = tree_hashes(&fixture.project_root());
+        let rejected = fixture.store.remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Must not be written".into(),
+            body: "Authority identity must be bounded and regular first.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some(format!("project-note-boundary-{case}")),
+            links: Vec::new(),
+        });
+        assert!(
+            matches!(rejected, Err(MemoryError::InvalidInput(ref message)) if message.contains("regular file") || message.contains("file limit")),
+            "{case}: {rejected:?}"
+        );
+        assert_eq!(tree_hashes(&fixture.project_root()), before);
+        assert!(!portable_journal_path(&fixture.project_root()).exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_recovery_rejects_oversized_and_symlinked_runtime_journals_before_deserializing() {
+    for case in ["oversized", "symlink"] {
+        let fixture = MappedProjectsVault::new(
+            &format!("mapped-runtime-journal-boundary-{case}"),
+            "Portable project",
+        );
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .unwrap();
+        let journal = portable_journal_path(&fixture.project_root());
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        match case {
+            "oversized" => {
+                let file = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&journal)
+                    .unwrap();
+                file.set_len(64 * 1024 * 1024 + 1).unwrap();
+            }
+            "symlink" => {
+                let outside = fixture._app_data.root().join("forged-journal.json");
+                std::fs::write(&outside, b"{}").unwrap();
+                std::os::unix::fs::symlink(outside, &journal).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = tree_hashes(&fixture.project_root());
+        let rejected = fixture.store.remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Runtime journal boundary".into(),
+            body: "The forged envelope must be rejected before serde.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some(format!("runtime-journal-boundary-{case}")),
+            links: Vec::new(),
+        });
+        assert!(
+            matches!(rejected, Err(MemoryError::InvalidInput(ref message)) if message.contains("journal") && (message.contains("regular file") || message.contains("envelope limit"))),
+            "{case}: {rejected:?}"
+        );
+        assert_eq!(tree_hashes(&fixture.project_root()), before);
+        std::fs::remove_file(journal).unwrap();
+    }
 }
 
 #[test]
@@ -6303,6 +6819,30 @@ fn portable_checkpoint_command(
     if let Some(failpoint) = failpoint {
         command.env("KODADE_PORTABLE_CHILD_FAILPOINT", failpoint);
     }
+    command
+}
+
+fn portable_revise_command(
+    db: PathBuf,
+    id: &str,
+    version: u64,
+    content_hash: &str,
+    failpoint: &str,
+) -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("memory_store test executable"));
+    command
+        .arg("--exact")
+        .arg("portable_revise_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_PORTABLE_REVISE_DB", db)
+        .env("KODADE_PORTABLE_REVISE_ID", id)
+        .env("KODADE_PORTABLE_REVISE_VERSION", version.to_string())
+        .env("KODADE_PORTABLE_REVISE_HASH", content_hash)
+        .env("KODADE_PORTABLE_REVISE_FAILPOINT", failpoint)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
     command
 }
 

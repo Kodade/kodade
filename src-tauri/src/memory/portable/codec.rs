@@ -837,15 +837,7 @@ pub(super) fn record_lane(policy: &PortablePolicy, kind: MemoryKind) -> Result<&
 }
 
 pub(super) fn fill_pattern(pattern: &str, values: &[(&str, &str)]) -> Result<String> {
-    let mut rendered = pattern.to_string();
-    for (key, value) in values {
-        rendered = rendered.replace(&format!("{{{{{key}}}}}"), value);
-    }
-    if rendered.contains("{{") {
-        return Err(MemoryError::InvalidInput(
-            "portable authority pattern contains an unknown token".into(),
-        ));
-    }
+    let rendered = render_original_tokens(pattern, values, "pattern")?;
     let path = Path::new(&rendered);
     if path.is_absolute()
         || path
@@ -860,16 +852,40 @@ pub(super) fn fill_pattern(pattern: &str, values: &[(&str, &str)]) -> Result<Str
 }
 
 pub(super) fn render_template(lines: &[String], values: &[(&str, String)]) -> Result<String> {
-    let mut rendered = lines.join("\n");
-    for (key, value) in values {
-        rendered = rendered.replace(&format!("{{{{{key}}}}}"), value);
-    }
-    if rendered.contains("{{") {
-        return Err(MemoryError::InvalidInput(
-            "portable authority template contains an unknown token".into(),
-        ));
-    }
+    let mut rendered = render_original_tokens(&lines.join("\n"), values, "template")?;
     rendered.push('\n');
+    Ok(rendered)
+}
+
+fn render_original_tokens<T: AsRef<str>>(
+    original: &str,
+    values: &[(&str, T)],
+    label: &str,
+) -> Result<String> {
+    let mut rendered = String::with_capacity(original.len());
+    let mut remaining = original;
+    while let Some(start) = remaining.find("{{") {
+        rendered.push_str(&remaining[..start]);
+        let token_and_tail = &remaining[start + 2..];
+        let end = token_and_tail.find("}}").ok_or_else(|| {
+            MemoryError::InvalidInput(format!(
+                "portable authority {label} contains an unknown token"
+            ))
+        })?;
+        let key = &token_and_tail[..end];
+        let value = values
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+            .map(|(_, value)| value.as_ref())
+            .ok_or_else(|| {
+                MemoryError::InvalidInput(format!(
+                    "portable authority {label} contains an unknown token"
+                ))
+            })?;
+        rendered.push_str(value);
+        remaining = &token_and_tail[end + 2..];
+    }
+    rendered.push_str(remaining);
     Ok(rendered)
 }
 

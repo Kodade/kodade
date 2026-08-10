@@ -98,8 +98,11 @@ struct IndexedProjectDocument {
     relative_path: String,
     kind: ProjectKnowledgeKind,
     memory_kind: MemoryKind,
+    memory_source: MemorySource,
+    memory_pinned: bool,
     canonical_record_id: Option<String>,
     canonical_version: Option<u64>,
+    canonical_updated_at: Option<i64>,
     title: String,
     body: String,
     sha256: String,
@@ -169,9 +172,7 @@ impl MemoryStore {
         let Some(refresh) = refresh else {
             return Ok(empty_page(limit, query.offset));
         };
-        if refresh.context.sync.status == ProjectKnowledgeSyncStatus::Error
-            || (!query.sources.is_empty() && !query.sources.contains(&MemorySource::Kodade))
-        {
+        if refresh.context.sync.status == ProjectKnowledgeSyncStatus::Error {
             return Ok(empty_page(limit, query.offset));
         }
         if matches!(self.access, StoreAccess::ReadOnly) {
@@ -225,15 +226,21 @@ impl MemoryStore {
             for document in documents {
                 transaction.execute(
                     "INSERT INTO project_documents (
-                        id, project_id, relative_path, kind, memory_kind, title, body,
-                        sha256, modified_at, indexed_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        id, project_id, relative_path, kind, memory_kind, memory_source,
+                        memory_pinned, canonical_record_id, memory_version, memory_updated_at,
+                        title, body, sha256, modified_at, indexed_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         document.id,
                         document.project_id,
                         document.relative_path,
                         document.kind.as_str(),
                         document.memory_kind.as_str(),
+                        document.memory_source.as_str(),
+                        document.memory_pinned,
+                        document.canonical_record_id,
+                        document.canonical_version.unwrap_or(1),
+                        document.canonical_updated_at,
                         document.title,
                         document.body,
                         document.sha256,
@@ -290,8 +297,23 @@ fn search_project_document_index(
         filters.push(')');
         values.extend(allowed);
     }
+    if !query.sources.is_empty() {
+        let allowed = query
+            .sources
+            .iter()
+            .map(|source| Value::Text(source.as_str().into()))
+            .collect::<Vec<_>>();
+        filters.push_str(" AND d.memory_source IN (");
+        filters.push_str(
+            &std::iter::repeat_n("?", allowed.len())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        filters.push(')');
+        values.extend(allowed);
+    }
     if let Some(updated_after) = query.updated_after {
-        filters.push_str(" AND d.modified_at >= ?");
+        filters.push_str(" AND COALESCE(d.memory_updated_at, d.modified_at) >= ?");
         values.push(updated_after.into());
     }
     let (from, excerpt, order) = if let Some(text) = fts_query(&query.text) {
@@ -300,13 +322,13 @@ fn search_project_document_index(
         (
             "project_document_fts JOIN project_documents d ON d.id = project_document_fts.document_id",
             "snippet(project_document_fts, 3, '<mark>', '</mark>', '…', 20)",
-            "bm25(project_document_fts), d.modified_at DESC, d.id",
+            "bm25(project_document_fts), COALESCE(d.memory_updated_at, d.modified_at) DESC, d.id",
         )
     } else {
         (
             "project_documents d",
             "substr(d.body, 1, 240)",
-            "d.modified_at DESC, d.id",
+            "COALESCE(d.memory_updated_at, d.modified_at) DESC, d.id",
         )
     };
     let total = connection.query_row(
@@ -319,7 +341,9 @@ fn search_project_document_index(
     values.push(i64::from(query.offset).into());
     let sql = format!(
         "SELECT d.id, d.kind, d.title, {excerpt}, d.modified_at,
-                d.relative_path, d.sha256, d.memory_kind
+                d.relative_path, d.sha256, d.memory_kind, d.memory_source,
+                d.memory_pinned, d.memory_version, d.memory_updated_at,
+                d.canonical_record_id
          FROM {from} WHERE {filters} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     let mut statement = connection.prepare(&sql)?;
@@ -329,16 +353,27 @@ fn search_project_document_index(
                 .map_err(super::super::to_sql_conversion_error)?;
             let relative_path = row.get::<_, String>(5)?;
             let sha256 = row.get::<_, String>(6)?;
+            let source = MemorySource::parse(row.get::<_, String>(8)?)
+                .map_err(super::super::to_sql_conversion_error)?;
+            let canonical_record_id = row.get::<_, Option<String>>(12)?;
             Ok(MemorySearchHit {
-                id: row.get(0)?,
+                id: canonical_record_id
+                    .as_deref()
+                    .map(|record_id| {
+                        super::super::portable::portable_projected_memory_id(
+                            &query.workspace_id,
+                            record_id,
+                        )
+                    })
+                    .unwrap_or(row.get(0)?),
                 workspace_id: query.workspace_id.clone(),
                 kind: memory_kind,
                 title: row.get(2)?,
                 excerpt: row.get(3)?,
-                source: MemorySource::Kodade,
-                pinned: false,
-                version: 1,
-                updated_at: row.get(4)?,
+                source,
+                pinned: row.get(9)?,
+                version: row.get(10)?,
+                updated_at: row.get::<_, Option<i64>>(11)?.unwrap_or(row.get(4)?),
                 file_path: Some(relative_path.clone()),
                 project_source: Some(ProjectKnowledgeProvenance {
                     project_id: project_id.clone(),
@@ -372,9 +407,13 @@ fn search_documents_direct(
         .iter()
         .filter(|document| {
             (query.kinds.is_empty() || query.kinds.contains(&document.memory_kind))
-                && query
-                    .updated_after
-                    .is_none_or(|updated_after| document.modified_at >= updated_after)
+                && (query.sources.is_empty() || query.sources.contains(&document.memory_source))
+                && query.updated_after.is_none_or(|updated_after| {
+                    document
+                        .canonical_updated_at
+                        .unwrap_or(document.modified_at)
+                        >= updated_after
+                })
                 && {
                     let haystack = format!("{}\n{}", document.title, document.body).to_lowercase();
                     terms.iter().all(|term| haystack.contains(term))
@@ -383,8 +422,9 @@ fn search_documents_direct(
         .collect::<Vec<_>>();
     matching.sort_by(|left, right| {
         right
-            .modified_at
-            .cmp(&left.modified_at)
+            .canonical_updated_at
+            .unwrap_or(right.modified_at)
+            .cmp(&left.canonical_updated_at.unwrap_or(left.modified_at))
             .then_with(|| left.id.cmp(&right.id))
     });
     let total = matching.len() as u64;
@@ -408,10 +448,12 @@ fn search_documents_direct(
             kind: document.memory_kind,
             title: document.title.clone(),
             excerpt: bounded_chars(&document.body, 240).0,
-            source: MemorySource::Kodade,
-            pinned: false,
+            source: document.memory_source,
+            pinned: document.memory_pinned,
             version: document.canonical_version.unwrap_or(1),
-            updated_at: document.modified_at,
+            updated_at: document
+                .canonical_updated_at
+                .unwrap_or(document.modified_at),
             file_path: Some(document.relative_path.clone()),
             project_source: Some(ProjectKnowledgeProvenance {
                 project_id: document.project_id.clone(),

@@ -1,5 +1,9 @@
 use super::*;
 
+// The validated decoded operation payload is capped at 8 MiB; this larger
+// envelope allows worst-case JSON escaping while bounding pre-serde allocation.
+const MAX_JOURNAL_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
+
 pub(super) fn file_hash_optional(path: &Path) -> Result<Option<String>> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -46,9 +50,42 @@ pub(super) fn read_optional_regular(
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(MemoryError::InvalidInput(
+            "portable Markdown target changed beyond the file limit while reading".into(),
+        ));
+    }
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| MemoryError::InvalidInput("portable Markdown must be valid UTF-8".into()))
+}
+
+pub(super) fn read_optional_runtime_journal(path: &Path) -> Result<Option<Vec<u8>>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(MemoryError::InvalidInput(
+            "portable recovery journal must be a regular file".into(),
+        ));
+    }
+    if metadata.len() > MAX_JOURNAL_ENVELOPE_BYTES {
+        return Err(MemoryError::InvalidInput(
+            "portable recovery journal exceeds the envelope limit".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    File::open(path)?
+        .take(MAX_JOURNAL_ENVELOPE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_JOURNAL_ENVELOPE_BYTES {
+        return Err(MemoryError::InvalidInput(
+            "portable recovery journal changed beyond the envelope limit while reading".into(),
+        ));
+    }
+    Ok(Some(bytes))
 }
 
 pub(super) fn relative_path(location: &ProjectLocation, path: &Path) -> Result<String> {

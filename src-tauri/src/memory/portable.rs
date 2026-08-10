@@ -366,10 +366,9 @@ impl MemoryStore {
             }
             Err(error) => return Err(error.into()),
         }
-        let project_note = location.project_root.join("Project.md");
-        let bytes = match std::fs::read(&project_note) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        let project_note = match read_optional_regular(&location, "Project.md")? {
+            Some(project_note) => project_note,
+            None => {
                 if self.has_portable_authority_evidence(&location)? {
                     return Err(MemoryError::InvalidInput(
                         "Project.md authority marker disappeared after portable writes; restore it before continuing"
@@ -378,12 +377,12 @@ impl MemoryStore {
                 }
                 return Ok(None);
             }
-            Err(error) => return Err(error.into()),
         };
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| MemoryError::InvalidInput("Project.md must be valid UTF-8".into()))?;
-        if super::scaffold::validate_authority_marker(text, &location.project_id)? {
-            super::scaffold::validate_project_identity(&bytes, &location.project_id)?;
+        if super::scaffold::validate_authority_marker(&project_note, &location.project_id)? {
+            super::scaffold::validate_project_identity(
+                project_note.as_bytes(),
+                &location.project_id,
+            )?;
             Ok(Some(location))
         } else if self.has_portable_authority_evidence(&location)? {
             Err(MemoryError::InvalidInput(
@@ -661,15 +660,15 @@ impl MemoryStore {
         if canonical.relative_path != destination {
             operations.push(JournalOperation {
                 mode: JournalOperationMode::Replace,
-                relative_path: canonical.relative_path.clone(),
-                expected_sha256: Some(canonical.sha256.clone()),
-                contents: None,
-            });
-            operations.push(JournalOperation {
-                mode: JournalOperationMode::Replace,
                 relative_path: destination,
                 expected_sha256: None,
                 contents: Some(contents),
+            });
+            operations.push(JournalOperation {
+                mode: JournalOperationMode::Replace,
+                relative_path: canonical.relative_path.clone(),
+                expected_sha256: Some(canonical.sha256.clone()),
+                contents: None,
             });
         } else {
             operations.push(JournalOperation {
@@ -748,15 +747,15 @@ impl MemoryStore {
             operations: vec![
                 JournalOperation {
                     mode: JournalOperationMode::Replace,
-                    relative_path: canonical.relative_path,
-                    expected_sha256: Some(canonical.sha256),
-                    contents: None,
-                },
-                JournalOperation {
-                    mode: JournalOperationMode::Replace,
                     relative_path: destination,
                     expected_sha256: None,
                     contents: Some(contents),
+                },
+                JournalOperation {
+                    mode: JournalOperationMode::Replace,
+                    relative_path: canonical.relative_path,
+                    expected_sha256: Some(canonical.sha256),
+                    contents: None,
                 },
             ],
         };
@@ -832,15 +831,15 @@ impl MemoryStore {
             operations: vec![
                 JournalOperation {
                     mode: JournalOperationMode::Replace,
-                    relative_path: canonical.relative_path,
-                    expected_sha256: Some(canonical.sha256),
-                    contents: None,
-                },
-                JournalOperation {
-                    mode: JournalOperationMode::Replace,
                     relative_path: destination,
                     expected_sha256: None,
                     contents: Some(contents),
+                },
+                JournalOperation {
+                    mode: JournalOperationMode::Replace,
+                    relative_path: canonical.relative_path,
+                    expected_sha256: Some(canonical.sha256),
+                    contents: None,
                 },
             ],
         };
@@ -901,10 +900,9 @@ impl MemoryStore {
         workspace_id: &str,
     ) -> Result<()> {
         let path = portable_journal_path(location)?;
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
+        let bytes = match read_optional_runtime_journal(&path)? {
+            Some(bytes) => bytes,
+            None => return Ok(()),
         };
         let journal: Journal = serde_json::from_slice(&bytes)?;
         validate_journal(location, &journal)?;
@@ -1013,7 +1011,7 @@ impl MemoryStore {
             }
             match operation.contents.as_deref() {
                 Some(contents) => atomic_write(&path, contents)?,
-                None => std::fs::remove_file(&path)?,
+                None => remove_durable(&path)?,
             }
             portable_failpoint(&format!("markdown-{}", index + 1))?;
         }

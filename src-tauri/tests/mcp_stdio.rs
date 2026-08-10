@@ -671,7 +671,7 @@ fn read_only_stdio_serves_canonical_records_from_a_distinct_fresh_database() {
             kind: MemoryKind::Fact,
             title: "Fresh portable fact".into(),
             body: "fresh-portable-fact-token".into(),
-            source: MemorySource::Agent,
+            source: MemorySource::User,
             source_client: "mcp-stdio-test".into(),
             session_id: Some("fresh-read".into()),
             pinned: false,
@@ -693,7 +693,7 @@ fn read_only_stdio_serves_canonical_records_from_a_distinct_fresh_database() {
             links: Vec::new(),
         })
         .unwrap();
-    writer
+    let decision = writer
         .remember(NewMemory {
             workspace_id: writer_workspace.id.clone(),
             kind: MemoryKind::Decision,
@@ -761,12 +761,40 @@ fn read_only_stdio_serves_canonical_records_from_a_distinct_fresh_database() {
 
     let search = process.call_tool(
         "search_memories",
-        json!({ "workspaceRoot": root, "query": "fresh-portable-decision-token" }),
+        json!({
+            "workspaceRoot": root,
+            "query": "fresh-portable-decision-token",
+            "sources": ["agent"]
+        }),
     );
     assert_eq!(search["result"]["structuredContent"]["total"], 1);
-    let id = search["result"]["structuredContent"]["items"][0]["id"]
-        .as_str()
-        .unwrap();
+    let search_hit = &search["result"]["structuredContent"]["items"][0];
+    assert_eq!(search_hit["source"], "agent");
+    assert_eq!(search_hit["pinned"], true);
+    assert_eq!(search_hit["version"], decision.version);
+    assert_eq!(search_hit["updatedAt"], decision.updated_at);
+    let id = search_hit["id"].as_str().unwrap();
+    let wrong_source = process.call_tool(
+        "search_memories",
+        json!({
+            "workspaceRoot": root,
+            "query": "fresh-portable-decision-token",
+            "sources": ["user"]
+        }),
+    );
+    assert_eq!(wrong_source["result"]["structuredContent"]["total"], 0);
+    let user_source = process.call_tool(
+        "search_memories",
+        json!({
+            "workspaceRoot": root,
+            "query": "fresh-portable-fact-token",
+            "sources": ["user"]
+        }),
+    );
+    let user_hit = &user_source["result"]["structuredContent"]["items"][0];
+    assert_eq!(user_source["result"]["structuredContent"]["total"], 1);
+    assert_eq!(user_hit["source"], "user");
+    assert_eq!(user_hit["updatedAt"], fact.updated_at);
     let loaded = process.call_tool("get_memory", json!({ "workspaceRoot": root, "id": id }));
     let record = &loaded["result"]["structuredContent"];
     assert_eq!(record["kind"], "decision");

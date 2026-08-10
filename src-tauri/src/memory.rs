@@ -3368,6 +3368,13 @@ fn migrate(connection: &mut Connection) -> Result<()> {
          );
          ALTER TABLE project_documents ADD COLUMN memory_kind TEXT NOT NULL DEFAULT 'summary'
             CHECK (memory_kind IN ('summary', 'decision', 'task', 'fact', 'preference'));
+         ALTER TABLE project_documents ADD COLUMN memory_source TEXT NOT NULL DEFAULT 'kodade'
+            CHECK (memory_source IN ('user', 'kodade', 'agent'));
+         ALTER TABLE project_documents ADD COLUMN memory_pinned INTEGER NOT NULL DEFAULT 0
+            CHECK (memory_pinned IN (0, 1));
+         ALTER TABLE project_documents ADD COLUMN canonical_record_id TEXT;
+         ALTER TABLE project_documents ADD COLUMN memory_version INTEGER NOT NULL DEFAULT 1;
+         ALTER TABLE project_documents ADD COLUMN memory_updated_at INTEGER;
          UPDATE project_documents SET memory_kind = CASE kind
             WHEN 'decision' THEN 'decision'
             WHEN 'knowledge' THEN 'fact'
