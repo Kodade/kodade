@@ -186,6 +186,28 @@ fn file_hash(path: &Path) -> Vec<u8> {
     Sha256::digest(std::fs::read(path).expect("read database bytes")).to_vec()
 }
 
+fn tree_hash(root: &Path) -> Vec<u8> {
+    fn visit(root: &Path, path: &Path, hasher: &mut Sha256) {
+        let mut entries = std::fs::read_dir(path)
+            .expect("read tree")
+            .map(|entry| entry.expect("tree entry").path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        for entry in entries {
+            let relative = entry.strip_prefix(root).expect("relative tree path");
+            hasher.update(relative.to_string_lossy().as_bytes());
+            if entry.is_dir() {
+                visit(root, &entry, hasher);
+            } else {
+                hasher.update(std::fs::read(entry).expect("read tree file"));
+            }
+        }
+    }
+    let mut hasher = Sha256::new();
+    visit(root, root, &mut hasher);
+    hasher.finalize().to_vec()
+}
+
 fn tool_names(response: &Value) -> Vec<&str> {
     response["result"]["tools"]
         .as_array()
@@ -617,6 +639,345 @@ fn read_only_stdio_serves_fresh_mapped_project_markdown_with_provenance() {
 }
 
 #[test]
+fn read_only_stdio_serves_canonical_records_from_a_distinct_fresh_database() {
+    let temp = tempfile::tempdir().expect("create portable MCP fixture");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault.join("10-Projects")).unwrap();
+    let writer_root = temp.path().join("writer-checkout");
+    let reader_root = temp.path().join("reader-checkout");
+    std::fs::create_dir(&writer_root).unwrap();
+    std::fs::create_dir(&reader_root).unwrap();
+    let writer_root = std::fs::canonicalize(writer_root).unwrap();
+    let reader_root = std::fs::canonicalize(reader_root).unwrap();
+    let writer_db = temp.path().join("writer.sqlite3");
+    let writer = MemoryStore::open(&writer_db).unwrap();
+    writer.register_projects_vault(&vault).unwrap();
+    let writer_workspace = writer
+        .register_workspace(&writer_root, "Portable writer", None)
+        .unwrap();
+    writer
+        .map_workspace_to_project(&writer_workspace.id, None, "portable-mcp", "Portable MCP")
+        .unwrap();
+    let plan = writer
+        .preview_project_scaffold(&writer_workspace.id)
+        .unwrap();
+    writer
+        .apply_project_scaffold(&writer_workspace.id, &plan.fingerprint)
+        .unwrap();
+    let fact = writer
+        .remember(NewMemory {
+            workspace_id: writer_workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Fresh portable fact".into(),
+            body: "fresh-portable-fact-token".into(),
+            source: MemorySource::Agent,
+            source_client: "mcp-stdio-test".into(),
+            session_id: Some("fresh-read".into()),
+            pinned: false,
+            idempotency_key: Some("fresh-fact".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    writer
+        .remember(NewMemory {
+            workspace_id: writer_workspace.id.clone(),
+            kind: MemoryKind::Task,
+            title: "Fresh portable task".into(),
+            body: "fresh-portable-task-token".into(),
+            source: MemorySource::Agent,
+            source_client: "mcp-stdio-test".into(),
+            session_id: Some("fresh-read".into()),
+            pinned: false,
+            idempotency_key: Some("fresh-task".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    writer
+        .remember(NewMemory {
+            workspace_id: writer_workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Fresh portable decision".into(),
+            body: "fresh-portable-decision-token".into(),
+            source: MemorySource::Agent,
+            source_client: "mcp-stdio-test".into(),
+            session_id: Some("fresh-read".into()),
+            pinned: true,
+            idempotency_key: Some("fresh-decision".into()),
+            links: vec![kodade_lib::memory::MemoryLink {
+                target_id: fact.id,
+                relation: "supports".into(),
+            }],
+        })
+        .unwrap();
+    let state = vault.join("10-Projects/portable-mcp/STATE.md");
+    let expected_state = format!("{:x}", Sha256::digest(std::fs::read(&state).unwrap()));
+    writer
+        .checkpoint_with_state_hash(
+            NewCheckpoint {
+                workspace_id: writer_workspace.id,
+                summary: "Fresh portable checkpoint".into(),
+                decisions: Vec::new(),
+                next_actions: vec!["Continue from a fresh DB".into()],
+                changed_paths: Vec::new(),
+                source: MemorySource::Agent,
+                source_client: "mcp-stdio-test".into(),
+                session_id: Some("fresh-read".into()),
+                idempotency_key: Some("fresh-checkpoint".into()),
+            },
+            Some(&expected_state),
+        )
+        .unwrap();
+    drop(writer);
+
+    let reader_db = temp.path().join("reader.sqlite3");
+    let reader = MemoryStore::open(&reader_db).unwrap();
+    reader.register_projects_vault(&vault).unwrap();
+    let reader_workspace = reader
+        .register_workspace(&reader_root, "Portable reader", None)
+        .unwrap();
+    reader
+        .map_workspace_to_project(&reader_workspace.id, None, "portable-mcp", "Portable MCP")
+        .unwrap();
+    drop(reader);
+    let db_before = file_hash(&reader_db);
+    let vault_before = tree_hash(&vault);
+
+    let root = reader_root.to_string_lossy();
+    let mut process = McpProcess::spawn(&reader_db, true, "2026-07-28");
+    let context = process.call_tool("get_context", json!({ "workspaceRoot": root }));
+    let structured = &context["result"]["structuredContent"];
+    assert_eq!(
+        structured["latestCheckpoint"]["summary"],
+        "Fresh portable checkpoint"
+    );
+    assert_eq!(structured["pinnedDecisions"][0]["kind"], "decision");
+    assert_eq!(structured["openTasks"][0]["kind"], "task");
+    assert!(structured["recentMemories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|record| record["kind"] == "fact"));
+
+    let search = process.call_tool(
+        "search_memories",
+        json!({ "workspaceRoot": root, "query": "fresh-portable-decision-token" }),
+    );
+    assert_eq!(search["result"]["structuredContent"]["total"], 1);
+    let id = search["result"]["structuredContent"]["items"][0]["id"]
+        .as_str()
+        .unwrap();
+    let loaded = process.call_tool("get_memory", json!({ "workspaceRoot": root, "id": id }));
+    let record = &loaded["result"]["structuredContent"];
+    assert_eq!(record["kind"], "decision");
+    assert_eq!(record["version"], 1);
+    assert_eq!(record["links"][0]["relation"], "supports");
+    assert_eq!(record["projectSource"]["projectId"], "portable-mcp");
+    drop(process);
+    assert_eq!(file_hash(&reader_db), db_before);
+    assert_eq!(tree_hash(&vault), vault_before);
+}
+
+#[test]
+fn mapped_stdio_requires_state_cas_supports_fallback_and_rebuilds_exact_markdown() {
+    let temp = tempfile::tempdir().expect("create mapped write MCP fixture");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let workspace = std::fs::canonicalize(workspace).unwrap();
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
+    std::fs::create_dir(vault.join("10-Projects")).unwrap();
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).unwrap();
+    store.register_projects_vault(&vault).unwrap();
+    let registered = store
+        .register_workspace(&workspace, "Mapped writer", None)
+        .unwrap();
+    store
+        .map_workspace_to_project(&registered.id, None, "mapped-writer", "Mapped writer")
+        .unwrap();
+    let plan = store.preview_project_scaffold(&registered.id).unwrap();
+    store
+        .apply_project_scaffold(&registered.id, &plan.fingerprint)
+        .unwrap();
+    drop(store);
+
+    let root = workspace.to_string_lossy();
+    let mut process = McpProcess::spawn_scoped(&db, false, "2026-07-28", Some(&workspace));
+    let tools = process.request("tools/list", json!({}));
+    let checkpoint_schema = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "checkpoint")
+        .unwrap();
+    let checkpoint_description = checkpoint_schema["description"].as_str().unwrap();
+    assert!(checkpoint_description.contains("expectedStateHash"));
+    assert!(checkpoint_description.contains("updateState false"));
+    assert!(checkpoint_description.contains("content_conflict"));
+    assert!(checkpoint_schema["inputSchema"]["properties"]["expectedStateHash"].is_object());
+    assert!(checkpoint_schema["inputSchema"]["properties"]["updateState"].is_object());
+
+    let context = process.call_tool("get_context", json!({ "workspaceRoot": root }));
+    let state_hash = context["result"]["structuredContent"]["projectKnowledge"]["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| source["kind"] == "state")
+        .unwrap()["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let missing_hash = process.call_tool(
+        "checkpoint",
+        json!({
+            "workspaceRoot": root,
+            "summary": "Must not bypass state CAS",
+            "idempotencyKey": "mapped-missing-hash"
+        }),
+    );
+    assert_eq!(
+        missing_hash["result"]["structuredContent"]["type"],
+        "invalid_input"
+    );
+
+    let fallback = process.call_tool(
+        "checkpoint",
+        json!({
+            "workspaceRoot": root,
+            "summary": "Append-only local fallback",
+            "idempotencyKey": "mapped-fallback",
+            "updateState": false
+        }),
+    );
+    assert_eq!(
+        fallback["result"]["structuredContent"]["summary"],
+        "Append-only local fallback"
+    );
+    let state_path = vault.join("10-Projects/mapped-writer/STATE.md");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(std::fs::read(&state_path).unwrap())),
+        state_hash
+    );
+
+    let summary = "Exact summary\n### Decisions\n- not a decoded section";
+    let decisions = vec!["First\n- nested-looking item", "### Next actions"];
+    let next_actions = vec!["- literal list prefix\nsecond line"];
+    let changed_paths = vec!["docs/# heading.md", "src/- list.rs"];
+    let explicit = process.call_tool(
+        "checkpoint",
+        json!({
+            "workspaceRoot": root,
+            "summary": summary,
+            "decisions": decisions,
+            "nextActions": next_actions,
+            "changedPaths": changed_paths,
+            "idempotencyKey": "mapped-exact-codec",
+            "expectedStateHash": state_hash
+        }),
+    );
+    let checkpoint = explicit["result"]["structuredContent"].clone();
+    assert_eq!(checkpoint["summary"], summary);
+
+    let created_memory = process.call_tool(
+        "remember",
+        json!({
+            "workspaceRoot": root,
+            "kind": "fact",
+            "title": "One canonical search hit",
+            "body": "portable-unique-search-token",
+            "idempotencyKey": "mapped-record-stdio"
+        }),
+    );
+    let created_memory = created_memory["result"]["structuredContent"].clone();
+    let created_hash = created_memory["projectSource"]["sha256"].as_str().unwrap();
+    let search = process.call_tool(
+        "search_memories",
+        json!({ "workspaceRoot": root, "query": "portable-unique-search-token" }),
+    );
+    assert_eq!(search["result"]["structuredContent"]["total"], 1);
+    assert_eq!(
+        search["result"]["structuredContent"]["items"][0]["kind"],
+        "fact"
+    );
+    assert!(search["result"]["structuredContent"]["items"][0]["projectSource"].is_object());
+    let missing_content_hash = process.call_tool(
+        "revise_memory",
+        json!({
+            "id": created_memory["id"],
+            "expectedVersion": 1,
+            "body": "portable revised body"
+        }),
+    );
+    assert_eq!(
+        missing_content_hash["result"]["structuredContent"]["type"],
+        "invalid_input"
+    );
+    let revised_memory = process.call_tool(
+        "revise_memory",
+        json!({
+            "id": created_memory["id"],
+            "expectedVersion": 1,
+            "expectedContentHash": created_hash,
+            "body": "portable revised body"
+        }),
+    );
+    let revised_memory = revised_memory["result"]["structuredContent"].clone();
+    let forgotten = process.call_tool(
+        "forget_memory",
+        json!({
+            "id": revised_memory["id"],
+            "expectedVersion": 2,
+            "expectedContentHash": revised_memory["projectSource"]["sha256"]
+        }),
+    );
+    assert_eq!(forgotten["result"]["structuredContent"]["version"], 3);
+    drop(process);
+
+    let store = MemoryStore::open(&db).unwrap();
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute(
+            "DELETE FROM checkpoints WHERE canonical_project_id = 'mapped-writer'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM project_documents WHERE project_id = 'mapped-writer'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    store.rebuild_project_from_markdown(&registered.id).unwrap();
+    let rebuilt = store
+        .checkpoint_by_id(checkpoint["id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(rebuilt.summary, summary);
+    assert_eq!(rebuilt.decisions, decisions);
+    assert_eq!(rebuilt.next_actions, next_actions);
+    assert_eq!(rebuilt.changed_paths, changed_paths);
+    let retried = store
+        .checkpoint_with_authority(
+            NewCheckpoint {
+                workspace_id: registered.id,
+                summary: summary.into(),
+                decisions: rebuilt.decisions.clone(),
+                next_actions: rebuilt.next_actions.clone(),
+                changed_paths: rebuilt.changed_paths.clone(),
+                source: MemorySource::Agent,
+                source_client: "mcp-stdio-test".into(),
+                session_id: None,
+                idempotency_key: Some("mapped-exact-codec".into()),
+            },
+            true,
+            None,
+        )
+        .expect("same-key retry is exact and does not need a stale state hash");
+    assert_eq!(retried.id, rebuilt.id);
+}
+
+#[test]
 fn stdio_get_context_bounds_the_complete_worst_case_response() {
     let temp = tempfile::tempdir().expect("create bounded MCP fixture");
     let workspace = temp.path().join("workspace");
@@ -933,7 +1294,7 @@ fn read_only_stdio_rejects_an_older_schema_without_migrating() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("schema 6 is older than current version 11"),
+            .contains("schema 6 is older than current version 12"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );

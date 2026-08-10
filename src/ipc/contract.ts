@@ -758,6 +758,7 @@ export type MemoryRecord = {
   deletedAt: number | null;
   links: MemoryLink[];
   backlinks: MemoryLink[];
+  projectSource?: ProjectKnowledgeProvenance;
 };
 
 export type Checkpoint = {
@@ -1042,20 +1043,22 @@ export interface MemoryIpc {
   get(id: string): Promise<MemoryRecord>;
   listDeleted(query: DeletedMemoryQuery): Promise<Page<MemoryRecord>>;
   remember(input: NewMemory): Promise<MemoryRecord>;
-  revise(input: MemoryRevision): Promise<MemoryRecord>;
+  revise(input: MemoryRevision, expectedContentHash?: string): Promise<MemoryRecord>;
   forget(
     id: string,
     expectedVersion: number,
     sourceClient: string,
     sessionId: string | null,
+    expectedContentHash?: string,
   ): Promise<Tombstone>;
   restore(
     id: string,
     expectedVersion: number,
     sourceClient: string,
     sessionId: string | null,
+    expectedContentHash?: string,
   ): Promise<MemoryRecord>;
-  checkpoint(input: NewCheckpoint): Promise<Checkpoint>;
+  checkpoint(input: NewCheckpoint, expectedStateHash?: string): Promise<Checkpoint>;
   searchCheckpoints(query: CheckpointQuery): Promise<Page<CheckpointSearchHit>>;
   workingStatus(workspaceId: string): Promise<WorkingMemoryStatus | null>;
   activateWorking(

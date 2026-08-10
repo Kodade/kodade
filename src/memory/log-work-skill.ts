@@ -13,8 +13,9 @@ Use this skill when a project exposes the KödMCP tools \`get_context\`,
 ## Start
 
 1. Call \`get_context\` before changing the project.
-2. Treat \`.kodade/memory/STATE.md\` and the recent worklog returned by KödMCP
-   as the current handoff. Resolve conflicts in favor of the readable files.
+2. Treat the STATE source and recent Worklog returned by KödMCP as the current
+   handoff. For a mapped project, retain the STATE source's \`sha256\` before an
+   explicit state-updating checkpoint.
 
 ## During work
 
@@ -30,6 +31,12 @@ Call \`checkpoint\` at a natural handoff, before an authorized commit, and befor
 ending a substantive session. Include a concise summary, decisions, next actions,
 and workspace-relative changed paths. Use a stable idempotency key when retrying
 the same handoff.
+
+For a mapped project, pass the retained STATE \`sha256\` as
+\`expectedStateHash\`. If KödMCP returns \`content_conflict\`, refresh with
+\`get_context\`, review the human edit, and retry intentionally with the new
+hash. Append-only offload, session-exit, and Git-observation fallbacks must set
+\`updateState: false\`; they belong in Worklog and must never overwrite STATE.
 
 Ködade also records a minimal fallback when a connected session exits or a Git
 commit is observed. Your explicit checkpoint should be more useful than that

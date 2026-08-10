@@ -442,6 +442,7 @@ export class LocalAgentLoop {
         nextActions: guardedDraft.nextActions,
         sessionId: this.memory.sessionId,
         idempotencyKey,
+        updateState: false,
       });
       this.retainedTurns.splice(0, completeTurns.length);
       this.hasDurableElision = true;
@@ -706,6 +707,7 @@ Tool activity summary: ${summary}`;
         nextActions: draft.nextActions,
         sessionId: this.memory.sessionId,
         idempotencyKey,
+        updateState: false,
       });
       this.sessionCheckpointWritten = true;
       const checkpointId =

@@ -45,11 +45,11 @@ pub use knowledge::{
 };
 
 #[derive(Clone, Debug)]
-struct ProjectLocation {
-    project_id: String,
-    project_display_name: String,
-    vault_root: PathBuf,
-    project_root: PathBuf,
+pub(crate) struct ProjectLocation {
+    pub(crate) project_id: String,
+    pub(crate) project_display_name: String,
+    pub(crate) vault_root: PathBuf,
+    pub(crate) project_root: PathBuf,
 }
 
 impl MemoryStore {
@@ -223,7 +223,7 @@ impl MemoryStore {
     }
 }
 
-fn validate_projects_vault_root(root: &Path) -> Result<String> {
+pub(crate) fn validate_projects_vault_root(root: &Path) -> Result<String> {
     let canonical = std::fs::canonicalize(root).map_err(|error| {
         MemoryError::InvalidInput(format!(
             "projects vault is inaccessible at {}: {error}",

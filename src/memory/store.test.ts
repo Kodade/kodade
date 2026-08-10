@@ -508,6 +508,11 @@ describe("memory store", () => {
       ...decision,
       version: 2,
       deletedAt: Date.now(),
+      projectSource: {
+        projectId: "kodade",
+        relativePath: "Decisions/Archive/km_record.md",
+        sha256: "a".repeat(64),
+      },
     };
     const restored = {
       ...decision,
@@ -538,7 +543,13 @@ describe("memory store", () => {
 
     await store.getState().restoreSelected();
 
-    expect(ipc.restore).toHaveBeenCalledWith(decision.id, 2, "kodade-ui", null);
+    expect(ipc.restore).toHaveBeenCalledWith(
+      decision.id,
+      2,
+      "kodade-ui",
+      null,
+      "a".repeat(64),
+    );
     expect(store.getState().selected).toEqual(restored);
     expect(store.getState().audit).toEqual([restoreAudit]);
   });

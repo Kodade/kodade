@@ -26,6 +26,8 @@ The minimal structure provides these roles:
 - `STATE.md` for bounded current context
 - `Worklog/` for daily work notes
 - `Decisions/Decisions.md` for durable decisions
+- `Knowledge/Knowledge.md` for approved durable facts, tasks, summaries, and
+  preferences
 - `Plans/Plans.md` for project plans
 - `Research/Research.md` for project research
 - `References.md` for durable project links
@@ -41,10 +43,25 @@ A newly generated `Project.md` contains the portable marker:
 <!-- kodmem-project {"schema":1,"projectId":"<project-id>","authority":"projects-vault"} -->
 ```
 
-An existing `Project.md` is accepted when its `project_id` matches the mapped
-project. Ködade does not inject the marker into an existing note. Scaffolding
-does not switch active KödMem storage authority; legacy migration and cutover
-remain a separate, explicitly validated workflow.
+For a newly scaffolded project with this valid matching marker, projects-vault
+Markdown is the durable authority: checkpoints append exact structured entries
+to daily `Worklog/YYYY/YYYY-MM-DD.md` notes, explicit state updates use a
+content-hash compare-and-swap on `STATE.md`, and durable records use stable
+machine markers in `Decisions/` or `Knowledge/`. SQLite remains a rebuildable,
+workspace-local search projection. Human edits are refreshed before reads;
+conflicting writes fail instead of overwriting them.
+
+An existing `Project.md` is accepted for mapping when its `project_id` matches,
+but Ködade does not inject the authority marker into an existing note. Projects
+that already contain legacy durable KödMem data still require the separately
+validated migration and cutover workflow planned for the next development
+slice; source data is not deleted or silently superseded.
+
+Portable writes use stable idempotency markers, a machine-local project lock,
+and a recoverable journal. Rebuild validates confined regular files, bounded
+sizes, strict marker schemas, and secret exclusions before replacing the local
+projection. Archived records retain their canonical provenance and can be
+restored within the configured tombstone retention window.
 
 After `Project.md` exists, **Open in Obsidian** uses the note's absolute path in
 an `obsidian://` deep link. Obsidian can therefore select the correct registered

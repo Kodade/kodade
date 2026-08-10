@@ -11,6 +11,9 @@ describe("bundled KödMem log-work skill", () => {
     expect(instructions).toContain("get_context");
     expect(instructions).toContain("remember");
     expect(instructions).toContain("checkpoint");
+    expect(instructions).toContain("expectedStateHash");
+    expect(instructions).toContain("content_conflict");
+    expect(instructions).toContain("updateState: false");
     expect(instructions).toContain("Never store credentials");
     expect(instructions).toContain("Do not create a Git commit");
   });

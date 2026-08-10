@@ -26,7 +26,7 @@ pub mod secret_scan;
 use provider_context::structured_provider_context;
 
 const DATABASE_FILENAME: &str = "kodade-memory.sqlite3";
-const KODADE_WORKFLOW_INSTRUCTIONS: &str = "At the start of each work session, call get_context with the current workspace root before making plans. Search memories when you need a specific prior fact. Save only durable decisions, facts, preferences, tasks, or concise summaries with remember; use a stable idempotencyKey whenever a retry is possible. Do not store secrets, credentials, transient logs, or information already obvious from the repository. Use revise_memory with the version you read instead of overwriting newer work. Before ending or handing off a session, call checkpoint with a short summary, concrete next actions, a sessionId when available, and an idempotencyKey.";
+const KODADE_WORKFLOW_INSTRUCTIONS: &str = "At the start of each work session, call get_context with the current workspace root before making plans. Search memories when you need a specific prior fact. Save only durable decisions, facts, preferences, tasks, or concise summaries with remember; use a stable idempotencyKey whenever a retry is possible. Do not store secrets, credentials, transient logs, or information already obvious from the repository. Use revise_memory with the version and expectedContentHash you read instead of overwriting newer work. Before ending or handing off a session, call checkpoint with a short summary, concrete next actions, a sessionId when available, and an idempotencyKey. For mapped projects, explicit state updates pass the STATE projectKnowledge source sha256 as expectedStateHash; append-only fallbacks set updateState false. On content_conflict, refresh context and retry intentionally.";
 
 pub const HELP: &str = "\
 kodade-mcp - KödMem MCP stdio server
@@ -174,7 +174,7 @@ impl KodadeMcp {
                 ),
                 tool::<CheckpointParams>(
                     "checkpoint",
-                    "Record an end-of-session summary, decisions, next actions, and changed paths.",
+                    "Record a handoff. Mapped state updates require the STATE source sha256 as expectedStateHash; append-only fallbacks set updateState false. Refresh context after content_conflict.",
                     false,
                     false,
                     false,
@@ -241,17 +241,10 @@ impl KodadeMcp {
                     Ok(workspace) => workspace,
                     Err(error) => return Ok(error),
                 };
-                let record = match self.store.memory(&params.id) {
+                let record = match self.store.memory_for_workspace(&workspace.id, &params.id) {
                     Ok(record) => record,
                     Err(error) => return Ok(memory_error(error)),
                 };
-                if record.workspace_id != workspace.id {
-                    return Ok(tool_error(
-                        "memory_not_found",
-                        "memory was not found in the requested workspace",
-                        json!({ "id": params.id }),
-                    ));
-                }
                 if let Err(error) = self.enforce_record_scope(&record) {
                     return Ok(error);
                 }
@@ -335,7 +328,10 @@ impl KodadeMcp {
                 ) {
                     return Ok(error);
                 }
-                match self.store.revise(revision) {
+                match self
+                    .store
+                    .revise_with_content_hash(revision, params.expected_content_hash.as_deref())
+                {
                     Ok(record) => Ok(structured(record)),
                     Err(error) => Ok(memory_error(error)),
                 }
@@ -345,19 +341,21 @@ impl KodadeMcp {
                 // Tombstones have no reason field; accept the contract hint without
                 // inventing storage outside MemoryStore's existing model.
                 let _reason = params.reason;
-                let result = match self.restricted_workspace_id.as_deref() {
-                    Some(workspace_id) => self.store.forget_in_workspace(
-                        &params.id,
-                        params.expected_version,
-                        workspace_id,
-                        &self.client,
-                        None,
-                    ),
-                    None => {
-                        self.store
-                            .forget(&params.id, params.expected_version, &self.client, None)
-                    }
+                let current = match self.store.memory(&params.id) {
+                    Ok(record) => record,
+                    Err(error) => return Ok(memory_error(error)),
                 };
+                if let Err(error) = self.enforce_record_scope(&current) {
+                    return Ok(error);
+                }
+                let result = self.store.forget_in_workspace_with_content_hash(
+                    &params.id,
+                    params.expected_version,
+                    &current.workspace_id,
+                    params.expected_content_hash.as_deref(),
+                    &self.client,
+                    None,
+                );
                 match result {
                     Ok(tombstone) => Ok(structured(tombstone)),
                     Err(error) => Ok(memory_error(error)),
@@ -409,7 +407,11 @@ impl KodadeMcp {
                     session_id: provenance.session_id,
                     idempotency_key: params.idempotency_key,
                 };
-                match self.store.checkpoint(input) {
+                match self.store.checkpoint_with_authority(
+                    input,
+                    params.update_state.unwrap_or(true),
+                    params.expected_state_hash.as_deref(),
+                ) {
                     Ok(checkpoint) => Ok(structured(checkpoint)),
                     Err(error) => Ok(memory_error(error)),
                 }
@@ -646,6 +648,11 @@ fn memory_error(error: MemoryError) -> CallToolResult {
             &message,
             json!({ "expectedVersion": expected, "currentVersion": actual }),
         ),
+        MemoryError::ContentConflict { expected, actual } => tool_error(
+            "content_conflict",
+            &message,
+            json!({ "expectedContentHash": expected, "currentContentHash": actual }),
+        ),
         MemoryError::NotFound(id) => tool_error("memory_not_found", &message, json!({ "id": id })),
         MemoryError::InvalidInput(_) => tool_error("invalid_input", &message, Value::Null),
         MemoryError::Database(_)
@@ -844,6 +851,7 @@ pub struct ReviseMemoryParams {
     pub body: Option<String>,
     pub kind: Option<McpMemoryKind>,
     pub pinned: Option<bool>,
+    pub expected_content_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -852,6 +860,7 @@ pub struct ForgetMemoryParams {
     pub id: String,
     pub expected_version: u64,
     pub reason: Option<String>,
+    pub expected_content_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -864,4 +873,6 @@ pub struct CheckpointParams {
     pub changed_paths: Option<Vec<String>>,
     pub session_id: Option<String>,
     pub idempotency_key: Option<String>,
+    pub expected_state_hash: Option<String>,
+    pub update_state: Option<bool>,
 }

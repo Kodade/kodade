@@ -13,6 +13,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 
 pub mod commands;
+mod portable;
 mod projects;
 mod scaffold;
 mod working;
@@ -30,7 +31,7 @@ pub use working::{WorkingMemoryContext, WorkingMemoryMode, WorkingMemoryStatus};
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
 pub const MEMORY_TITLE_LIMIT: usize = 200;
-const MEMORY_SCHEMA_VERSION: u32 = 11;
+const MEMORY_SCHEMA_VERSION: u32 = 12;
 const SEARCH_OFFSET_LIMIT: u32 = 10_000;
 
 #[derive(Debug)]
@@ -44,6 +45,7 @@ pub enum MemoryError {
     WorkspaceRestricted(String),
     InvalidInput(String),
     VersionConflict { expected: u64, actual: u64 },
+    ContentConflict { expected: String, actual: String },
 }
 
 impl fmt::Display for MemoryError {
@@ -64,6 +66,10 @@ impl fmt::Display for MemoryError {
             Self::VersionConflict { expected, actual } => write!(
                 f,
                 "memory version conflict: expected {expected}, current version is {actual}"
+            ),
+            Self::ContentConflict { expected, actual } => write!(
+                f,
+                "Markdown content conflict: expected SHA-256 {expected}, current SHA-256 is {actual}"
             ),
         }
     }
@@ -259,6 +265,8 @@ pub struct MemoryRecord {
     pub deleted_at: Option<i64>,
     pub links: Vec<MemoryLink>,
     pub backlinks: Vec<MemoryLink>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_source: Option<ProjectKnowledgeProvenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -817,6 +825,7 @@ impl MemoryStore {
     }
 
     pub fn context(&self, workspace_id: &str) -> Result<WorkspaceContext> {
+        let portable = self.prepare_portable_read(workspace_id)?;
         let mut context = self.run_with_recovery(|| {
             let connection = self.connection()?;
             let workspace = workspace_with_connection(&connection, workspace_id)?;
@@ -864,6 +873,36 @@ impl MemoryStore {
                 project_knowledge: None,
             })
         })?;
+        if let Some(mut portable) = portable {
+            portable
+                .records
+                .retain(|record| record.deleted_at.is_none());
+            portable.records.sort_by(|left, right| {
+                right
+                    .updated_at
+                    .cmp(&left.updated_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            context.pinned_decisions = portable
+                .records
+                .iter()
+                .filter(|record| record.kind == MemoryKind::Decision && record.pinned)
+                .take(20)
+                .cloned()
+                .collect();
+            context.open_tasks = portable
+                .records
+                .iter()
+                .filter(|record| record.kind == MemoryKind::Task)
+                .take(50)
+                .cloned()
+                .collect();
+            context.recent_memories = portable.records.into_iter().take(30).collect();
+            context.latest_checkpoint = portable
+                .checkpoints
+                .into_iter()
+                .max_by_key(|checkpoint| checkpoint.created_at);
+        }
         context.working_memory = self.working_memory_context(&context.workspace)?;
         context.project_knowledge = self.project_knowledge_context(&context.workspace.id)?;
         Ok(context)
@@ -1017,6 +1056,13 @@ impl MemoryStore {
 
     pub fn remember(&self, input: NewMemory) -> Result<MemoryRecord> {
         validate_memory(&input, MEMORY_TITLE_LIMIT)?;
+        if let Some(location) = self.portable_authority(&input.workspace_id)? {
+            return self.portable_remember(input, location);
+        }
+        self.remember_legacy(input)
+    }
+
+    fn remember_legacy(&self, input: NewMemory) -> Result<MemoryRecord> {
         let now = now_millis();
         self.run_with_recovery(|| {
             let mut connection = self.connection()?;
@@ -1146,6 +1192,10 @@ impl MemoryStore {
 
     pub fn revise(&self, input: MemoryRevision) -> Result<MemoryRecord> {
         validate_memory_revision(&input, MEMORY_TITLE_LIMIT)?;
+        self.revise_with_content_hash(input, None)
+    }
+
+    pub(crate) fn revise_legacy(&self, input: MemoryRevision) -> Result<MemoryRecord> {
         let now = now_millis();
         self.run_with_recovery(|| {
             let mut connection = self.connection()?;
@@ -1220,10 +1270,34 @@ impl MemoryStore {
         source_client: &str,
         session_id: Option<&str>,
     ) -> Result<Tombstone> {
+        let current = self.memory(id)?;
+        if self.portable_authority(&current.workspace_id)?.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "mapped memory mutation requires expectedContentHash".into(),
+            ));
+        }
         self.forget_inner(id, expected_version, None, source_client, session_id)
     }
 
     pub fn forget_in_workspace(
+        &self,
+        id: &str,
+        expected_version: u64,
+        workspace_id: &str,
+        source_client: &str,
+        session_id: Option<&str>,
+    ) -> Result<Tombstone> {
+        self.forget_in_workspace_with_content_hash(
+            id,
+            expected_version,
+            workspace_id,
+            None,
+            source_client,
+            session_id,
+        )
+    }
+
+    pub(crate) fn forget_in_workspace_legacy(
         &self,
         id: &str,
         expected_version: u64,
@@ -1321,6 +1395,16 @@ impl MemoryStore {
         source_client: &str,
         session_id: Option<&str>,
     ) -> Result<MemoryRecord> {
+        self.restore_with_content_hash(id, expected_version, None, source_client, session_id)
+    }
+
+    pub(crate) fn restore_legacy(
+        &self,
+        id: &str,
+        expected_version: u64,
+        source_client: &str,
+        session_id: Option<&str>,
+    ) -> Result<MemoryRecord> {
         validate_source_client("memory", source_client)?;
         validate_no_likely_credential("memory id", id)?;
         validate_optional_no_likely_credential("memory session id", session_id)?;
@@ -1384,7 +1468,7 @@ impl MemoryStore {
     }
 
     pub fn checkpoint(&self, input: NewCheckpoint) -> Result<Checkpoint> {
-        self.checkpoint_with_state(input, true)
+        self.checkpoint_with_state_hash(input, None)
     }
 
     fn checkpoint_with_state(
@@ -1393,6 +1477,17 @@ impl MemoryStore {
         update_state: bool,
     ) -> Result<Checkpoint> {
         validate_checkpoint(&input)?;
+        if let Some(location) = self.portable_authority(&input.workspace_id)? {
+            return self.portable_checkpoint(input, update_state, None, location);
+        }
+        self.checkpoint_legacy(input, update_state)
+    }
+
+    pub(crate) fn checkpoint_legacy(
+        &self,
+        input: NewCheckpoint,
+        update_state: bool,
+    ) -> Result<Checkpoint> {
         let decisions = serde_json::to_string(&input.decisions)?;
         let next_actions = serde_json::to_string(&input.next_actions)?;
         let changed_paths = serde_json::to_string(&input.changed_paths)?;
@@ -1875,6 +1970,7 @@ impl MemoryStore {
                 "memory search offset cannot exceed {SEARCH_OFFSET_LIMIT}"
             )));
         }
+        self.prepare_portable_read(&query.workspace_id)?;
         if !matches!(self.access, StoreAccess::ReadOnly)
             && self.working_memory_status(&query.workspace_id)?.is_some()
         {
@@ -2019,7 +2115,8 @@ impl MemoryStore {
 
         let select_sql = format!(
             "SELECT m.id, m.workspace_id, m.kind, m.title, {excerpt}, m.source,
-                    m.pinned, m.version, m.updated_at
+                    m.pinned, m.version, m.updated_at, m.canonical_project_id,
+                    m.canonical_relative_path, m.canonical_sha256
              FROM {from} WHERE {filters}
              ORDER BY {order} LIMIT ? OFFSET ?"
         );
@@ -2030,6 +2127,19 @@ impl MemoryStore {
         let rows = statement.query_map(params_from_iter(page_values), |row| {
             let kind = MemoryKind::parse(row.get(2)?).map_err(to_sql_conversion_error)?;
             let source = MemorySource::parse(row.get(5)?).map_err(to_sql_conversion_error)?;
+            let project_id = row.get::<_, Option<String>>(9)?;
+            let relative_path = row.get::<_, Option<String>>(10)?;
+            let sha256 = row.get::<_, Option<String>>(11)?;
+            let project_source = match (project_id, relative_path, sha256) {
+                (Some(project_id), Some(relative_path), Some(sha256)) => {
+                    Some(ProjectKnowledgeProvenance {
+                        project_id,
+                        relative_path,
+                        sha256,
+                    })
+                }
+                _ => None,
+            };
             Ok(MemorySearchHit {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
@@ -2040,8 +2150,10 @@ impl MemoryStore {
                 pinned: row.get(6)?,
                 version: row.get(7)?,
                 updated_at: row.get(8)?,
-                file_path: None,
-                project_source: None,
+                file_path: project_source
+                    .as_ref()
+                    .map(|source| source.relative_path.clone()),
+                project_source,
             })
         })?;
         let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -2374,7 +2486,8 @@ fn memory_with_connection(connection: &Connection, id: &str) -> Result<MemoryRec
     let mut record = connection
         .query_row(
             "SELECT id, workspace_id, kind, title, body, source, source_client,
-                    session_id, pinned, version, created_at, updated_at, deleted_at
+                    session_id, pinned, version, created_at, updated_at, deleted_at,
+                    canonical_project_id, canonical_relative_path, canonical_sha256
              FROM memories WHERE id = ?1",
             [id],
             memory_from_row,
@@ -3234,6 +3347,33 @@ fn migrate(connection: &mut Connection) -> Result<()> {
             DELETE FROM project_document_fts WHERE document_id = old.id;
          END;",
     )?;
+    apply_migration(
+        &transaction,
+        12,
+        "ALTER TABLE memories ADD COLUMN canonical_project_id TEXT;
+         ALTER TABLE memories ADD COLUMN canonical_record_id TEXT;
+         ALTER TABLE memories ADD COLUMN canonical_relative_path TEXT;
+         ALTER TABLE memories ADD COLUMN canonical_sha256 TEXT;
+         CREATE INDEX memories_canonical_project_idx
+            ON memories(workspace_id, canonical_project_id, canonical_record_id);
+         ALTER TABLE checkpoints ADD COLUMN canonical_project_id TEXT;
+         ALTER TABLE checkpoints ADD COLUMN canonical_checkpoint_id TEXT;
+         ALTER TABLE checkpoints ADD COLUMN canonical_relative_path TEXT;
+         CREATE INDEX checkpoints_canonical_project_idx
+            ON checkpoints(workspace_id, canonical_project_id, canonical_checkpoint_id);
+         CREATE TABLE portable_observation (
+            workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+            last_commit TEXT,
+            updated_at INTEGER NOT NULL
+         );
+         ALTER TABLE project_documents ADD COLUMN memory_kind TEXT NOT NULL DEFAULT 'summary'
+            CHECK (memory_kind IN ('summary', 'decision', 'task', 'fact', 'preference'));
+         UPDATE project_documents SET memory_kind = CASE kind
+            WHEN 'decision' THEN 'decision'
+            WHEN 'knowledge' THEN 'fact'
+            ELSE 'summary'
+         END;",
+    )?;
     transaction.commit()?;
     Ok(())
 }
@@ -3305,6 +3445,20 @@ fn memory_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
         deleted_at: row.get(12)?,
         links: Vec::new(),
         backlinks: Vec::new(),
+        project_source: match (
+            row.get::<_, Option<String>>(13)?,
+            row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
+        ) {
+            (Some(project_id), Some(relative_path), Some(sha256)) => {
+                Some(ProjectKnowledgeProvenance {
+                    project_id,
+                    relative_path,
+                    sha256,
+                })
+            }
+            _ => None,
+        },
     })
 }
 

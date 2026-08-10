@@ -324,8 +324,15 @@ pub async fn memory_remember(app: AppHandle, input: NewMemory) -> Result<MemoryR
 }
 
 #[tauri::command]
-pub async fn memory_revise(app: AppHandle, input: MemoryRevision) -> Result<MemoryRecord, String> {
-    run_memory(app, move |store| store.revise(input)).await
+pub async fn memory_revise(
+    app: AppHandle,
+    input: MemoryRevision,
+    expected_content_hash: Option<String>,
+) -> Result<MemoryRecord, String> {
+    run_memory(app, move |store| {
+        store.revise_with_content_hash(input, expected_content_hash.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -335,9 +342,18 @@ pub async fn memory_forget(
     expected_version: u64,
     source_client: String,
     session_id: Option<String>,
+    expected_content_hash: Option<String>,
 ) -> Result<Tombstone, String> {
     run_memory(app, move |store| {
-        store.forget(&id, expected_version, &source_client, session_id.as_deref())
+        let current = store.memory(&id)?;
+        store.forget_in_workspace_with_content_hash(
+            &id,
+            expected_version,
+            &current.workspace_id,
+            expected_content_hash.as_deref(),
+            &source_client,
+            session_id.as_deref(),
+        )
     })
     .await
 }
@@ -349,16 +365,30 @@ pub async fn memory_restore(
     expected_version: u64,
     source_client: String,
     session_id: Option<String>,
+    expected_content_hash: Option<String>,
 ) -> Result<MemoryRecord, String> {
     run_memory(app, move |store| {
-        store.restore(&id, expected_version, &source_client, session_id.as_deref())
+        store.restore_with_content_hash(
+            &id,
+            expected_version,
+            expected_content_hash.as_deref(),
+            &source_client,
+            session_id.as_deref(),
+        )
     })
     .await
 }
 
 #[tauri::command]
-pub async fn memory_checkpoint(app: AppHandle, input: NewCheckpoint) -> Result<Checkpoint, String> {
-    run_memory(app, move |store| store.checkpoint(input)).await
+pub async fn memory_checkpoint(
+    app: AppHandle,
+    input: NewCheckpoint,
+    expected_state_hash: Option<String>,
+) -> Result<Checkpoint, String> {
+    run_memory(app, move |store| {
+        store.checkpoint_with_state_hash(input, expected_state_hash.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]

@@ -5,7 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use super::super::super::{validate_no_likely_credential, MemoryError, Result};
+use super::super::super::{validate_no_likely_credential, MemoryError, MemoryKind, Result};
 use super::super::{validate_projects_vault_root, ProjectLocation};
 use super::{
     IndexedProjectDocument, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeSource,
@@ -66,12 +66,22 @@ pub(super) fn collect_project_documents(
     )?;
     decisions.sort_by(|left, right| left.1.cmp(&right.1));
     for (path, relative_path) in decisions {
-        let document = read_document(
+        let mut document = read_document(
             location,
             &path,
             relative_path,
             ProjectKnowledgeKind::Decision,
         )?;
+        if let Some(marker) = canonical_memory_marker(
+            &document.body,
+            &location.project_id,
+            &document.relative_path,
+            ProjectKnowledgeKind::Decision,
+        )? {
+            document.memory_kind = marker.kind;
+            document.canonical_record_id = Some(marker.record_id);
+            document.canonical_version = Some(marker.version);
+        }
         if frontmatter_value(&document.body, "status").as_deref() == Some("accepted")
             || frontmatter_bool(&document.body, "agent_context")
         {
@@ -86,12 +96,22 @@ pub(super) fn collect_project_documents(
     )?;
     knowledge.sort_by(|left, right| left.1.cmp(&right.1));
     for (path, relative_path) in knowledge {
-        let document = read_document(
+        let mut document = read_document(
             location,
             &path,
             relative_path,
             ProjectKnowledgeKind::Knowledge,
         )?;
+        if let Some(marker) = canonical_memory_marker(
+            &document.body,
+            &location.project_id,
+            &document.relative_path,
+            ProjectKnowledgeKind::Knowledge,
+        )? {
+            document.memory_kind = marker.kind;
+            document.canonical_record_id = Some(marker.record_id);
+            document.canonical_version = Some(marker.version);
+        }
         if frontmatter_value(&document.body, "status").as_deref() == Some("approved") {
             documents.push(document);
         }
@@ -223,6 +243,9 @@ fn read_document(
         project_id: location.project_id.clone(),
         relative_path,
         kind,
+        memory_kind: kind.memory_kind(),
+        canonical_record_id: None,
+        canonical_version: None,
         title,
         body,
         sha256,
@@ -340,6 +363,124 @@ fn frontmatter_bool(body: &str, key: &str) -> bool {
         .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "yes"))
 }
 
+struct CanonicalMemoryMarker {
+    record_id: String,
+    kind: MemoryKind,
+    version: u64,
+}
+
+fn canonical_memory_marker(
+    body: &str,
+    project_id: &str,
+    relative_path: &str,
+    lane: ProjectKnowledgeKind,
+) -> Result<Option<CanonicalMemoryMarker>> {
+    let mut lines = body.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return Ok(None);
+    }
+    let mut closed = false;
+    for line in &mut lines {
+        if line.trim() == "---" {
+            closed = true;
+            break;
+        }
+    }
+    if !closed {
+        return Ok(None);
+    }
+    let Some(line) = lines.find(|line| !line.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let line = line.trim();
+    if !line.starts_with("<!-- kodmem-memory") {
+        return Ok(None);
+    }
+    if body
+        .lines()
+        .filter(|line| line.trim_start().starts_with("<!-- kodmem-memory"))
+        .count()
+        != 1
+    {
+        return Err(MemoryError::InvalidInput(
+            "canonical memory note must contain exactly one marker".into(),
+        ));
+    }
+    let json = line
+        .strip_prefix("<!-- kodmem-memory ")
+        .and_then(|value| value.strip_suffix(" -->"))
+        .ok_or_else(|| MemoryError::InvalidInput("canonical memory marker is malformed".into()))?;
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|_| MemoryError::InvalidInput("canonical memory marker is malformed".into()))?;
+    let object = value.as_object().ok_or_else(|| {
+        MemoryError::InvalidInput("canonical memory marker must be a JSON object".into())
+    })?;
+    let required = [
+        "schema",
+        "recordId",
+        "projectId",
+        "kind",
+        "source",
+        "sourceClient",
+        "sessionId",
+        "pinned",
+        "version",
+        "idempotencyKeyHash",
+        "payloadHash",
+        "createdAt",
+        "updatedAt",
+        "deletedAt",
+        "links",
+    ];
+    if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
+        return Err(MemoryError::InvalidInput(
+            "canonical memory marker schema is invalid".into(),
+        ));
+    }
+    let record_id = object.get("recordId").and_then(|value| value.as_str());
+    let stem = Path::new(relative_path)
+        .file_stem()
+        .and_then(|value| value.to_str());
+    let kind = object.get("kind").and_then(|value| value.as_str());
+    let lane_matches = matches!(
+        (lane, kind),
+        (ProjectKnowledgeKind::Decision, Some("decision"))
+            | (
+                ProjectKnowledgeKind::Knowledge,
+                Some("summary" | "task" | "fact" | "preference")
+            )
+    );
+    if object.get("schema").and_then(|value| value.as_u64()) != Some(1)
+        || object.get("projectId").and_then(|value| value.as_str()) != Some(project_id)
+        || !record_id.is_some_and(|value| value.starts_with("km_") && Some(value) == stem)
+        || !lane_matches
+    {
+        return Err(MemoryError::InvalidInput(
+            "canonical memory marker does not match its project or lane".into(),
+        ));
+    }
+    let memory_kind = match kind {
+        Some("summary") => MemoryKind::Summary,
+        Some("decision") => MemoryKind::Decision,
+        Some("task") => MemoryKind::Task,
+        Some("fact") => MemoryKind::Fact,
+        Some("preference") => MemoryKind::Preference,
+        _ => unreachable!("lane validation accepts every memory kind"),
+    };
+    let version = object
+        .get("version")
+        .and_then(|value| value.as_u64())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| MemoryError::InvalidInput("canonical memory version is invalid".into()))?;
+    Ok(Some(CanonicalMemoryMarker {
+        record_id: record_id
+            .expect("validated canonical record id")
+            .to_string(),
+        kind: memory_kind,
+        version,
+    }))
+}
+
 fn heading_title(body: &str) -> Option<String> {
     body.lines()
         .find_map(|line| line.strip_prefix("# "))
@@ -355,6 +496,7 @@ pub(super) fn project_context(
 ) -> ProjectKnowledgeContext {
     let selected = documents
         .iter()
+        .filter(|document| document.canonical_record_id.is_none())
         .filter(|document| match document.kind {
             ProjectKnowledgeKind::Project | ProjectKnowledgeKind::State => true,
             ProjectKnowledgeKind::Worklog => documents

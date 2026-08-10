@@ -15,6 +15,7 @@ export type MemoryCheckpointInput = {
   nextActions: string[];
   sessionId: string;
   idempotencyKey: string;
+  updateState: false;
 };
 
 /** KödMCP is an optional process boundary, so the loop only needs this narrow seam. */

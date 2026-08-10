@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "journalFile": ".kodmem-write-journal.json",
+  "lockNamespace": "kodade-kodmem-project-locks",
+  "stateByteLimit": 65536,
+  "stateFile": "STATE.md",
+  "maxDocumentBytes": 262144,
+  "maxProjectBytes": 4194304,
+  "maxScanFiles": 512,
+  "recordLanes": [
+    {
+      "kinds": ["decision"],
+      "activePattern": "Decisions/{{record_id}}.md",
+      "archivePattern": "Decisions/Archive/{{record_id}}.md",
+      "type": "decision",
+      "activeStatus": "accepted"
+    },
+    {
+      "kinds": ["summary", "task", "fact", "preference"],
+      "activePattern": "Knowledge/{{record_id}}.md",
+      "archivePattern": "Knowledge/Archive/{{record_id}}.md",
+      "type": "knowledge",
+      "activeStatus": "approved"
+    }
+  ],
+  "checkpoint": {
+    "worklogRoot": "Worklog",
+    "worklogPattern": "Worklog/{{year}}/{{date}}.md",
+    "decisionPattern": "Decisions/checkpoint-{{checkpoint_id}}-{{index}}.md"
+  },
+  "templates": {
+    "memory": [
+      "---",
+      "title: {{title_json}}",
+      "type: {{type}}",
+      "status: {{status}}",
+      "agent_context: true",
+      "project_id: {{project_id}}",
+      "---",
+      "{{marker}}",
+      "",
+      "# {{title}}",
+      "",
+      "{{body}}"
+    ],
+    "dailyHeader": [
+      "---",
+      "title: {{title_json}}",
+      "type: worklog",
+      "date: {{date}}",
+      "---",
+      "",
+      "# {{project_name}} — {{date}}"
+    ],
+    "checkpointEntry": [
+      "",
+      "{{marker}}",
+      "## {{timestamp}}",
+      "",
+      "{{summary}}"
+    ],
+    "state": [
+      "---",
+      "title: {{title_json}}",
+      "type: state",
+      "project: \"[[Project]]\"",
+      "project_id: {{project_id}}",
+      "tags:",
+      "  - project/state",
+      "---",
+      "{{marker}}",
+      "",
+      "# {{project_name}} state",
+      "",
+      "## Current state",
+      "",
+      "{{summary}}"
+    ],
+    "checkpointDecision": [
+      "---",
+      "title: {{title_json}}",
+      "type: decision",
+      "status: accepted",
+      "agent_context: true",
+      "project_id: {{project_id}}",
+      "---",
+      "{{marker}}",
+      "",
+      "# {{title}}",
+      "",
+      "{{decision}}"
+    ]
+  }
+}

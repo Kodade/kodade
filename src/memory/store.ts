@@ -772,7 +772,7 @@ export function createMemoryStore(deps: {
         const finishSaving = await beginSaving(scope);
         try {
           if (!ownsWorkspace(scope)) return;
-          const revised = await deps.ipc.revise({
+          const revision = {
             id: selected.id,
             expectedVersion: selected.version,
             kind: input.kind,
@@ -782,7 +782,10 @@ export function createMemoryStore(deps: {
             sourceClient: "kodade-ui",
             sessionId: null,
             links: input.links,
-          });
+          };
+          const revised = selected.projectSource
+            ? await deps.ipc.revise(revision, selected.projectSource.sha256)
+            : await deps.ipc.revise(revision);
           if (!ownsWorkspace(scope)) return;
           await refreshCommittedMutation(scope);
           if (!ownsRecordIntent(intent)) return;
@@ -805,12 +808,17 @@ export function createMemoryStore(deps: {
         const finishSaving = await beginSaving(scope);
         try {
           if (!ownsWorkspace(scope)) return;
-          await deps.ipc.forget(
-            selected.id,
-            selected.version,
-            "kodade-ui",
-            null,
-          );
+          if (selected.projectSource) {
+            await deps.ipc.forget(
+              selected.id,
+              selected.version,
+              "kodade-ui",
+              null,
+              selected.projectSource.sha256,
+            );
+          } else {
+            await deps.ipc.forget(selected.id, selected.version, "kodade-ui", null);
+          }
           if (!ownsWorkspace(scope)) return;
           const deleted = ownsRecordIntent(intent)
             ? await deps.ipc.get(selected.id)
@@ -838,12 +846,15 @@ export function createMemoryStore(deps: {
         const finishSaving = await beginSaving(scope);
         try {
           if (!ownsWorkspace(scope)) return;
-          const restored = await deps.ipc.restore(
-            selected.id,
-            selected.version,
-            "kodade-ui",
-            null,
-          );
+          const restored = selected.projectSource
+            ? await deps.ipc.restore(
+                selected.id,
+                selected.version,
+                "kodade-ui",
+                null,
+                selected.projectSource.sha256,
+              )
+            : await deps.ipc.restore(selected.id, selected.version, "kodade-ui", null);
           if (!ownsWorkspace(scope)) return;
           await refreshCommittedMutation(scope);
           if (!ownsRecordIntent(intent)) return;

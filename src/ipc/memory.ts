@@ -82,22 +82,30 @@ export const tauriMemory: MemoryIpc = {
   listDeleted: (query) =>
     invoke<Page<MemoryRecord>>(CMD.memoryListDeleted, { query }),
   remember: (input) => invoke<MemoryRecord>(CMD.memoryRemember, { input }),
-  revise: (input) => invoke<MemoryRecord>(CMD.memoryRevise, { input }),
-  forget: (id, expectedVersion, sourceClient, sessionId) =>
+  revise: (input, expectedContentHash) => invoke<MemoryRecord>(CMD.memoryRevise, {
+    input,
+    ...(expectedContentHash ? { expectedContentHash } : {}),
+  }),
+  forget: (id, expectedVersion, sourceClient, sessionId, expectedContentHash) =>
     invoke<Tombstone>(CMD.memoryForget, {
       id,
       expectedVersion,
       sourceClient,
       sessionId,
+      ...(expectedContentHash ? { expectedContentHash } : {}),
     }),
-  restore: (id, expectedVersion, sourceClient, sessionId) =>
+  restore: (id, expectedVersion, sourceClient, sessionId, expectedContentHash) =>
     invoke<MemoryRecord>(CMD.memoryRestore, {
       id,
       expectedVersion,
       sourceClient,
       sessionId,
+      ...(expectedContentHash ? { expectedContentHash } : {}),
     }),
-  checkpoint: (input) => invoke<Checkpoint>(CMD.memoryCheckpoint, { input }),
+  checkpoint: (input, expectedStateHash) => invoke<Checkpoint>(CMD.memoryCheckpoint, {
+    input,
+    ...(expectedStateHash ? { expectedStateHash } : {}),
+  }),
   searchCheckpoints: (query) =>
     invoke<Page<CheckpointSearchHit>>(CMD.memorySearchCheckpoints, { query }),
   workingStatus: (workspaceId) =>

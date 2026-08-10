@@ -2,6 +2,7 @@
   "schema": 1,
   "artifacts": [
     { "kind": "directory", "path": "Decisions" },
+    { "kind": "directory", "path": "Knowledge" },
     { "kind": "directory", "path": "Plans" },
     { "kind": "directory", "path": "Research" },
     { "kind": "directory", "path": "Worklog" },
@@ -41,7 +42,7 @@
         "",
         "## Boundaries",
         "",
-        "- KödMem storage authority remains unchanged until an explicit migration completes."
+        "- The `kodmem-project` marker makes this project folder the portable KödMem authority."
       ]
     },
     {
@@ -110,6 +111,24 @@
         "# {{project_name_markdown}} Decisions",
         "",
         "Add project decisions here."
+      ]
+    },
+    {
+      "kind": "file",
+      "path": "Knowledge/Knowledge.md",
+      "lines": [
+        "---",
+        "title: {{project_name_yaml: Knowledge}}",
+        "type: index",
+        "project: \"[[../Project]]\"",
+        "project_id: {{project_id}}",
+        "tags:",
+        "  - project/knowledge",
+        "---",
+        "",
+        "# {{project_name_markdown}} Knowledge",
+        "",
+        "Approved durable project knowledge appears here."
       ]
     },
     {

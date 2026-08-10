@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::super::{
-    fts_query, now_millis, validate_no_likely_credential, MemoryError, MemoryKind, MemoryQuery,
-    MemorySearchHit, MemorySource, MemoryStore, Page, Result, StoreAccess,
+    fts_query, now_millis, validate_no_likely_credential, MemoryKind, MemoryQuery, MemorySearchHit,
+    MemorySource, MemoryStore, Page, Result, StoreAccess,
 };
 use super::ProjectLocation;
 
@@ -39,19 +39,6 @@ impl ProjectKnowledgeKind {
             Self::Decision => MemoryKind::Decision,
             Self::Knowledge => MemoryKind::Fact,
             Self::Project | Self::State | Self::Worklog => MemoryKind::Summary,
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "project" => Ok(Self::Project),
-            "state" => Ok(Self::State),
-            "worklog" => Ok(Self::Worklog),
-            "decision" => Ok(Self::Decision),
-            "knowledge" => Ok(Self::Knowledge),
-            other => Err(MemoryError::InvalidInput(format!(
-                "unknown project knowledge kind in database: {other}"
-            ))),
         }
     }
 }
@@ -110,6 +97,9 @@ struct IndexedProjectDocument {
     project_id: String,
     relative_path: String,
     kind: ProjectKnowledgeKind,
+    memory_kind: MemoryKind,
+    canonical_record_id: Option<String>,
+    canonical_version: Option<u64>,
     title: String,
     body: String,
     sha256: String,
@@ -190,7 +180,7 @@ impl MemoryStore {
         search_project_document_index(self, query, refresh)
     }
 
-    fn project_location(&self, workspace_id: &str) -> Result<Option<ProjectLocation>> {
+    pub(crate) fn project_location(&self, workspace_id: &str) -> Result<Option<ProjectLocation>> {
         validate_no_likely_credential("workspace id", workspace_id)?;
         self.run_with_recovery(|| {
             let connection = self.connection()?;
@@ -235,14 +225,15 @@ impl MemoryStore {
             for document in documents {
                 transaction.execute(
                     "INSERT INTO project_documents (
-                        id, project_id, relative_path, kind, title, body,
+                        id, project_id, relative_path, kind, memory_kind, title, body,
                         sha256, modified_at, indexed_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         document.id,
                         document.project_id,
                         document.relative_path,
                         document.kind.as_str(),
+                        document.memory_kind.as_str(),
                         document.title,
                         document.body,
                         document.sha256,
@@ -273,15 +264,24 @@ fn search_project_document_index(
 ) -> Result<Page<MemorySearchHit>> {
     let project_id = &refresh.context.project_id;
     let connection = store.connection()?;
-    let mut filters = String::from("d.project_id = ?");
-    let mut values = vec![Value::Text(project_id.clone())];
+    let mut filters = String::from(
+        "d.project_id = ? AND NOT EXISTS (
+            SELECT 1 FROM memories m
+            WHERE m.workspace_id = ? AND m.canonical_project_id = d.project_id
+              AND m.canonical_relative_path = d.relative_path
+         )",
+    );
+    let mut values = vec![
+        Value::Text(project_id.clone()),
+        Value::Text(query.workspace_id.clone()),
+    ];
     if !query.kinds.is_empty() {
         let allowed = query
             .kinds
             .iter()
             .map(|kind| Value::Text(kind.as_str().into()))
             .collect::<Vec<_>>();
-        filters.push_str(" AND CASE d.kind WHEN 'decision' THEN 'decision' WHEN 'knowledge' THEN 'fact' ELSE 'summary' END IN (");
+        filters.push_str(" AND d.memory_kind IN (");
         filters.push_str(
             &std::iter::repeat_n("?", allowed.len())
                 .collect::<Vec<_>>()
@@ -319,20 +319,20 @@ fn search_project_document_index(
     values.push(i64::from(query.offset).into());
     let sql = format!(
         "SELECT d.id, d.kind, d.title, {excerpt}, d.modified_at,
-                d.relative_path, d.sha256
+                d.relative_path, d.sha256, d.memory_kind
          FROM {from} WHERE {filters} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     let mut statement = connection.prepare(&sql)?;
     let items = statement
         .query_map(params_from_iter(values), |row| {
-            let project_kind = ProjectKnowledgeKind::parse(&row.get::<_, String>(1)?)
+            let memory_kind = MemoryKind::parse(row.get::<_, String>(7)?)
                 .map_err(super::super::to_sql_conversion_error)?;
             let relative_path = row.get::<_, String>(5)?;
             let sha256 = row.get::<_, String>(6)?;
             Ok(MemorySearchHit {
                 id: row.get(0)?,
                 workspace_id: query.workspace_id.clone(),
-                kind: project_kind.memory_kind(),
+                kind: memory_kind,
                 title: row.get(2)?,
                 excerpt: row.get(3)?,
                 source: MemorySource::Kodade,
@@ -371,7 +371,7 @@ fn search_documents_direct(
         .documents
         .iter()
         .filter(|document| {
-            (query.kinds.is_empty() || query.kinds.contains(&document.kind.memory_kind()))
+            (query.kinds.is_empty() || query.kinds.contains(&document.memory_kind))
                 && query
                     .updated_after
                     .is_none_or(|updated_after| document.modified_at >= updated_after)
@@ -394,14 +394,23 @@ fn search_documents_direct(
     let items = matching[start..end]
         .iter()
         .map(|document| MemorySearchHit {
-            id: document.id.clone(),
+            id: document
+                .canonical_record_id
+                .as_deref()
+                .map(|record_id| {
+                    super::super::portable::portable_projected_memory_id(
+                        &query.workspace_id,
+                        record_id,
+                    )
+                })
+                .unwrap_or_else(|| document.id.clone()),
             workspace_id: query.workspace_id.clone(),
-            kind: document.kind.memory_kind(),
+            kind: document.memory_kind,
             title: document.title.clone(),
             excerpt: bounded_chars(&document.body, 240).0,
             source: MemorySource::Kodade,
             pinned: false,
-            version: 1,
+            version: document.canonical_version.unwrap_or(1),
             updated_at: document.modified_at,
             file_path: Some(document.relative_path.clone()),
             project_source: Some(ProjectKnowledgeProvenance {

@@ -400,7 +400,7 @@ fn validate_project_display_name(project_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_project_identity(bytes: &[u8], expected_project_id: &str) -> Result<()> {
+pub(super) fn validate_project_identity(bytes: &[u8], expected_project_id: &str) -> Result<()> {
     let text = std::str::from_utf8(bytes).map_err(|_| {
         MemoryError::InvalidInput("Project.md must be UTF-8 text with a readable project_id".into())
     })?;
@@ -450,7 +450,7 @@ fn validate_project_identity(bytes: &[u8], expected_project_id: &str) -> Result<
             "Project.md project_id is {actual}, but this workspace maps to {expected_project_id}"
         )));
     }
-    validate_authority_marker(text, expected_project_id)
+    validate_authority_marker(text, expected_project_id).map(|_| ())
 }
 
 fn parse_project_id_scalar(value: &str) -> Result<String> {
@@ -475,7 +475,7 @@ fn parse_project_id_scalar(value: &str) -> Result<String> {
     Ok(value.into())
 }
 
-fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<()> {
+pub(super) fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<bool> {
     let markers = text
         .lines()
         .filter(|line| line.trim_start().starts_with("<!-- kodmem-project"))
@@ -486,7 +486,7 @@ fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<()
         ));
     }
     let Some(marker) = markers.first() else {
-        return Ok(());
+        return Ok(false);
     };
     let marker = marker.trim();
     let json = marker
@@ -510,7 +510,7 @@ fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<()
             "Project.md kodmem-project authority marker does not match this project".into(),
         ));
     }
-    Ok(())
+    Ok(true)
 }
 
 fn required_artifacts(project_id: &str, project_name: &str) -> Result<Vec<RequiredArtifact>> {

@@ -11,6 +11,10 @@
 - Added a previewable, idempotent project-knowledge setup that creates only
   missing Obsidian roles, preserves existing notes, rejects stale plans and
   unsafe paths, and opens the mapped project hub in Obsidian.
+- Added Markdown-first KödMem writes for greenfield mapped projects, including
+  exact-once daily Worklog checkpoints, content-hash-protected STATE updates,
+  portable Decisions and Knowledge records, recoverable journaling, and full
+  SQLite projection rebuilds from validated canonical notes.
 
 ## 1.5.1 - 2026-08-08
 

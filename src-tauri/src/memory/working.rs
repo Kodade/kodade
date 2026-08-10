@@ -385,9 +385,11 @@ impl MemoryStore {
         &self,
         event: &ActivityEvent,
     ) -> Result<Option<Checkpoint>> {
-        if event.kind != ActivityKind::SessionExited
-            || self.working_memory_status(&event.workspace_id)?.is_none()
-        {
+        if event.kind != ActivityKind::SessionExited {
+            return Ok(None);
+        }
+        let portable = self.portable_authority(&event.workspace_id)?.is_some();
+        if !portable && self.working_memory_status(&event.workspace_id)?.is_none() {
             return Ok(None);
         }
         let subject = event
@@ -484,14 +486,24 @@ impl MemoryStore {
                 "observed Git commit must be a 40- or 64-character hexadecimal object id".into(),
             ));
         }
-        let Some(status) = self.working_memory_status(workspace_id)? else {
-            return Ok(None);
+        let portable = self.portable_authority(workspace_id)?.is_some();
+        let current_commit = if portable {
+            self.portable_observed_commit(workspace_id)?
+        } else {
+            let Some(status) = self.working_memory_status(workspace_id)? else {
+                return Ok(None);
+            };
+            status.last_commit
         };
-        if status.last_commit.as_deref() == Some(head) {
+        if current_commit.as_deref() == Some(head) {
             return Ok(None);
         }
-        if status.last_commit.is_none() {
-            self.set_working_memory_commit(workspace_id, head)?;
+        if current_commit.is_none() {
+            if portable {
+                self.set_portable_observed_commit(workspace_id, head)?;
+            } else {
+                self.set_working_memory_commit(workspace_id, head)?;
+            }
             return Ok(None);
         }
         let short = &head[..12];
@@ -509,8 +521,41 @@ impl MemoryStore {
             },
             false,
         )?;
-        self.set_working_memory_commit(workspace_id, head)?;
+        if portable {
+            self.set_portable_observed_commit(workspace_id, head)?;
+        } else {
+            self.set_working_memory_commit(workspace_id, head)?;
+        }
         Ok(Some(checkpoint))
+    }
+
+    fn portable_observed_commit(&self, workspace_id: &str) -> Result<Option<String>> {
+        self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT last_commit FROM portable_observation WHERE workspace_id = ?1",
+                    [workspace_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    fn set_portable_observed_commit(&self, workspace_id: &str, head: &str) -> Result<()> {
+        self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            connection.execute(
+                "INSERT INTO portable_observation(workspace_id, last_commit, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(workspace_id) DO UPDATE SET
+                    last_commit = excluded.last_commit,
+                    updated_at = excluded.updated_at",
+                params![workspace_id, head, now_millis()],
+            )?;
+            Ok(())
+        })
     }
 
     fn set_working_memory_commit(&self, workspace_id: &str, head: &str) -> Result<()> {

@@ -324,6 +324,7 @@ describe("KödLocal agent loop", () => {
       idempotencyKey: expect.stringMatching(
         /^agent-session-1:offload:[0-9a-f]{16}$/,
       ),
+      updateState: false,
     });
     expect(first.checkpoint.mock.calls[0][0].idempotencyKey).toBe(
       retry.checkpoint.mock.calls[0][0].idempotencyKey,
@@ -486,6 +487,7 @@ describe("KödLocal agent loop", () => {
       nextActions: ["Review the result."],
       sessionId: "agent-session-2",
       idempotencyKey: "agent-session-2:end",
+      updateState: false,
     });
   });
 });

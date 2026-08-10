@@ -81,6 +81,17 @@ impl MappedProjectsVault {
     }
 }
 
+fn portable_journal_path(project_root: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(project_root).expect("canonical project root");
+    let key = format!(
+        "{:x}",
+        Sha256::digest(canonical.to_string_lossy().as_bytes())
+    );
+    std::env::temp_dir()
+        .join("kodade-kodmem-project-locks")
+        .join(format!("{key}-.kodmem-write-journal.json"))
+}
+
 #[test]
 fn activating_working_memory_creates_readable_files_and_indexes_them() {
     let project = TempProject::new("working-memory-activation");
@@ -799,6 +810,112 @@ fn changed_git_head_creates_a_checkpoint_after_the_initial_observation() {
 }
 
 #[test]
+fn mapped_activity_and_git_fallbacks_append_once_without_clobbering_state() {
+    let fixture = MappedProjectsVault::new("mapped-portable-fallbacks", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let state = fixture.project_root().join("STATE.md");
+    let initial_hash = file_hash(&state);
+    fixture
+        .store
+        .checkpoint_with_state_hash(
+            NewCheckpoint {
+                workspace_id: fixture.workspace.id.clone(),
+                summary: "Explicit mapped state remains authoritative.".into(),
+                decisions: Vec::new(),
+                next_actions: vec!["Keep the explicit next action.".into()],
+                changed_paths: Vec::new(),
+                source: MemorySource::Agent,
+                source_client: "codex".into(),
+                session_id: Some("portable-fallback".into()),
+                idempotency_key: Some("portable-explicit".into()),
+            },
+            Some(&initial_hash),
+        )
+        .unwrap();
+    let explicit_state = std::fs::read(&state).unwrap();
+    fixture
+        .store
+        .record_activity(NewActivity {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: ActivityKind::SessionStarted,
+            source: "kodade-ui".into(),
+            session_id: Some("portable-fallback".into()),
+            relative_path: None,
+            provider: Some("codex".into()),
+            occurred_at: Some(0),
+        })
+        .unwrap();
+    let exited = fixture
+        .store
+        .record_activity(NewActivity {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: ActivityKind::SessionExited,
+            source: "kodade-ui".into(),
+            session_id: Some("portable-fallback".into()),
+            relative_path: None,
+            provider: Some("codex".into()),
+            occurred_at: Some(60_000),
+        })
+        .unwrap()
+        .unwrap();
+    let session_checkpoint = fixture
+        .store
+        .checkpoint_activity_fallback(&exited)
+        .unwrap()
+        .unwrap();
+    let session_retry = fixture
+        .store
+        .checkpoint_activity_fallback(&exited)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session_checkpoint.id, session_retry.id);
+
+    let first = "1111111111111111111111111111111111111111";
+    let second = "2222222222222222222222222222222222222222";
+    assert!(fixture
+        .store
+        .observe_working_memory_commit(&fixture.workspace.id, first)
+        .unwrap()
+        .is_none());
+    let git_checkpoint = fixture
+        .store
+        .observe_working_memory_commit(&fixture.workspace.id, second)
+        .unwrap()
+        .unwrap();
+    assert!(fixture
+        .store
+        .observe_working_memory_commit(&fixture.workspace.id, second)
+        .unwrap()
+        .is_none());
+    assert_eq!(std::fs::read(&state).unwrap(), explicit_state);
+    let worklog = walk_files(&fixture.project_root().join("Worklog"))
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<String>();
+    assert_eq!(worklog.matches("<!-- kodmem-checkpoint {").count(), 3);
+    for summary in [&session_checkpoint.summary, &git_checkpoint.summary] {
+        let page = fixture
+            .store
+            .search_checkpoints(CheckpointQuery {
+                workspace_id: fixture.workspace.id.clone(),
+                text: summary.clone(),
+                limit: 20,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(page.total, 1);
+    }
+    assert!(!fixture.checkout.join(".kodade/memory").exists());
+}
+
+#[test]
 fn committed_working_memory_resumes_from_a_fresh_git_clone() {
     let project = TempProject::new("working-memory-git-round-trip");
     let first_root = project.root().join("machine-a");
@@ -1428,7 +1545,7 @@ fn schema_version_6_fixture_backfills_activity_sequence_without_reordering_histo
     );
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
 }
 
@@ -1519,7 +1636,7 @@ fn concurrent_first_open_serializes_the_complete_migration_sequence() {
         .expect("query migrations")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect migrations");
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 }
 
 macro_rules! historical_schema_upgrade_test {
@@ -1676,7 +1793,7 @@ macro_rules! historical_schema_upgrade_test {
             drop(store);
             assert_eq!(
                 schema_versions(project.db()),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
             );
         }
     };
@@ -1713,7 +1830,81 @@ fn schema_version_10_adds_the_rebuildable_project_document_index() {
     assert_eq!(project_documents, 1);
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    );
+}
+
+#[test]
+fn schema_version_11_fixture_adds_portable_projection_columns_and_kind_backfill() {
+    let project = TempProject::new("schema-v11-portable-projection");
+    install_historical_fixture(&project, include_str!("fixtures/memory_v10.sql"));
+    let connection = rusqlite::Connection::open(project.db()).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE project_documents (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES logical_projects(id) ON DELETE CASCADE,
+                relative_path TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('project', 'state', 'worklog', 'decision', 'knowledge')),
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                modified_at INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL,
+                UNIQUE(project_id, relative_path)
+             );
+             CREATE INDEX project_documents_project_modified_idx
+                ON project_documents(project_id, modified_at DESC, relative_path);
+             CREATE VIRTUAL TABLE project_document_fts USING fts5(
+                document_id UNINDEXED, project_id UNINDEXED, title, body, tokenize = 'unicode61'
+             );
+             CREATE TRIGGER project_documents_fts_insert AFTER INSERT ON project_documents BEGIN
+                INSERT INTO project_document_fts(document_id, project_id, title, body)
+                VALUES (new.id, new.project_id, new.title, new.body);
+             END;
+             CREATE TRIGGER project_documents_fts_update AFTER UPDATE ON project_documents BEGIN
+                DELETE FROM project_document_fts WHERE document_id = old.id;
+                INSERT INTO project_document_fts(document_id, project_id, title, body)
+                VALUES (new.id, new.project_id, new.title, new.body);
+             END;
+             CREATE TRIGGER project_documents_fts_delete AFTER DELETE ON project_documents BEGIN
+                DELETE FROM project_document_fts WHERE document_id = old.id;
+             END;
+             INSERT INTO schema_migrations(version, applied_at) VALUES (11, 11);
+             INSERT INTO logical_projects(id, display_name, created_at, updated_at)
+                VALUES ('legacy-project', 'Legacy project', 1, 1);
+             INSERT INTO project_documents(
+                id, project_id, relative_path, kind, title, body, sha256, modified_at, indexed_at
+             ) VALUES (
+                'project-doc', 'legacy-project', 'Knowledge/legacy.md', 'knowledge',
+                'Legacy fact', 'legacy fact body', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1
+             );",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = MemoryStore::open(project.db()).expect("upgrade version 11 fixture");
+    drop(store);
+    let connection = rusqlite::Connection::open(project.db()).unwrap();
+    let memory_kind: String = connection
+        .query_row(
+            "SELECT memory_kind FROM project_documents WHERE id = 'project-doc'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(memory_kind, "fact");
+    let canonical_columns: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name LIKE 'canonical_%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(canonical_columns, 4);
+    assert_eq!(
+        schema_versions(project.db()),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
 }
 
@@ -3749,6 +3940,60 @@ fn mapped_project_context_is_confined_and_isolated_between_projects() {
 }
 
 #[test]
+fn portable_idempotency_is_scoped_to_each_logical_project() {
+    let app_data = TempProject::new("portable-project-idempotency");
+    let vault = TempProject::new("portable-project-idempotency-vault");
+    std::fs::create_dir(vault.root().join(".obsidian")).unwrap();
+    std::fs::create_dir(vault.root().join("10-Projects")).unwrap();
+    let store = MemoryStore::open(app_data.db()).unwrap();
+    store.register_projects_vault(vault.root()).unwrap();
+    let mut records = Vec::new();
+    for project_id in ["portable-alpha", "portable-beta"] {
+        let checkout = app_data.root().join(format!("{project_id}-checkout"));
+        std::fs::create_dir(&checkout).unwrap();
+        let workspace = store
+            .register_workspace(&checkout, project_id, None)
+            .unwrap();
+        store
+            .map_workspace_to_project(&workspace.id, None, project_id, project_id)
+            .unwrap();
+        let plan = store.preview_project_scaffold(&workspace.id).unwrap();
+        store
+            .apply_project_scaffold(&workspace.id, &plan.fingerprint)
+            .unwrap();
+        records.push(
+            store
+                .remember(NewMemory {
+                    workspace_id: workspace.id,
+                    kind: MemoryKind::Fact,
+                    title: "Same portable payload".into(),
+                    body: "The key is isolated by logical project.".into(),
+                    source: MemorySource::Agent,
+                    source_client: "memory-store-test".into(),
+                    session_id: None,
+                    pinned: false,
+                    idempotency_key: Some("same-key".into()),
+                    links: Vec::new(),
+                })
+                .unwrap(),
+        );
+    }
+    assert_ne!(records[0].id, records[1].id);
+    assert_ne!(
+        records[0].project_source.as_ref().unwrap().project_id,
+        records[1].project_source.as_ref().unwrap().project_id
+    );
+    for record in records {
+        assert!(vault
+            .root()
+            .join("10-Projects")
+            .join(&record.project_source.as_ref().unwrap().project_id)
+            .join(&record.project_source.as_ref().unwrap().relative_path)
+            .is_file());
+    }
+}
+
+#[test]
 fn read_only_store_refreshes_mapped_markdown_without_writing_the_index() {
     let app_data = TempProject::new("mapped-project-read-only");
     let vault = TempProject::new("mapped-project-read-only-vault");
@@ -3874,6 +4119,10 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
             ),
             (
                 kodade_lib::memory::ScaffoldOperationKind::CreateDirectory,
+                "10-Projects/portable-project/Knowledge"
+            ),
+            (
+                kodade_lib::memory::ScaffoldOperationKind::CreateDirectory,
                 "10-Projects/portable-project/Plans"
             ),
             (
@@ -3902,6 +4151,10 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
             ),
             (
                 kodade_lib::memory::ScaffoldOperationKind::CreateFile,
+                "10-Projects/portable-project/Knowledge/Knowledge.md"
+            ),
+            (
+                kodade_lib::memory::ScaffoldOperationKind::CreateFile,
                 "10-Projects/portable-project/Plans/Plans.md"
             ),
             (
@@ -3926,6 +4179,1230 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
             .is_none(),
         "preview must not create scaffold artifacts"
     );
+}
+
+#[test]
+fn mapped_authority_checkpoint_writes_markdown_first_and_retries_once() {
+    let fixture = MappedProjectsVault::new("mapped-checkpoint-authority", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .expect("preview scaffold");
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .expect("activate portable authority");
+    let state_path = fixture.project_root().join("STATE.md");
+    let expected_state = format!("{:x}", Sha256::digest(std::fs::read(&state_path).unwrap()));
+    let input = NewCheckpoint {
+        workspace_id: fixture.workspace.id.clone(),
+        summary: "Canonical checkpoint result".into(),
+        decisions: vec!["Keep Markdown authoritative".into()],
+        next_actions: vec!["Exercise recovery".into()],
+        changed_paths: vec!["src/main.rs".into()],
+        source: MemorySource::Agent,
+        source_client: "memory-store-test".into(),
+        session_id: Some("portable-session".into()),
+        idempotency_key: Some("portable-checkpoint-1".into()),
+    };
+
+    let created = fixture
+        .store
+        .checkpoint_with_state_hash(input.clone(), Some(&expected_state))
+        .expect("write canonical checkpoint");
+    let reopened = MemoryStore::open(fixture._app_data.db()).expect("reopen store");
+    let retried = reopened
+        .checkpoint_with_state_hash(input.clone(), Some(&expected_state))
+        .expect("retry canonical checkpoint");
+
+    assert_eq!(retried.id, created.id);
+    let worklogs = walk_files(&fixture.project_root().join("Worklog"))
+        .into_iter()
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("md"))
+        .collect::<Vec<_>>();
+    assert_eq!(worklogs.len(), 1, "worklog files: {worklogs:?}");
+    let worklog = std::fs::read_to_string(&worklogs[0]).expect("read daily worklog");
+    assert_eq!(worklog.matches("<!-- kodmem-checkpoint {").count(), 1);
+    assert!(worklog.contains("Canonical checkpoint result"));
+    assert!(std::fs::read_to_string(state_path)
+        .expect("read state")
+        .contains("Canonical checkpoint result"));
+    assert!(fixture
+        .project_root()
+        .join("Decisions")
+        .read_dir()
+        .unwrap()
+        .any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("checkpoint-")
+        }));
+    assert!(!fixture.checkout.join(".kodade/memory").exists());
+
+    let mut changed = input;
+    changed.summary = "Different payload".into();
+    let conflict = reopened
+        .checkpoint_with_state_hash(changed, None)
+        .expect_err("same project key with different payload must conflict");
+    assert!(
+        matches!(conflict, MemoryError::InvalidInput(message) if message.contains("different payload"))
+    );
+}
+
+#[test]
+fn mapped_memory_lifecycle_uses_hash_conflicts_archive_and_markdown_rebuild() {
+    let fixture = MappedProjectsVault::new("mapped-record-lifecycle", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let input = NewMemory {
+        workspace_id: fixture.workspace.id.clone(),
+        kind: MemoryKind::Fact,
+        title: "Portable fact".into(),
+        body: "Markdown owns this fact.".into(),
+        source: MemorySource::Agent,
+        source_client: "memory-store-test".into(),
+        session_id: Some("record-session".into()),
+        pinned: true,
+        idempotency_key: Some("portable-record-1".into()),
+        links: Vec::new(),
+    };
+    let created = fixture
+        .store
+        .remember(input.clone())
+        .expect("remember canonical note");
+    assert_eq!(
+        fixture.store.remember(input.clone()).unwrap().id,
+        created.id
+    );
+    let source = created
+        .project_source
+        .clone()
+        .expect("canonical provenance");
+    let note_path = fixture.project_root().join(&source.relative_path);
+    let mut human_edit = std::fs::read_to_string(&note_path).unwrap();
+    human_edit.push_str("\nHuman edit that must not be overwritten.\n");
+    std::fs::write(&note_path, &human_edit).unwrap();
+    let human_hash = format!("{:x}", Sha256::digest(human_edit.as_bytes()));
+    let revision = MemoryRevision {
+        id: created.id.clone(),
+        expected_version: created.version,
+        kind: MemoryKind::Decision,
+        title: "Portable decision".into(),
+        body: "Use the canonical project note.".into(),
+        pinned: true,
+        source_client: "memory-store-test".into(),
+        session_id: Some("record-session".into()),
+        links: Vec::new(),
+    };
+    assert!(matches!(
+        fixture
+            .store
+            .revise_with_content_hash(revision.clone(), Some(&source.sha256)),
+        Err(MemoryError::ContentConflict { .. })
+    ));
+    let revised = fixture
+        .store
+        .revise_with_content_hash(revision, Some(&human_hash))
+        .expect("revise with current human-edit hash");
+    assert_eq!(revised.version, 2);
+    assert!(revised
+        .project_source
+        .as_ref()
+        .unwrap()
+        .relative_path
+        .starts_with("Decisions/"));
+
+    let revised_source = revised.project_source.clone().unwrap();
+    let tombstone = fixture
+        .store
+        .forget_in_workspace_with_content_hash(
+            &revised.id,
+            revised.version,
+            &fixture.workspace.id,
+            Some(&revised_source.sha256),
+            "memory-store-test",
+            Some("record-session"),
+        )
+        .expect("archive record");
+    let deleted_page = fixture
+        .store
+        .deleted_memory_page(DeletedMemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    let archived = deleted_page
+        .items
+        .into_iter()
+        .next()
+        .expect("mapped tombstone page");
+    assert!(archived.deleted_at.is_some());
+    assert!(archived
+        .project_source
+        .as_ref()
+        .unwrap()
+        .relative_path
+        .contains("/Archive/"));
+    let restored = fixture
+        .store
+        .restore_with_content_hash(
+            &revised.id,
+            tombstone.version,
+            Some(&archived.project_source.as_ref().unwrap().sha256),
+            "memory-store-test",
+            Some("record-session"),
+        )
+        .expect("restore archived record");
+    assert_eq!(restored.version, 4);
+    assert_eq!(restored.deleted_at, None);
+    let reopened = MemoryStore::open(fixture._app_data.db()).unwrap();
+    let delayed_retry = reopened
+        .remember(input)
+        .expect("original remember retry remains idempotent after lifecycle");
+    assert_eq!(delayed_retry.id, restored.id);
+    assert_eq!(delayed_retry.version, restored.version);
+
+    let connection = rusqlite::Connection::open(fixture._app_data.db()).unwrap();
+    connection
+        .execute(
+            "DELETE FROM memories WHERE canonical_project_id = 'portable-project'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id)
+        .expect("rebuild SQLite from canonical Markdown");
+    let rebuilt = fixture.store.memory(&restored.id).expect("rebuilt memory");
+    assert_eq!(rebuilt.title, "Portable decision");
+    assert_eq!(rebuilt.body, "Use the canonical project note.");
+}
+
+#[test]
+fn mapped_checkpoint_recovers_every_persisted_phase_in_a_child_process() {
+    let fixture = MappedProjectsVault::new("mapped-checkpoint-recovery", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let journal = portable_journal_path(&fixture.project_root());
+    let phases = [
+        "journal",
+        "markdown-1",
+        "markdown-2",
+        "markdown-3",
+        "index",
+        "projection",
+    ];
+    for (index, phase) in phases.into_iter().enumerate() {
+        let state_hash = file_hash(&fixture.project_root().join("STATE.md"));
+        let key = format!("recover-phase-{index}");
+        let summary = format!("Recovered after {phase}");
+        run_portable_checkpoint_child(
+            fixture._app_data.db(),
+            &fixture.workspace.id,
+            &state_hash,
+            &key,
+            &summary,
+            Some(phase),
+        );
+        assert!(journal.exists(), "{phase} must retain a recovery journal");
+        let worklog_before_recovery = walk_files(&fixture.project_root().join("Worklog"))
+            .into_iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .collect::<String>();
+        if phase == "journal" {
+            assert!(!worklog_before_recovery.contains(&summary));
+        }
+        if phase == "markdown-1" {
+            assert!(worklog_before_recovery.contains(&summary));
+            let connection = rusqlite::Connection::open(fixture._app_data.db()).unwrap();
+            let projected: u32 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM checkpoints WHERE canonical_project_id = 'portable-project' AND summary = ?1",
+                    [&summary],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(projected, 0, "Markdown must precede SQLite projection");
+        }
+        run_portable_checkpoint_child(
+            fixture._app_data.db(),
+            &fixture.workspace.id,
+            &state_hash,
+            &key,
+            &summary,
+            None,
+        );
+        assert!(
+            !journal.exists(),
+            "successful recovery clears {phase} journal"
+        );
+        let worklog = walk_files(&fixture.project_root().join("Worklog"))
+            .into_iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .collect::<String>();
+        assert_eq!(
+            worklog.matches("<!-- kodmem-checkpoint {").count(),
+            index + 1,
+            "retry after {phase} must not append a duplicate entry",
+        );
+    }
+}
+
+#[test]
+fn fresh_machine_fails_closed_on_partial_checkpoint_and_rebuilds_complete_markdown() {
+    for (phase, should_rebuild) in [("markdown-1", false), ("index", true)] {
+        let fixture = MappedProjectsVault::new(
+            &format!("mapped-cross-machine-recovery-{phase}"),
+            "Portable project",
+        );
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .unwrap();
+        let state_hash = file_hash(&fixture.project_root().join("STATE.md"));
+        run_portable_checkpoint_child(
+            fixture._app_data.db(),
+            &fixture.workspace.id,
+            &state_hash,
+            &format!("cross-machine-{phase}"),
+            "Cross-machine canonical checkpoint",
+            Some(phase),
+        );
+        std::fs::remove_file(portable_journal_path(&fixture.project_root())).unwrap();
+
+        let other = TempProject::new(&format!("cross-machine-db-{phase}"));
+        let checkout = other.root().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let store = MemoryStore::open(other.db()).unwrap();
+        store.register_projects_vault(&fixture.vault_root).unwrap();
+        let workspace = store
+            .register_workspace(&checkout, "Fresh machine", None)
+            .unwrap();
+        store
+            .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+            .unwrap();
+        let context = store.context(&workspace.id);
+        if should_rebuild {
+            assert_eq!(
+                context.unwrap().latest_checkpoint.unwrap().summary,
+                "Cross-machine canonical checkpoint"
+            );
+        } else {
+            assert!(context.is_err(), "partial checkpoint must fail closed");
+        }
+    }
+}
+
+#[test]
+fn portable_checkpoint_child_process_helper() {
+    let Ok(db) = std::env::var("KODADE_PORTABLE_CHILD_DB") else {
+        return;
+    };
+    let workspace_id = std::env::var("KODADE_PORTABLE_CHILD_WORKSPACE").unwrap();
+    let state_hash = std::env::var("KODADE_PORTABLE_CHILD_STATE_HASH").unwrap();
+    let key = std::env::var("KODADE_PORTABLE_CHILD_KEY").unwrap();
+    let summary = std::env::var("KODADE_PORTABLE_CHILD_SUMMARY").unwrap();
+    let failpoint = std::env::var("KODADE_PORTABLE_CHILD_FAILPOINT").ok();
+    if let Some(phase) = failpoint.as_deref() {
+        std::env::set_var("KODADE_TEST_PORTABLE_FAIL_AFTER", phase);
+    }
+    let store = MemoryStore::open(db).expect("child opens store");
+    let result = store.checkpoint_with_state_hash(
+        NewCheckpoint {
+            workspace_id,
+            summary,
+            decisions: vec!["Durable recovery decision".into()],
+            next_actions: vec!["Resume safely".into()],
+            changed_paths: vec!["src/recovery.rs".into()],
+            source: MemorySource::Agent,
+            source_client: "portable-child".into(),
+            session_id: Some("recovery-session".into()),
+            idempotency_key: Some(key),
+        },
+        Some(&state_hash),
+    );
+    if failpoint.is_some() {
+        assert!(
+            result.is_err(),
+            "configured child failpoint must interrupt the write"
+        );
+    } else {
+        result.expect("child recovers portable checkpoint");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mapped_writes_reject_secrets_read_only_access_and_project_root_swaps_without_residue() {
+    let fixture = MappedProjectsVault::new("mapped-write-boundaries", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let before = tree_hashes(&fixture.project_root());
+    let secret = fixture.store.remember(NewMemory {
+        workspace_id: fixture.workspace.id.clone(),
+        kind: MemoryKind::Fact,
+        title: "Credential".into(),
+        body: "ghp_abcdefghijklmnopqrstuvwxyz1234567890".into(),
+        source: MemorySource::Agent,
+        source_client: "memory-store-test".into(),
+        session_id: None,
+        pinned: false,
+        idempotency_key: Some("secret-rejected".into()),
+        links: Vec::new(),
+    });
+    assert!(matches!(secret, Err(MemoryError::InvalidInput(_))));
+    assert_eq!(tree_hashes(&fixture.project_root()), before);
+
+    let read_only = MemoryStore::open_read_only(fixture._app_data.db()).unwrap();
+    let rejected = read_only.remember(NewMemory {
+        workspace_id: fixture.workspace.id.clone(),
+        kind: MemoryKind::Fact,
+        title: "Read only".into(),
+        body: "Must not create a canonical note.".into(),
+        source: MemorySource::Agent,
+        source_client: "memory-store-test".into(),
+        session_id: None,
+        pinned: false,
+        idempotency_key: Some("read-only-rejected".into()),
+        links: Vec::new(),
+    });
+    assert!(
+        matches!(rejected, Err(MemoryError::InvalidInput(message)) if message.contains("read-only"))
+    );
+    assert_eq!(tree_hashes(&fixture.project_root()), before);
+
+    let real_project = fixture.project_root().with_extension("real");
+    std::fs::rename(fixture.project_root(), &real_project).unwrap();
+    let outside = fixture._app_data.root().join("outside-project");
+    std::fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.project_root()).unwrap();
+    let swapped = fixture.store.remember(NewMemory {
+        workspace_id: fixture.workspace.id.clone(),
+        kind: MemoryKind::Fact,
+        title: "Escaped".into(),
+        body: "Must remain confined.".into(),
+        source: MemorySource::Agent,
+        source_client: "memory-store-test".into(),
+        session_id: None,
+        pinned: false,
+        idempotency_key: Some("root-swap".into()),
+        links: Vec::new(),
+    });
+    assert!(matches!(swapped, Err(MemoryError::InvalidInput(_))));
+    assert!(walk_files(&outside).is_empty());
+}
+
+#[test]
+fn mapped_links_are_portable_and_projected_ids_remain_workspace_scoped() {
+    let fixture = MappedProjectsVault::new("mapped-portable-links", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let target = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Portable link target".into(),
+            body: "Target body".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("portable-target".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let linked = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Portable linked decision".into(),
+            body: "Link survives a machine-local projection change.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: true,
+            idempotency_key: Some("portable-linked".into()),
+            links: vec![MemoryLink {
+                target_id: target.id.clone(),
+                relation: "supports".into(),
+            }],
+        })
+        .unwrap();
+
+    let checkout_b = fixture._app_data.root().join("checkout-b");
+    std::fs::create_dir(&checkout_b).unwrap();
+    let workspace_b = fixture
+        .store
+        .register_workspace(&checkout_b, "Portable B", None)
+        .unwrap();
+    fixture
+        .store
+        .map_workspace_to_project(
+            &workspace_b.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    fixture
+        .store
+        .rebuild_project_from_markdown(&workspace_b.id)
+        .unwrap();
+    let workspace_b_hit = fixture
+        .store
+        .search(MemoryQuery {
+            workspace_id: workspace_b.id.clone(),
+            text: "Portable linked decision".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(workspace_b_hit.total, 1);
+    assert_ne!(workspace_b_hit.items[0].id, linked.id);
+    assert_eq!(
+        workspace_b_hit.items[0]
+            .project_source
+            .as_ref()
+            .unwrap()
+            .relative_path,
+        linked.project_source.as_ref().unwrap().relative_path
+    );
+    let denied = fixture.store.forget_in_workspace_with_content_hash(
+        &linked.id,
+        linked.version,
+        &workspace_b.id,
+        Some(&linked.project_source.as_ref().unwrap().sha256),
+        "memory-store-test",
+        None,
+    );
+    assert!(matches!(denied, Err(MemoryError::NotFound(_))));
+
+    let other = TempProject::new("portable-links-other-db");
+    let other_checkout = other.root().join("checkout");
+    std::fs::create_dir(&other_checkout).unwrap();
+    let other_store = MemoryStore::open(other.db()).unwrap();
+    other_store
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    let other_workspace = other_store
+        .register_workspace(&other_checkout, "Other machine", None)
+        .unwrap();
+    other_store
+        .map_workspace_to_project(
+            &other_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let fresh_context = other_store.context(&other_workspace.id).unwrap();
+    assert_eq!(fresh_context.pinned_decisions.len(), 1);
+    assert_eq!(fresh_context.pinned_decisions[0].links.len(), 1);
+    assert!(fresh_context.pinned_decisions[0].project_source.is_some());
+    let target_hit = other_store
+        .search(MemoryQuery {
+            workspace_id: other_workspace.id.clone(),
+            text: "Portable link target".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    let linked_hit = other_store
+        .search(MemoryQuery {
+            workspace_id: other_workspace.id,
+            text: "Portable linked decision".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(target_hit.total, 1);
+    assert_eq!(linked_hit.total, 1);
+    let rebuilt_linked = other_store.memory(&linked_hit.items[0].id).unwrap();
+    assert_eq!(rebuilt_linked.links.len(), 1);
+    assert_eq!(rebuilt_linked.links[0].target_id, target_hit.items[0].id);
+}
+
+#[test]
+fn independent_databases_serialize_same_project_without_vault_lock_residue() {
+    let fixture = MappedProjectsVault::new("mapped-cross-db-lock", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let other = TempProject::new("mapped-cross-db-lock-other");
+    let checkout = other.root().join("checkout");
+    std::fs::create_dir(&checkout).unwrap();
+    let other_store = MemoryStore::open(other.db()).unwrap();
+    other_store
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    let other_workspace = other_store
+        .register_workspace(&checkout, "Other checkout", None)
+        .unwrap();
+    other_store
+        .map_workspace_to_project(
+            &other_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    drop(other_store);
+    let state_hash = file_hash(&fixture.project_root().join("STATE.md"));
+    let ready_first = fixture._app_data.root().join("first-lock-ready");
+    let release_first = fixture._app_data.root().join("release-first-lock");
+    let ready_second = fixture._app_data.root().join("second-lock-ready");
+    let release_second = fixture._app_data.root().join("release-second-lock");
+    std::fs::write(&release_second, "release").unwrap();
+    let mut first_command = portable_checkpoint_command(
+        fixture._app_data.db(),
+        &fixture.workspace.id,
+        &state_hash,
+        "cross-db-shared-key",
+        "One cross-database entry",
+        None,
+    );
+    first_command
+        .env("KODADE_TEST_PORTABLE_LOCK_READY", &ready_first)
+        .env("KODADE_TEST_PORTABLE_LOCK_RELEASE", &release_first);
+    let first = first_command.spawn().unwrap();
+    assert!(poll_until(Duration::from_secs(5), || ready_first.exists()));
+
+    let independent = MappedProjectsVault::new("mapped-independent-lock-root", "Independent");
+    let plan = independent
+        .store
+        .preview_project_scaffold(&independent.workspace.id)
+        .unwrap();
+    independent
+        .store
+        .apply_project_scaffold(&independent.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let independent_ready = independent._app_data.root().join("independent-ready");
+    let independent_release = independent._app_data.root().join("independent-release");
+    std::fs::write(&independent_release, "release").unwrap();
+    let mut independent_command = portable_checkpoint_command(
+        independent._app_data.db(),
+        &independent.workspace.id,
+        &file_hash(&independent.project_root().join("STATE.md")),
+        "independent-key",
+        "Independent project does not contend",
+        None,
+    );
+    independent_command
+        .env("KODADE_TEST_PORTABLE_LOCK_READY", &independent_ready)
+        .env("KODADE_TEST_PORTABLE_LOCK_RELEASE", &independent_release);
+    wait_for_child(
+        independent_command.spawn().unwrap(),
+        "independent portable project",
+        Duration::from_secs(5),
+    );
+    assert!(independent_ready.exists());
+
+    let mut second_command = portable_checkpoint_command(
+        other.db(),
+        &other_workspace.id,
+        &state_hash,
+        "cross-db-shared-key",
+        "One cross-database entry",
+        None,
+    );
+    second_command
+        .env("KODADE_TEST_PORTABLE_LOCK_READY", &ready_second)
+        .env("KODADE_TEST_PORTABLE_LOCK_RELEASE", &release_second);
+    let second = second_command.spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !ready_second.exists(),
+        "same canonical project must block before the post-lock barrier"
+    );
+    std::fs::write(&release_first, "release").unwrap();
+    wait_for_child(first, "first shared project writer", Duration::from_secs(5));
+    wait_for_child(
+        second,
+        "second shared project writer",
+        Duration::from_secs(5),
+    );
+    assert!(ready_second.exists());
+    let worklog = walk_files(&fixture.project_root().join("Worklog"))
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<String>();
+    assert_eq!(worklog.matches("<!-- kodmem-checkpoint {").count(), 1);
+    assert!(walk_files(&fixture.project_root()).iter().all(|path| {
+        !path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .starts_with(".kodmem")
+    }));
+}
+
+#[test]
+fn recovery_rejects_a_tampered_state_delete_journal_before_applying_it() {
+    let fixture = MappedProjectsVault::new("mapped-tampered-journal", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let state = fixture.project_root().join("STATE.md");
+    let state_hash = file_hash(&state);
+    run_portable_checkpoint_child(
+        fixture._app_data.db(),
+        &fixture.workspace.id,
+        &state_hash,
+        "tampered-journal",
+        "Must never delete STATE",
+        Some("journal"),
+    );
+    let journal_path = portable_journal_path(&fixture.project_root());
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    let state_operation = journal["operations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|operation| operation["relativePath"] == "STATE.md")
+        .unwrap();
+    state_operation["contents"] = serde_json::Value::Null;
+    std::fs::write(&journal_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+
+    let rejected = fixture.store.checkpoint_with_state_hash(
+        NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "Must never delete STATE".into(),
+            decisions: vec!["Durable recovery decision".into()],
+            next_actions: vec!["Resume safely".into()],
+            changed_paths: vec!["src/recovery.rs".into()],
+            source: MemorySource::Agent,
+            source_client: "portable-child".into(),
+            session_id: Some("recovery-session".into()),
+            idempotency_key: Some("tampered-journal".into()),
+        },
+        Some(&state_hash),
+    );
+    assert!(
+        matches!(rejected, Err(MemoryError::InvalidInput(message)) if message.contains("STATE"))
+    );
+    assert_eq!(file_hash(&state), state_hash);
+    assert!(
+        journal_path.exists(),
+        "rejected evidence remains recoverable for inspection"
+    );
+}
+
+#[test]
+fn recovery_rejects_safe_prose_and_unknown_field_journal_tampering() {
+    for case in ["state", "decision", "worklog", "unknown-field"] {
+        let fixture = MappedProjectsVault::new(
+            &format!("mapped-journal-byte-binding-{case}"),
+            "Portable project",
+        );
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .unwrap();
+        let state = fixture.project_root().join("STATE.md");
+        let state_hash = file_hash(&state);
+        let key = format!("journal-byte-binding-{case}");
+        run_portable_checkpoint_child(
+            fixture._app_data.db(),
+            &fixture.workspace.id,
+            &state_hash,
+            &key,
+            "Original structured checkpoint",
+            Some("journal"),
+        );
+        let journal_path = portable_journal_path(&fixture.project_root());
+        let mut journal: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+        match case {
+            "state" => {
+                let operation = journal["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|operation| operation["relativePath"] == "STATE.md")
+                    .unwrap();
+                let contents = operation["contents"].as_str().unwrap();
+                operation["contents"] = format!("{contents}\nSafe forged STATE prose.\n").into();
+            }
+            "decision" => {
+                let operation = journal["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|operation| {
+                        operation["relativePath"]
+                            .as_str()
+                            .is_some_and(|path| path.starts_with("Decisions/checkpoint-"))
+                    })
+                    .unwrap();
+                let contents = operation["contents"].as_str().unwrap();
+                operation["contents"] = format!("{contents}\nSafe forged decision prose.\n").into();
+            }
+            "worklog" => {
+                let operation = journal["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|operation| {
+                        operation["relativePath"]
+                            .as_str()
+                            .is_some_and(|path| path.starts_with("Worklog/"))
+                    })
+                    .unwrap();
+                let contents = operation["contents"].as_str().unwrap();
+                operation["contents"] =
+                    format!("Attempted prior Worklog rewrite.\n{contents}").into();
+            }
+            "unknown-field" => journal["forged"] = serde_json::json!(true),
+            _ => unreachable!(),
+        }
+        std::fs::write(&journal_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+        let rejected = fixture.store.checkpoint_with_state_hash(
+            NewCheckpoint {
+                workspace_id: fixture.workspace.id.clone(),
+                summary: "Original structured checkpoint".into(),
+                decisions: vec!["Durable recovery decision".into()],
+                next_actions: vec!["Resume safely".into()],
+                changed_paths: vec!["src/recovery.rs".into()],
+                source: MemorySource::Agent,
+                source_client: "portable-child".into(),
+                session_id: Some("recovery-session".into()),
+                idempotency_key: Some(key),
+            },
+            Some(&state_hash),
+        );
+        assert!(rejected.is_err(), "{case} tamper must fail closed");
+        assert_eq!(file_hash(&state), state_hash);
+        std::fs::remove_file(journal_path).unwrap();
+    }
+}
+
+#[test]
+fn external_secret_edit_cannot_enter_projection_audit_or_generated_residue() {
+    let fixture = MappedProjectsVault::new("mapped-external-secret", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let record = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Safe projected fact".into(),
+            body: "Safe body remains projected.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("external-secret-record".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let audit_before = fixture
+        .store
+        .audit(&fixture.workspace.id, 100)
+        .unwrap()
+        .len();
+    let note = fixture
+        .project_root()
+        .join(&record.project_source.as_ref().unwrap().relative_path);
+    let sentinel = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+    let mut text = std::fs::read_to_string(&note).unwrap();
+    let marker_line = text
+        .lines()
+        .find(|line| line.starts_with("<!-- kodmem-memory "))
+        .unwrap()
+        .to_string();
+    let mut marker: serde_json::Value = serde_json::from_str(
+        marker_line
+            .strip_prefix("<!-- kodmem-memory ")
+            .unwrap()
+            .strip_suffix(" -->")
+            .unwrap(),
+    )
+    .unwrap();
+    marker["payloadHash"] = serde_json::json!(format!("{:x}", Sha256::digest(sentinel.as_bytes())));
+    text = text.replace(
+        &marker_line,
+        &format!(
+            "<!-- kodmem-memory {} -->",
+            serde_json::to_string(&marker).unwrap()
+        ),
+    );
+    text.push_str(&format!("\n{sentinel}\n"));
+    std::fs::write(&note, text).unwrap();
+
+    let rejected = fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id);
+    assert!(
+        matches!(rejected, Err(MemoryError::InvalidInput(message)) if message.contains("credentials"))
+    );
+    assert_eq!(
+        fixture.store.memory(&record.id).unwrap().body,
+        "Safe body remains projected."
+    );
+    assert_eq!(
+        fixture
+            .store
+            .audit(&fixture.workspace.id, 100)
+            .unwrap()
+            .len(),
+        audit_before
+    );
+    for path in [
+        fixture._app_data.db(),
+        PathBuf::from(format!("{}-wal", fixture._app_data.db().display())),
+        PathBuf::from(format!("{}-shm", fixture._app_data.db().display())),
+    ] {
+        if path.exists() {
+            assert!(!String::from_utf8_lossy(&std::fs::read(path).unwrap()).contains(sentinel));
+        }
+    }
+    assert!(walk_files(&fixture.project_root()).iter().all(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        !name.contains("journal") && !name.ends_with(".tmp")
+    }));
+}
+
+#[test]
+fn canonical_rebuild_rejects_oversized_records_worklogs_and_deep_trees() {
+    for case in ["record", "worklog", "deep-tree"] {
+        let fixture = MappedProjectsVault::new(
+            &format!("mapped-bounded-canonical-{case}"),
+            "Portable project",
+        );
+        let plan = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+            .unwrap();
+        match case {
+            "record" => {
+                let record = fixture
+                    .store
+                    .remember(NewMemory {
+                        workspace_id: fixture.workspace.id.clone(),
+                        kind: MemoryKind::Fact,
+                        title: "Bounded record".into(),
+                        body: "Safe body".into(),
+                        source: MemorySource::Agent,
+                        source_client: "memory-store-test".into(),
+                        session_id: None,
+                        pinned: false,
+                        idempotency_key: Some("bounded-record".into()),
+                        links: Vec::new(),
+                    })
+                    .unwrap();
+                let path = fixture.project_root().join(
+                    &record
+                        .project_source
+                        .as_ref()
+                        .expect("canonical record provenance")
+                        .relative_path,
+                );
+                std::fs::write(path, vec![b'x'; 256 * 1024 + 1]).unwrap();
+            }
+            "worklog" => {
+                let year = fixture.project_root().join("Worklog/2026");
+                std::fs::create_dir_all(&year).unwrap();
+                std::fs::write(year.join("2026-08-10.md"), vec![b'x'; 256 * 1024 + 1]).unwrap();
+            }
+            "deep-tree" => {
+                let nested = fixture.project_root().join("Worklog/2026/nested");
+                std::fs::create_dir_all(&nested).unwrap();
+                std::fs::write(nested.join("2026-08-10.md"), "# too deep\n").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let rejected = fixture
+            .store
+            .rebuild_project_from_markdown(&fixture.workspace.id);
+        assert!(
+            rejected.is_err(),
+            "{case} must exceed canonical read bounds"
+        );
+    }
+}
+
+#[test]
+fn canonical_marker_slot_is_strict_without_hiding_prose_or_fenced_examples() {
+    let fixture = MappedProjectsVault::new("mapped-canonical-marker-slot", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let example_id = "km_11111111111111111111111111111111";
+    std::fs::write(
+        fixture
+            .project_root()
+            .join(format!("Knowledge/{example_id}.md")),
+        format!(
+            "---\ntitle: Marker example\ntype: knowledge\nstatus: approved\nproject_id: portable-project\n---\n\nOrdinary marker-example-prose text.\n\n```markdown\n<!-- kodmem-memory {{\"schema\":1,\"recordId\":\"{example_id}\",\"projectId\":\"portable-project\",\"kind\":\"fact\",\"source\":\"agent\",\"sourceClient\":\"docs\",\"sessionId\":null,\"pinned\":false,\"version\":1,\"idempotencyKeyHash\":null,\"payloadHash\":\"{}\",\"createdAt\":1,\"updatedAt\":1,\"deletedAt\":null,\"links\":[]}} -->\n```\n",
+            "a".repeat(64)
+        ),
+    )
+    .unwrap();
+    let page = fixture
+        .store
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "marker-example-prose".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert!(page.items[0].id.starts_with("project:"));
+
+    std::fs::write(
+        fixture.project_root().join("Knowledge/malformed.md"),
+        "---\ntitle: Malformed\ntype: knowledge\nstatus: approved\nproject_id: portable-project\n---\n<!-- kodmem-memory malformed -->\n\n# Malformed\n",
+    )
+    .unwrap();
+    assert!(fixture.store.context(&fixture.workspace.id).is_err());
+}
+
+#[test]
+fn canonical_record_marker_rejects_unknown_fields_during_rebuild() {
+    let fixture = MappedProjectsVault::new("mapped-marker-unknown-field", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let record = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Strict marker".into(),
+            body: "Strict marker body".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("strict-marker".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    let path = fixture
+        .project_root()
+        .join(&record.project_source.as_ref().unwrap().relative_path);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let marker = text
+        .lines()
+        .find(|line| line.starts_with("<!-- kodmem-memory "))
+        .unwrap();
+    let forged = marker.replacen(" -->", ",\"unknown\":true} -->", 1);
+    let forged = forged.replacen("},\"unknown\"", ",\"unknown\"", 1);
+    std::fs::write(path, text.replacen(marker, &forged, 1)).unwrap();
+    assert!(fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id)
+        .is_err());
+}
+
+#[test]
+fn worklog_prose_and_fenced_marker_examples_are_not_canonical_checkpoints() {
+    let fixture = MappedProjectsVault::new("mapped-worklog-marker-example", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    let year = fixture.project_root().join("Worklog/2026");
+    std::fs::create_dir_all(&year).unwrap();
+    std::fs::write(
+        year.join("2026-08-10.md"),
+        format!(
+            "---\ntitle: Marker documentation\ntype: worklog\ndate: 2026-08-10\n---\n\n# Marker documentation\n\nOrdinary worklog-marker-example prose mentions <!-- kodmem-checkpoint here.\n\n```markdown\n<!-- kodmem-checkpoint {{\"schema\":1,\"checkpointId\":\"km_11111111111111111111111111111111\",\"projectId\":\"portable-project\",\"source\":\"agent\",\"sourceClient\":\"docs\",\"sessionId\":null,\"idempotencyKeyHash\":null,\"payloadHash\":\"{}\",\"createdAt\":1,\"updatesState\":false,\"summary\":\"example\",\"decisions\":[],\"nextActions\":[],\"changedPaths\":[]}} -->\n## Example only\n\nexample\n<!-- /kodmem-checkpoint km_11111111111111111111111111111111 -->\n```\n",
+            "a".repeat(64)
+        ),
+    )
+    .unwrap();
+    fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id)
+        .unwrap();
+    assert!(fixture
+        .store
+        .context(&fixture.workspace.id)
+        .unwrap()
+        .latest_checkpoint
+        .is_none());
+    let page = fixture
+        .store
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "worklog-marker-example".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(page.total, 1);
+}
+
+#[test]
+fn expired_portable_archive_cannot_restore_or_reappear_in_rebuild() {
+    let fixture = MappedProjectsVault::new("mapped-expired-archive", "Portable project");
+    let plan = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &plan.fingerprint)
+        .unwrap();
+    fixture
+        .store
+        .set_retention(
+            &fixture.workspace.id,
+            RetentionSettings {
+                capture_paused: false,
+                activity_days: 30,
+                audit_days: 30,
+                tombstone_days: 1,
+            },
+            test_provenance(),
+        )
+        .unwrap();
+    let created = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Expiring portable fact".into(),
+            body: "Archive retention applies.".into(),
+            source: MemorySource::Agent,
+            source_client: "memory-store-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("expiring-portable".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    fixture
+        .store
+        .forget_in_workspace_with_content_hash(
+            &created.id,
+            1,
+            &fixture.workspace.id,
+            Some(&created.project_source.as_ref().unwrap().sha256),
+            "memory-store-test",
+            None,
+        )
+        .unwrap();
+    let archived = fixture.store.memory(&created.id).unwrap();
+    let archive_path = fixture
+        .project_root()
+        .join(&archived.project_source.as_ref().unwrap().relative_path);
+    let text = std::fs::read_to_string(&archive_path).unwrap();
+    let text = text.replace(
+        &format!("\"deletedAt\":{}", archived.deleted_at.unwrap()),
+        "\"deletedAt\":0",
+    );
+    std::fs::write(&archive_path, &text).unwrap();
+    let current_hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+    let restore = fixture.store.restore_with_content_hash(
+        &created.id,
+        archived.version,
+        Some(&current_hash),
+        "memory-store-test",
+        None,
+    );
+    assert!(
+        matches!(restore, Err(MemoryError::InvalidInput(message)) if message.contains("within 1 days"))
+    );
+    fixture
+        .store
+        .rebuild_project_from_markdown(&fixture.workspace.id)
+        .unwrap();
+    assert!(matches!(
+        fixture.store.memory(&created.id),
+        Err(MemoryError::NotFound(_))
+    ));
 }
 
 #[test]
@@ -4784,6 +6261,51 @@ fn spawn_memory_store_child(
     command.spawn().expect("spawn memory_store test child")
 }
 
+fn run_portable_checkpoint_child(
+    db: PathBuf,
+    workspace_id: &str,
+    state_hash: &str,
+    key: &str,
+    summary: &str,
+    failpoint: Option<&str>,
+) {
+    let status = portable_checkpoint_command(db, workspace_id, state_hash, key, summary, failpoint)
+        .status()
+        .expect("run portable checkpoint child");
+    assert!(
+        status.success(),
+        "portable checkpoint child exited with {status}"
+    );
+}
+
+fn portable_checkpoint_command(
+    db: PathBuf,
+    workspace_id: &str,
+    state_hash: &str,
+    key: &str,
+    summary: &str,
+    failpoint: Option<&str>,
+) -> Command {
+    let mut command = Command::new(std::env::current_exe().expect("memory_store test executable"));
+    command
+        .arg("--exact")
+        .arg("portable_checkpoint_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_PORTABLE_CHILD_DB", db)
+        .env("KODADE_PORTABLE_CHILD_WORKSPACE", workspace_id)
+        .env("KODADE_PORTABLE_CHILD_STATE_HASH", state_hash)
+        .env("KODADE_PORTABLE_CHILD_KEY", key)
+        .env("KODADE_PORTABLE_CHILD_SUMMARY", summary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    if let Some(failpoint) = failpoint {
+        command.env("KODADE_PORTABLE_CHILD_FAILPOINT", failpoint);
+    }
+    command
+}
+
 fn wait_for_child(mut child: Child, label: &str, timeout: Duration) {
     let mut status = None;
     if !poll_until(timeout, || {
@@ -4917,6 +6439,44 @@ fn schema_versions(path: PathBuf) -> Vec<u32> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect schema versions");
     versions
+}
+
+fn walk_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return files;
+    };
+    for entry in entries {
+        let entry = entry.expect("read directory entry");
+        if entry.file_type().expect("read entry type").is_dir() {
+            files.extend(walk_files(&entry.path()));
+        } else {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    files
+}
+
+fn tree_hashes(root: &Path) -> Vec<(String, String)> {
+    walk_files(root)
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            (relative, file_hash(&path))
+        })
+        .collect()
+}
+
+fn file_hash(path: &Path) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(path).expect("read hash input"))
+    )
 }
 
 impl Drop for TempProject {
