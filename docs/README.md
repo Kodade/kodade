@@ -72,3 +72,24 @@ restored within the configured tombstone retention window.
 After `Project.md` exists, **Open in Obsidian** uses the note's absolute path in
 an `obsidian://` deep link. Obsidian can therefore select the correct registered
 vault even when two vault folders share the same name.
+
+### Agent onboarding
+
+The Memory pane's **Connect agents** setup prepares Claude Code and Codex in one
+reviewable transaction. It installs the versioned `kodmem-project` workflow for
+the current project (or reuses an exact externally managed copy), adds bounded
+managed blocks to `AGENTS.md` and `CLAUDE.md`, and registers the bundled KödMCP
+helper in each agent's machine-local configuration. Existing config entries and
+instruction text remain untouched.
+
+The user chooses read-only or read-write access before reviewing the batch. An
+apply is complete only after both agent CLIs discover the connection and a fresh
+stdio session initializes, advertises the expected mode-specific tools, and
+returns context for the selected logical workspace. Any apply or health failure
+restores prior files in reverse order; removal reverses the same owned artifacts
+without changing an externally managed skill.
+
+Provider-facing context omits machine-local workspace, working-memory, and vault
+paths. The project skill directs agents to refresh context, search before asking
+for prior facts, keep durable memories concise, and use the current `STATE`
+source hash as `expectedStateHash` for state-changing checkpoints.

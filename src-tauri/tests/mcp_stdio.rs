@@ -343,10 +343,8 @@ fn stdio_drives_the_registered_workspace_memory_workflow() {
 
     let context = process.call_tool("get_context", json!({ "workspaceRoot": root }));
     assert_eq!(context["result"]["isError"], false);
-    assert_eq!(
-        context["result"]["structuredContent"]["workspace"]["canonicalRoot"],
-        root.as_ref()
-    );
+    assert!(context["result"]["structuredContent"]["workspace"]["canonicalRoot"].is_null());
+    assert!(!context.to_string().contains(root.as_ref()));
     assert!(
         context["result"]["structuredContent"]["projection"].is_null()
             || context["result"]["structuredContent"]["projection"]["truncated"] == false,
@@ -365,7 +363,10 @@ fn stdio_drives_the_registered_workspace_memory_workflow() {
     assert!(missing["result"]["structuredContent"]["message"]
         .as_str()
         .expect("workspace error message")
-        .contains("workspace is not registered in Kodade"));
+        .contains("workspace is not registered"));
+    assert!(!missing
+        .to_string()
+        .contains(&unregistered.to_string_lossy().to_string()));
 
     let remember_args = json!({
         "workspaceRoot": root,
@@ -1213,6 +1214,10 @@ fn stdio_context_search_and_checkpoint_round_trip_project_working_files() {
             .expect("working state")
             .contains("orbital renderer")
     );
+    assert!(context["result"]["structuredContent"]["workingMemory"]["directory"].is_null());
+    assert!(!context
+        .to_string()
+        .contains(&workspace_root.to_string_lossy().to_string()));
     let search = process.call_tool(
         "search_memories",
         json!({ "workspaceRoot": root, "query": "orbital renderer" }),

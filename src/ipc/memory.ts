@@ -13,6 +13,7 @@ import {
   type LegacyMigrationPlan,
   type LegacyMigrationRollback,
   type MemoryMcpBinaryPath,
+  type MemoryMcpHealth,
   type MemoryRecord,
   type MemorySearchHit,
   type MemoryWorkspace,
@@ -157,4 +158,6 @@ export const tauriMemory: MemoryIpc = {
     invoke<ActivityEvent | null>(CMD.memoryRecordActivity, { input }),
   databasePath: () => invoke<string>(CMD.memoryDatabasePath),
   mcpBinaryPath: () => invoke<MemoryMcpBinaryPath>(CMD.memoryMcpBinaryPath),
+  mcpHealth: (workspaceId, client, readOnly) =>
+    invoke<MemoryMcpHealth>(CMD.memoryMcpHealth, { workspaceId, client, readOnly }),
 };

@@ -4,7 +4,7 @@
 // config we can't fully parse aborts the merge before any write.
 
 import { describe, expect, it } from "vitest";
-import { mergeMcpServer, parseByFormat } from "./merge";
+import { mergeMcpServer, parseByFormat, removeMcpServer } from "./merge";
 
 describe("mergeMcpServer — codex config.toml (append-only, format-preserving)", () => {
   // A config.toml "full of third-party servers" with comments and blank lines —
@@ -350,5 +350,91 @@ describe("mergeMcpServer — refusals (the safety gate)", () => {
     expect(() =>
       mergeMcpServer(before, "toml", "mcp_servers", { name: "svc", config: { command: "x" } }),
     ).toThrow(/inline TOML table/);
+  });
+});
+
+describe("managed MCP removal and nested Claude config", () => {
+  const spec = {
+    name: "kodade-mem",
+    config: {
+      command: "/Applications/Kodade/kodade-mcp",
+      args: ["--workspace", "/projects/acme.with-dots", "--client", "claude"],
+    },
+  };
+
+  it("edits only the selected Claude workspace inside ~/.claude.json", () => {
+    const before = JSON.stringify({
+      theme: "dark",
+      projects: {
+        "/projects/neighbor": { mcpServers: { github: { command: "gh-mcp" } } },
+        "/projects/acme.with-dots": { permissions: { allow: ["Read"] } },
+      },
+    }, null, 2);
+    const keyPath = ["projects", "/projects/acme.with-dots", "mcpServers"] as const;
+    const merged = mergeMcpServer(before, "json", keyPath, spec);
+    const parsed = parseByFormat(merged.after, "json") as Record<string, any>;
+
+    expect(merged.touchedKey).toBe("projects.<workspace>.mcpServers.kodade-mem");
+    expect(parsed.theme).toBe("dark");
+    expect(parsed.projects["/projects/neighbor"]).toEqual({
+      mcpServers: { github: { command: "gh-mcp" } },
+    });
+    expect(parsed.projects["/projects/acme.with-dots"].permissions).toEqual({ allow: ["Read"] });
+    expect(parsed.projects["/projects/acme.with-dots"].mcpServers[spec.name]).toEqual(spec.config);
+  });
+
+  it("removes only the exact nested managed entry", () => {
+    const keyPath = ["projects", "/projects/acme.with-dots", "mcpServers"] as const;
+    const before = JSON.stringify({
+      projects: {
+        "/projects/acme.with-dots": {
+          mcpServers: { [spec.name]: spec.config, github: { command: "gh-mcp" } },
+        },
+      },
+      numStartups: 8,
+    }, null, 2);
+    const removed = removeMcpServer(before, "json", keyPath, spec);
+    const parsed = parseByFormat(removed.after, "json") as Record<string, any>;
+
+    expect(removed.operation).toBe("remove");
+    expect(parsed.numStartups).toBe(8);
+    expect(parsed.projects["/projects/acme.with-dots"].mcpServers).toEqual({
+      github: { command: "gh-mcp" },
+    });
+  });
+
+  it("preserves neighboring TOML tables and CRLF while removing the managed block", () => {
+    const before = [
+      'model = "gpt-5.6"',
+      "",
+      "[mcp_servers.kodade-mem-workspace]",
+      'command = "/Applications/Kodade/kodade-mcp"',
+      'args = [ "--workspace", "/projects/acme", "--client", "codex" ]',
+      "",
+      "[mcp_servers.github]",
+      'command = "gh-mcp"',
+      "",
+    ].join("\r\n");
+    const codexSpec = {
+      name: "kodade-mem-workspace",
+      config: {
+        command: "/Applications/Kodade/kodade-mcp",
+        args: ["--workspace", "/projects/acme", "--client", "codex"],
+      },
+    };
+    const removed = removeMcpServer(before, "toml", "mcp_servers", codexSpec);
+
+    expect(removed.after).not.toContain("kodade-mem-workspace");
+    expect(removed.after).toContain("[mcp_servers.github]\r\n");
+    expect(removed.after).not.toMatch(/[^\r]\n/);
+  });
+
+  it("refuses removal when a user changed the managed entry", () => {
+    const before = JSON.stringify({
+      mcpServers: { [spec.name]: { ...spec.config, args: ["--different"] } },
+    });
+    expect(() => removeMcpServer(before, "json", "mcpServers", spec)).toThrow(
+      /not the expected Ködade entry/,
+    );
   });
 });

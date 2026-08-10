@@ -19,11 +19,10 @@ import {
 } from "../ipc/transport";
 import {
   buildMemoryMcpSetup,
-  claudeMcpSnippet,
-  codexMcpSnippet,
   memoryMcpConfigMatches,
   type MemoryMcpClient,
 } from "../memory/mcp-config";
+import { buildAgentOnboardingPlan } from "../memory/agent-onboarding";
 import { KODMEM_LOG_WORK_SKILL } from "../memory/log-work-skill";
 import {
   buildDelegateMcpSetup,
@@ -561,6 +560,13 @@ type ConnectionStatus =
   | "connected-readonly"
   | "not-connected";
 
+function redactOnboardingError(detail: string, localPaths: readonly (string | null)[]): string {
+  return localPaths.reduce<string>(
+    (message, path) => path ? message.replaceAll(path, "<local-path>") : message,
+    detail,
+  );
+}
+
 const MCP_CLIENTS: { id: MemoryMcpClient; label: string; scope: "global" | "project"; path: string }[] = [
   { id: "claude", label: "Claude Code", scope: "project", path: ".mcp.json" },
   { id: "codex", label: "Codex", scope: "global", path: "~/.codex/config.toml" },
@@ -587,6 +593,7 @@ function ConnectAgentsSection({
   const [binary, setBinary] = useState<BinaryStatus>({ kind: "loading" });
   const [delegateBundle, setDelegateBundle] = useState<BinaryStatus>({ kind: "loading" });
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [configHome, setConfigHome] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [connections, setConnections] = useState<
     Record<MemoryMcpClient, ConnectionStatus>
@@ -687,14 +694,22 @@ function ConnectAgentsSection({
   const refreshConnections = async () => {
     if (setup.state !== "ready") return;
     setConnections({ claude: "checking", codex: "checking" });
+    const env = await configIpc.env();
+    setConfigHome(env.home);
     const checked = await Promise.all(
       MCP_CLIENTS.map(async (client) => {
         try {
-          const targets = await harnessStore
-            .getState()
-            .listMcpTargets(client.scope, workspace.canonicalRoot);
-          const target = targets.find((candidate) => candidate.cli === client.id);
-          if (!target) return [client.id, "not-connected"] as const;
+          const target = client.id === "claude"
+            ? {
+                path: nativeJoin(env.home, ".claude.json"),
+                format: "json" as const,
+                keyPath: ["projects", workspace.canonicalRoot, "mcpServers"] as const,
+              }
+            : {
+                path: nativeJoin(nativeJoin(env.home, ".codex"), "config.toml"),
+                format: "toml" as const,
+                keyPath: "mcp_servers" as const,
+              };
           const read = await configIpc.read(
             target.path,
             workspace.canonicalRoot,
@@ -718,14 +733,12 @@ function ConnectAgentsSection({
             target.keyPath,
             readOnlySetup.spec(client.id),
           );
-          return [
-            client.id,
-            writable
-              ? "connected-readwrite"
-              : connectedReadOnly
-                ? "connected-readonly"
-                : "not-connected",
-          ] as const;
+          const detectedReadOnly = writable ? false : connectedReadOnly ? true : null;
+          if (detectedReadOnly === null) return [client.id, "not-connected"] as const;
+          const health = await memoryIpc.mcpHealth(workspace.id, client.id, detectedReadOnly);
+          return [client.id, health.ok
+            ? detectedReadOnly ? "connected-readonly" : "connected-readwrite"
+            : "not-connected"] as const;
         } catch {
           return [client.id, "not-connected"] as const;
         }
@@ -766,30 +779,55 @@ function ConnectAgentsSection({
   // requested through the remote memory transport.
   if (!nativeMcpSetup) return null;
 
-  const addToConfig = async (client: MemoryMcpClient) => {
-    if (setup.state !== "ready" || busy) return;
+  const prepareOnboarding = async (action: "connect" | "remove") => {
+    if (setup.state !== "ready" || binary.kind !== "ready" || busy) return;
+    const helperPath = binary.path;
+    let localHome = configHome;
     setSetupError(null);
-    const clientConfig = MCP_CLIENTS.find((candidate) => candidate.id === client)!;
     try {
-      const target = (await harnessStore
-        .getState()
-        .listMcpTargets(clientConfig.scope, workspace.canonicalRoot))
-        .find((candidate) => candidate.cli === client);
-      if (!target) {
-        setSetupError(`Kodade does not know a ${clientConfig.label} MCP config path yet.`);
+      const env = await configIpc.env();
+      localHome = env.home;
+      setConfigHome(env.home);
+      const plan = await buildAgentOnboardingPlan(configIpc, {
+        workspaceId: workspace.id,
+        workspaceRoot: workspace.canonicalRoot,
+        binaryPath: helperPath,
+        home: env.home,
+        platform: env.platform,
+        appDataRoaming: env.appDataRoaming,
+        appDataLocal: env.appDataLocal,
+        access: readOnly ? "read-only" : "read-write",
+      }, action);
+      if (plan.requests.length === 0) {
+        await refreshConnections();
         return;
       }
       setReviewing(true);
-      await harnessStore.getState().prepareAddMcpServer(
-        target,
-        setup.spec(client),
-        workspace.canonicalRoot,
+      await harnessStore.getState().prepareBatch(
+        plan.requests,
+        action === "connect" ? "Connect Claude Code and Codex to KödMem" : "Remove KödMem agent onboarding",
         pendingOwner,
+        action === "connect"
+          ? async () => {
+              const checked = await Promise.all(MCP_CLIENTS.map((client) =>
+                memoryIpc.mcpHealth(workspace.id, client.id, readOnly)
+              ));
+              const failed = checked.find((health) => !health.ok);
+              return failed
+                ? { ok: false as const, reason: failed.message }
+                : { ok: true as const };
+            }
+          : undefined,
       );
       if (!harnessStore.getState().pendingChange) setReviewing(false);
     } catch (error) {
       setReviewing(false);
-      setSetupError(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      setSetupError(redactOnboardingError(detail, [
+        workspace.canonicalRoot,
+        helperPath,
+        localHome,
+      ]));
     }
   };
 
@@ -870,22 +908,38 @@ function ConnectAgentsSection({
             />
             read-only access
           </label>
-          <div className="mt-3 grid gap-3">
-            {MCP_CLIENTS.map((client) => {
-              const snippet = client.id === "claude"
-                ? claudeMcpSnippet(setup)
-                : codexMcpSnippet(setup);
-              return (
-                <ConfigSnippet
-                  key={client.id}
-                  client={client}
-                  snippet={snippet}
-                  busy={busy}
-                  status={connections[client.id]}
-                  onAdd={() => void addToConfig(client.id)}
-                />
-              );
-            })}
+          <div className="mt-3 rounded border border-border bg-bg/50 p-3">
+            <div className="grid gap-2 text-[11px]">
+              {MCP_CLIENTS.map((client) => (
+                <div className="flex items-center gap-2" key={client.id}>
+                  <span className="flex-1 font-medium">{client.label}</span>
+                  <span className={connections[client.id].startsWith("connected") ? "text-accent" : "text-text-dim"}>
+                    {connections[client.id] === "checking"
+                      ? "checking actual context…"
+                      : connections[client.id] === "connected-readonly"
+                        ? "healthy · read-only"
+                        : connections[client.id] === "connected-readwrite"
+                          ? "healthy · read-write"
+                          : "not connected"}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[10px] leading-4 text-text-dim">
+              One preview installs the project workflow, manages bounded instruction
+              blocks, and configures both clients. Health verifies client discovery,
+              KödMCP tools, and context for this project.
+            </p>
+            <div className="mt-3 flex justify-end gap-2">
+              {Object.values(connections).some((status) => status.startsWith("connected")) && (
+                <button className="memory-action" disabled={busy} type="button" onClick={() => void prepareOnboarding("remove")}>
+                  disconnect
+                </button>
+              )}
+              <button className="memory-action border-accent text-accent" disabled={busy} type="button" onClick={() => void prepareOnboarding("connect")}>
+                review setup
+              </button>
+            </div>
           </div>
           {RELEASE_MANIFEST.features.local && (
             <details className="mt-4 border-t border-border pt-3">
@@ -947,7 +1001,14 @@ function ConnectAgentsSection({
           )}
           {(setupError || (reviewing ? harness.mutationError : null)) && !harness.pendingChange && (
             <p role="alert" className="mt-2 text-[11px] text-[var(--kd-error)]">
-              {setupError ?? harness.mutationError}
+              {redactOnboardingError(
+                setupError ?? harness.mutationError ?? "KödMem onboarding failed",
+                [
+                  workspace.canonicalRoot,
+                  binary.kind === "ready" ? binary.path : null,
+                  configHome,
+                ],
+              )}
             </p>
           )}
         </>

@@ -1,6 +1,6 @@
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import type { McpFormat, McpServerSpec } from "../harness/merge";
+import type { McpFormat, McpKeyPath, McpServerSpec } from "../harness/merge";
 
 export type MemoryMcpClient = "claude" | "codex";
 
@@ -40,7 +40,7 @@ export function buildMemoryMcpSetup({
         // Claude's config is per-project, but Codex has one global config. Keep
         // distinct workspace entries there so its safe merge never confuses two
         // KödMem roots for the same user.
-        name: client === "codex" ? `kodade-mem-${workspaceId.slice(0, 8)}` : "kodade-mem",
+        name: client === "codex" ? `kodade-mem-${workspaceId}` : "kodade-mem",
         config: {
           command: binaryPath,
           args: [
@@ -69,7 +69,7 @@ export function codexMcpSnippet(setup: ReadyMemoryMcpSetup): string {
 export function memoryMcpConfigMatches(
   content: string,
   format: McpFormat,
-  keyPath: string,
+  keyPath: McpKeyPath,
   expected: McpServerSpec,
 ): boolean {
   try {
@@ -84,8 +84,7 @@ export function memoryMcpConfigMatches(
       });
       if (errors.length > 0) return false;
     }
-    const serverMap = keyPath
-      .split(".")
+    const serverMap = (typeof keyPath === "string" ? keyPath.split(".") : [...keyPath])
       .reduce<Record<string, unknown> | null>((current, segment) => {
         const next = current?.[segment];
         return next !== null &&

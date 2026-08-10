@@ -24,6 +24,10 @@
   Markdown. Portable cutover receipts are committed last, legacy sources are
   retained but deactivated, and interrupted or cross-machine migrations fail
   closed until their durable recovery state is resolved.
+- Added one previewed, reversible agent-onboarding transaction for Claude Code
+  and Codex: project-scoped KödMCP discovery, exact managed instruction blocks,
+  the versioned `kodmem-project` workflow, read-only or writable access, and
+  real CLI plus stdio context health verification.
 
 ## 1.5.1 - 2026-08-08
 

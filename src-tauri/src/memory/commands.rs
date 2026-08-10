@@ -8,6 +8,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopPlatform};
 
+use super::onboarding::{failed_mcp_health, run_mcp_health, McpHealth};
+
 use super::{
     ActivityEvent, AuditEntry, AuditQuery, Checkpoint, CheckpointQuery, CheckpointSearchHit,
     DeletedMemoryQuery, ExportBundle, LegacyMigrationApply, LegacyMigrationPlan,
@@ -31,10 +33,7 @@ pub fn memory_mcp_binary_path(app: AppHandle) -> Result<McpBinaryPath, String> {
         if path.is_file() {
             return Ok(existing_mcp_binary(path));
         }
-        return Err(format!(
-            "KODADE_MCP_PATH does not point to a file: {}",
-            path.display()
-        ));
+        return Err("KODADE_MCP_PATH does not point to a KödMCP helper file".into());
     }
     let resource_dir = app.path().resource_dir().ok();
     let public_bundled = resource_dir
@@ -76,13 +75,91 @@ pub fn memory_mcp_binary_path(app: AppHandle) -> Result<McpBinaryPath, String> {
         return Ok(existing_mcp_binary(debug.clone()));
     }
 
-    let debug_hint = debug
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "<workspace>/target/debug/kodade-mcp".into());
-    Err(format!(
-        "kodade-mcp was not found in the bundled resource, at {}, or at {debug_hint}; run `cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --bin kodade-mcp`",
-        sibling.display()
-    ))
+    Err("kodade-mcp was not found in the bundled resources; build the KödMCP helper for development".into())
+}
+
+#[tauri::command]
+pub async fn memory_mcp_health(
+    app: AppHandle,
+    workspace_id: String,
+    client: String,
+    read_only: bool,
+) -> Result<McpHealth, String> {
+    if client != "claude" && client != "codex" {
+        return Ok(failed_mcp_health(
+            &client,
+            read_only,
+            &workspace_id,
+            "request",
+            "unsupported agent client",
+        ));
+    }
+    let (workspace, expected_project_id) = match run_memory(app.clone(), {
+        let workspace_id = workspace_id.clone();
+        move |store| {
+            let workspace = store.workspace(&workspace_id)?;
+            let mapping = store.workspace_project_mapping(&workspace_id)?;
+            Ok((workspace, mapping.map(|mapping| mapping.project_id)))
+        }
+    })
+    .await
+    {
+        Ok(workspace) => workspace,
+        Err(_) => {
+            return Ok(failed_mcp_health(
+                &client,
+                read_only,
+                &workspace_id,
+                "workspace",
+                "the workspace is not registered",
+            ))
+        }
+    };
+    let Some(expected_project_id) = expected_project_id else {
+        return Ok(failed_mcp_health(
+            &client,
+            read_only,
+            &workspace_id,
+            "mapping",
+            "map this workspace to a projects-vault project first",
+        ));
+    };
+    let binary = match memory_mcp_binary_path(app.clone()) {
+        Ok(result) => match result.path {
+            Some(path) => PathBuf::from(path),
+            None => {
+                return Ok(failed_mcp_health(
+                    &client,
+                    read_only,
+                    &workspace_id,
+                    "binary",
+                    "the bundled KödMCP helper is unavailable",
+                ))
+            }
+        },
+        Err(_) => {
+            return Ok(failed_mcp_health(
+                &client,
+                read_only,
+                &workspace_id,
+                "binary",
+                "the bundled KödMCP helper is unavailable",
+            ))
+        }
+    };
+    let db = database_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_mcp_health(
+            binary,
+            db,
+            workspace,
+            expected_project_id,
+            client,
+            read_only,
+        )
+    })
+    .await
+    .map_err(|_| "KödMCP health worker failed".to_string())
 }
 
 fn existing_mcp_binary(path: PathBuf) -> McpBinaryPath {

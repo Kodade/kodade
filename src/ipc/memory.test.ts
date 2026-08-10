@@ -260,6 +260,18 @@ describe("typed memory IPC", () => {
     expect(invoke).toHaveBeenCalledWith(CMD.memoryMcpBinaryPath);
   });
 
+  it("runs KödMCP health for the selected workspace and access mode", async () => {
+    invoke.mockResolvedValue({ ok: true, client: "codex", access: "read-only" });
+
+    await tauriMemory.mcpHealth("ws_checkout", "codex", true);
+
+    expect(invoke).toHaveBeenCalledWith(CMD.memoryMcpHealth, {
+      workspaceId: "ws_checkout",
+      client: "codex",
+      readOnly: true,
+    });
+  });
+
   it("returns the real KödMem database path without a payload", async () => {
     invoke.mockResolvedValue(
       "/Users/Keith/Library/Application Support/com.kodade.desktop/kodade-memory.sqlite3",

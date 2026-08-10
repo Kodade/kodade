@@ -151,6 +151,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex
 }
 
+pub fn remove_config(target: &Path, expected_hash: &str) -> Result<(), String> {
+    let current =
+        std::fs::read(target).map_err(|error| format!("read config for removal: {error}"))?;
+    let actual = sha256_hex(&current);
+    if actual != expected_hash {
+        return Err("config changed since apply; refusing rollback removal".into());
+    }
+    assert_writable(target)?;
+    std::fs::remove_file(target).map_err(|error| format!("remove config: {error}"))
+}
+
 // Atomically write `bytes` to `target`: a uniquely-named exclusive temp in the
 // target's directory, fsync'd, then renamed over the target. Mirrors
 // fs::write_file's durability, at the byte level so backups are exact copies.
@@ -511,6 +522,19 @@ pub fn snapshot_dir(path: &Path) -> Result<ConfigDirSnapshot, String> {
     })
 }
 
+pub fn snapshot_external_skill(path: &Path) -> Result<Vec<ConfigFileHash>, String> {
+    let root = std::fs::canonicalize(path)
+        .map_err(|_| "external skill target is unavailable".to_string())?;
+    if !root.is_dir() {
+        return Err("external skill target is not a directory".to_string());
+    }
+    let mut files = Vec::new();
+    walk_hashed(&root, &root, &mut files)
+        .map_err(|_| "external skill target could not be verified".to_string())?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
 fn sorted_hashes(files: &[ConfigFileHash]) -> Vec<ConfigFileHash> {
     let mut sorted = files.to_vec();
     sorted.sort_by(|left, right| left.path.cmp(&right.path));
@@ -826,6 +850,45 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn remove_config_requires_the_exact_current_hash() {
+        let dir = temp_dir("remove-exact-config");
+        let target = dir.join("config.toml");
+        std::fs::write(&target, "managed bytes").unwrap();
+
+        let error = remove_config(&target, &sha256_hex(b"older bytes"))
+            .expect_err("drift must refuse rollback removal");
+        assert!(error.contains("changed since apply"));
+        assert!(target.exists());
+
+        remove_config(&target, &sha256_hex(b"managed bytes")).unwrap();
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_skill_snapshot_follows_only_the_root_link() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("external-skill-snapshot");
+        let source = dir.join("dotfiles-skill");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("SKILL.md"), "skill contract").unwrap();
+        let link = dir.join("kodmem-project");
+        symlink(&source, &link).unwrap();
+
+        let files = snapshot_external_skill(&link).unwrap();
+        assert_eq!(
+            files,
+            vec![ConfigFileHash {
+                path: "SKILL.md".into(),
+                sha256: sha256_hex(b"skill contract"),
+            }]
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -234,6 +234,8 @@ export const tauriConfig: ConfigIpc = {
     invoke<void>(CMD.configRename, { path, newPath, projectRoot }),
   write: (path: string, contents: string, expectedHash: string, projectRoot: string) =>
     invoke<string>(CMD.configWrite, { path, contents, expectedHash, projectRoot }),
+  removeFile: (path: string, expectedHash: string, projectRoot: string) =>
+    invoke<void>(CMD.configRemoveFile, { path, expectedHash, projectRoot }),
   backup: (path: string, projectRoot: string) =>
     invoke<string>(CMD.configBackup, { path, projectRoot }),
   restore: (path: string, backupPath: string, projectRoot: string) =>
@@ -241,6 +243,8 @@ export const tauriConfig: ConfigIpc = {
   kodSkillsPackRead: () => invoke<KodSkillsPackBundle>(CMD.kodSkillsPackRead),
   dirSnapshot: (path: string, projectRoot: string) =>
     invoke<ConfigDirSnapshot>(CMD.configDirSnapshot, { path, projectRoot }),
+  externalSkillSnapshot: (path: string, projectRoot: string) =>
+    invoke<ConfigFileHash[]>(CMD.configExternalSkillSnapshot, { path, projectRoot }),
   installDir: (
     path: string,
     files: ConfigInstallFile[],

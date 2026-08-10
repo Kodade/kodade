@@ -13,6 +13,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 
 pub mod commands;
+mod onboarding;
 mod portable;
 mod projects;
 mod scaffold;
@@ -2948,9 +2949,9 @@ fn validate_checkpoint(input: &NewCheckpoint) -> Result<()> {
     }
     for path in &input.changed_paths {
         if !is_confined_relative_path(path) {
-            return Err(MemoryError::InvalidInput(format!(
-                "checkpoint path must stay relative to the workspace: {path}"
-            )));
+            return Err(MemoryError::InvalidInput(
+                "checkpoint changed paths must stay relative to the workspace".into(),
+            ));
         }
         validate_no_likely_credential("checkpoint changed path", path)?;
     }

@@ -121,6 +121,7 @@ function mockMemoryIpc(): MemoryIpc {
     purgeWorkspace: vi.fn().mockResolvedValue(undefined),
     recordActivity: vi.fn().mockResolvedValue(null),
     mcpBinaryPath: vi.fn().mockResolvedValue({ path: null, exists: false }),
+    mcpHealth: vi.fn(),
     databasePath: vi.fn().mockResolvedValue("/app-data/kodade-memory.sqlite3"),
   };
 }

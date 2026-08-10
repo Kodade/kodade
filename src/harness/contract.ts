@@ -15,6 +15,7 @@ import type {
   HarnessScope,
   ScanContext,
 } from "./model";
+import type { McpKeyPath } from "./merge";
 import type { ConfigFileHash, ConfigInstallFile } from "../ipc/contract";
 
 // One place an adapter looks for artifacts. A "file" location is read whole (an
@@ -28,7 +29,7 @@ export type ArtifactLocation = {
   container: "file" | "dir";
   path: string; // absolute, resolved from template + ScanContext
   format?: "markdown" | "json" | "jsonc" | "toml"; // file locations only
-  mcpKeyPath?: string; // mcp-server locations: the config key holding servers
+  mcpKeyPath?: string; // catalog locations use one static server-map key
 };
 
 // Artifacts plus the optional error from scanning one location.
@@ -69,7 +70,7 @@ export type ConfigChange = {
   touchedKeys?: string[];
   // An existing MCP entry is only updated after the merge layer proves it uses
   // the same Ködade command path; the preview must distinguish that from adding.
-  mcpOperation?: "add" | "update";
+  mcpOperation?: "add" | "update" | "remove";
   // M10d: the guarded config IPC authorizes writes per project root, so a change
   // carries it end-to-end (apply/verify/restore all call guarded commands). The
   // plan sketch predated the per-call projectRoot allowlist.
@@ -78,8 +79,8 @@ export type ConfigChange = {
   // the file was read at, for config_write's optimistic-concurrency guard. "" for
   // a brand-new file (no prior bytes); absent for a dir-rename (no byte write).
   expectedHash?: string;
-  // M10e: true when the write CREATES the file (no prior version on disk), so the
-  // store knows restore cannot roll back to "absent" — there is no backup.
+  // M10e: true when the write CREATES the file (no prior version on disk), so
+  // restore removes only the exact bytes written instead of looking for a backup.
   isNewFile?: boolean;
   // M15: an atomic whole-skill-directory mutation. Install has no expected
   // prior files; update/remove carry the exact inspected snapshot for
@@ -120,12 +121,14 @@ export type InstructionEditPayload = {
 // location) and the one server to add. Carried on the request so the adapter
 // merges without a second store round-trip — M8's client setup builds the same
 // shape.
-export type AddMcpServerPayload = {
+export type McpServerPayload = {
   path: string;
   format: "json" | "jsonc" | "toml";
-  keyPath: string;
+  keyPath: McpKeyPath;
   server: { name: string; config: Record<string, unknown> };
 };
+
+export type AddMcpServerPayload = McpServerPayload;
 
 export type SkillDirPayload = {
   skillId: string;

@@ -13,6 +13,7 @@ import type {
   ConfigChange,
   HarnessAdapter,
   HarnessChangeRequest,
+  VerifyResult,
 } from "../harness/contract";
 import type {
   HarnessArtifact,
@@ -20,7 +21,7 @@ import type {
   HarnessScope,
   ScanContext,
 } from "../harness/model";
-import type { McpServerSpec } from "../harness/merge";
+import type { McpKeyPath, McpServerSpec } from "../harness/merge";
 import { scanInventory } from "../harness/scan";
 import {
   buildKodSkillsRequests,
@@ -49,7 +50,7 @@ export type McpTarget = {
   cli: string;
   path: string;
   format: "json" | "jsonc" | "toml";
-  keyPath: string;
+  keyPath: McpKeyPath;
 };
 
 // A staged change is durable across pane lifecycles, so it records the surface
@@ -75,6 +76,7 @@ export type PendingChange = {
   // existing KödMem/M10 consumers remain source-compatible. The store always
   // applies `items` when present.
   items?: PendingChangeItem[];
+  validate?: () => Promise<VerifyResult>;
 };
 
 export type PendingChangeItem = {
@@ -91,7 +93,7 @@ export function isPendingChangeOwned(
   return pending?.owner.surface === owner.surface && pending.owner.scopeId === owner.scopeId;
 }
 
-type PlannedBatchRequest = {
+export type PlannedBatchRequest = {
   cli: string;
   title: string;
   request: HarnessChangeRequest;
@@ -103,6 +105,7 @@ async function stageBatch(
   planned: readonly PlannedBatchRequest[],
   title: string,
   owner: PendingChangeOwner,
+  validate?: () => Promise<VerifyResult>,
 ) {
   setState({ preparing: true, mutationError: null });
   try {
@@ -124,6 +127,7 @@ async function stageBatch(
         change: first.change,
         owner,
         items,
+        validate,
       },
       preparing: false,
     });
@@ -178,6 +182,12 @@ export type HarnessState = {
     spec: McpServerSpec,
     projectRoot: string,
     owner?: PendingChangeOwner,
+  ): Promise<void>;
+  prepareBatch(
+    planned: readonly PlannedBatchRequest[],
+    title: string,
+    owner: PendingChangeOwner,
+    validate?: () => Promise<VerifyResult>,
   ): Promise<void>;
   // Apply the staged change, verify it, and on a verify failure auto-restore
   // from the receipt and surface the reason. Rescans the last scope on either
@@ -414,6 +424,10 @@ export function createHarnessStore(deps: HarnessDeps) {
       }
     },
 
+    prepareBatch(planned, title, owner, validate) {
+      return stageBatch(set, adapterFor, planned, title, owner, validate);
+    },
+
     async loadKodSkills(projectRoot) {
       set({ kodSkillsLoading: true, kodSkillsError: null });
       try {
@@ -621,6 +635,18 @@ export function createHarnessStore(deps: HarnessDeps) {
             if (restoreErrors.length > 0) {
               message = `verify failed: ${result.reason}; restore also failed: ${restoreErrors.join("; ")}`;
             }
+            set({ applying: false, pendingChange: null, mutationError: message });
+            await rescan();
+            return;
+          }
+        }
+        if (pending.validate) {
+          const result = await pending.validate();
+          if (!result.ok) {
+            const restoreErrors = await rollback(applied);
+            const message = restoreErrors.length > 0
+              ? `health verification failed: ${result.reason}; restore also failed: ${restoreErrors.join("; ")}`
+              : `batch reverted: ${result.reason}`;
             set({ applying: false, pendingChange: null, mutationError: message });
             await rescan();
             return;

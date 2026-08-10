@@ -25,6 +25,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type { DiffHunk } from "./contract";
 
 export type McpFormat = "json" | "jsonc" | "toml";
+export type McpKeyPath = string | readonly string[];
 
 // The server a user wants to register: a key name plus an opaque config object
 // (command/args/env, or type/url for a remote transport). We deliberately don't
@@ -45,7 +46,7 @@ export type McpMerge = {
   touchedKey: string;
   diff: DiffHunk[];
   isNewFile: boolean;
-  operation: "add" | "update";
+  operation: "add" | "update" | "remove";
 };
 
 // Build the merge for adding one server to a config file's current text. `before`
@@ -55,14 +56,14 @@ export type McpMerge = {
 export function mergeMcpServer(
   before: string,
   format: McpFormat,
-  keyPath: string,
+  keyPath: McpKeyPath,
   spec: McpServerSpec,
 ): McpMerge {
   const name = spec.name.trim();
   if (!name) {
     throw new Error("a server name is required");
   }
-  const touchedKey = `${keyPath}.${name}`;
+  const touchedKey = `${displayKeyPath(keyPath)}.${name}`;
   const isNewFile = before.trim().length === 0;
   let operation: McpMerge["operation"] = "add";
 
@@ -101,11 +102,39 @@ export function mergeMcpServer(
   return { before, after, touchedKey, diff: lineDiff(before, after), isNewFile, operation };
 }
 
+export function removeMcpServer(
+  before: string,
+  format: McpFormat,
+  keyPath: McpKeyPath,
+  spec: McpServerSpec,
+): McpMerge {
+  const name = spec.name.trim();
+  if (!name) throw new Error("a server name is required");
+  if (!before.trim()) throw new Error(`the managed MCP server "${name}" is not configured`);
+  const parsed = parseByFormat(before, format);
+  const existing = serverMapOf(parsed, keyPath)[name];
+  if (!deepEqual(existing, spec.config) || !isKodadeOwnedServer(name, existing, spec.config)) {
+    throw new Error(`refusing to remove MCP server "${name}": it is not the expected Ködade entry`);
+  }
+  const after = format === "toml"
+    ? removeTomlServer(before, keyPath, name)
+    : applyEdits(before, modify(before, [...keySegments(keyPath), name], undefined, {}));
+  assertSingleServerRemoved(before, after, format, keyPath, name);
+  return {
+    before,
+    after,
+    touchedKey: `${displayKeyPath(keyPath)}.${name}`,
+    diff: lineDiff(before, after),
+    isNewFile: false,
+    operation: "remove",
+  };
+}
+
 // --- JSON / JSONC ---
 
 function mergeJsonc(
   before: string,
-  keyPath: string,
+  keyPath: McpKeyPath,
   name: string,
   config: Record<string, unknown>,
   isNewFile: boolean,
@@ -121,7 +150,7 @@ function mergeJsonc(
   // inline `{ "command": … }` gets expanded). Omitting them keeps the edit
   // minimal and localized — every existing line stays byte-identical, the new
   // value is inserted compactly. Neighbor fidelity beats a pretty insert.
-  const edits = modify(before, [...keyPath.split("."), name], config, {});
+  const edits = modify(before, [...keySegments(keyPath), name], config, {});
   return applyEdits(before, edits);
 }
 
@@ -129,7 +158,7 @@ function mergeJsonc(
 
 function mergeTomlAppend(
   before: string,
-  keyPath: string,
+  keyPath: McpKeyPath,
   name: string,
   config: Record<string, unknown>,
   isNewFile: boolean,
@@ -159,12 +188,13 @@ function mergeTomlAppend(
 // guessing at quoted-key or inline-table source syntax.
 function updateTomlServer(
   before: string,
-  keyPath: string,
+  keyPath: McpKeyPath,
   name: string,
   config: Record<string, unknown>,
 ): string {
-  const header = `[${keyPath}.${name}]`;
-  const descendantPrefix = `[${keyPath}.${name}.`;
+  const dotted = tomlKeyPath(keyPath);
+  const header = `[${dotted}.${name}]`;
+  const descendantPrefix = `[${dotted}.${name}.`;
   const lines = before.match(/.*(?:\r\n|\n|$)/g) ?? [];
   const starts: number[] = [];
   let offset = 0;
@@ -189,6 +219,34 @@ function updateTomlServer(
   return `${before.slice(0, starts[headerIndex])}${block}${eol}${before.slice(end)}`;
 }
 
+function removeTomlServer(before: string, keyPath: McpKeyPath, name: string): string {
+  const dotted = tomlKeyPath(keyPath);
+  const header = `[${dotted}.${name}]`;
+  const descendantPrefix = `[${dotted}.${name}.`;
+  const lines = before.match(/.*(?:\r\n|\n|$)/g) ?? [];
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length;
+  }
+  const headerIndex = lines.findIndex((line) => line.replace(/\r?\n$/, "").trim() === header);
+  if (headerIndex < 0) throw new Error(`managed MCP server "${name}" is not a standalone TOML table`);
+  const nextTable = lines.findIndex((line, index) => {
+    if (index <= headerIndex) return false;
+    const trimmed = line.replace(/\r?\n$/, "").trim();
+    return trimmed.startsWith("[") && !trimmed.startsWith(descendantPrefix);
+  });
+  const start = starts[headerIndex];
+  const end = nextTable < 0 ? before.length : starts[nextTable];
+  const left = before.slice(0, start).replace(/[ \t]*(?:\r?\n)?$/, "");
+  const right = before.slice(end).replace(/^(?:\r?\n)?/, "");
+  if (!left) return right;
+  if (!right) return `${left}${before.includes("\r\n") ? "\r\n" : "\n"}`;
+  const eol = before.includes("\r\n") ? "\r\n" : "\n";
+  return `${left}${eol}${eol}${right}`;
+}
+
 // --- The single-key-changed invariant ---
 
 // Re-parse `before` and `after` and prove the merge added exactly `name` to the
@@ -200,7 +258,7 @@ function assertSingleServerAdded(
   before: string,
   after: string,
   format: McpFormat,
-  keyPath: string,
+  keyPath: McpKeyPath,
   name: string,
 ): void {
   const rootBefore = before.trim().length === 0 ? {} : parseByFormat(before, format);
@@ -253,7 +311,7 @@ function assertSingleServerUpdated(
   before: string,
   after: string,
   format: McpFormat,
-  keyPath: string,
+  keyPath: McpKeyPath,
   name: string,
   config: Record<string, unknown>,
 ): void {
@@ -280,6 +338,30 @@ function assertSingleServerUpdated(
   }
   if (!deepEqual(withoutKey(rootBefore, keyPath), withoutKey(rootAfter, keyPath))) {
     throw new Error(`refusing to write: update changed config outside "${keyPath}"`);
+  }
+}
+
+function assertSingleServerRemoved(
+  before: string,
+  after: string,
+  format: McpFormat,
+  keyPath: McpKeyPath,
+  name: string,
+): void {
+  const rootBefore = parseByFormat(before, format);
+  const rootAfter = after.trim() ? parseByFormat(after, format) : {};
+  const mapBefore = serverMapOf(rootBefore, keyPath);
+  const mapAfter = serverMapOf(rootAfter, keyPath);
+  if (!Object.prototype.hasOwnProperty.call(mapBefore, name) || Object.prototype.hasOwnProperty.call(mapAfter, name)) {
+    throw new Error(`refusing to write: removal did not remove only "${name}"`);
+  }
+  for (const key of Object.keys(mapBefore)) {
+    if (key !== name && !deepEqual(mapBefore[key], mapAfter[key])) {
+      throw new Error(`refusing to write: removal altered the existing server "${key}"`);
+    }
+  }
+  if (!deepEqual(withoutKey(rootBefore, keyPath), withoutKey(rootAfter, keyPath))) {
+    throw new Error(`refusing to write: removal changed config outside "${displayKeyPath(keyPath)}"`);
   }
 }
 
@@ -325,9 +407,9 @@ export function parseByFormat(text: string, format: McpFormat): unknown {
 // up-front check, a config like `mcp_servers = [1,2,3]` (valid TOML/JSON on
 // its own) would otherwise crash jsonc-parser with a raw internal error, or
 // silently build an invalid TOML document that only fails when re-parsed.
-function assertKeyPathIsObjectOrAbsent(root: unknown, keyPath: string, format: McpFormat): void {
+function assertKeyPathIsObjectOrAbsent(root: unknown, keyPath: McpKeyPath, format: McpFormat): void {
   let node: unknown = root;
-  for (const segment of keyPath.split(".")) {
+  for (const segment of keySegments(keyPath)) {
     if (node === undefined || node === null) return; // absent — will be created
     if (!isObject(node)) {
       throw new Error(
@@ -345,9 +427,9 @@ function assertKeyPathIsObjectOrAbsent(root: unknown, keyPath: string, format: M
 
 // The server map at `keyPath` (dot-separated), or {} when the path is absent or
 // isn't an object. Never throws — an absent map just means "no servers yet".
-function serverMapOf(root: unknown, keyPath: string): Record<string, unknown> {
+function serverMapOf(root: unknown, keyPath: McpKeyPath): Record<string, unknown> {
   let node: unknown = root;
-  for (const segment of keyPath.split(".")) {
+  for (const segment of keySegments(keyPath)) {
     if (!isObject(node)) return {};
     node = node[segment];
   }
@@ -357,21 +439,32 @@ function serverMapOf(root: unknown, keyPath: string): Record<string, unknown> {
 // A shallow clone of `root` with the top segment of `keyPath` removed, so the
 // "everything outside the server map" comparison ignores the map itself. Only the
 // first segment matters for the configs we handle (single-level keys).
-function withoutKey(root: unknown, keyPath: string): unknown {
+function withoutKey(root: unknown, keyPath: McpKeyPath): unknown {
   if (!isObject(root)) return root;
-  const top = keyPath.split(".")[0];
-  const rest: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(root)) {
-    if (key !== top) rest[key] = value;
-  }
-  return rest;
+  const segments = keySegments(keyPath);
+  const remove = (node: Record<string, unknown>, index: number): Record<string, unknown> => {
+    const copy = structuredClone(node);
+    const segment = segments[index];
+    if (index === segments.length - 1) {
+      delete copy[segment];
+      return copy;
+    }
+    const child = copy[segment];
+    if (isObject(child)) {
+      const cleaned = remove(child, index + 1);
+      if (Object.keys(cleaned).length === 0) delete copy[segment];
+      else copy[segment] = cleaned;
+    }
+    return copy;
+  };
+  return remove(root, 0);
 }
 
 // Build a nested object `{ a: { b: value } }` from a dotted `keyPath` plus a
 // final `name` segment. Used to author a new file and to serialize a lone TOML
 // table for the append.
-function nestByPath(keyPath: string, name: string, value: unknown): Record<string, unknown> {
-  const segments = [...keyPath.split("."), name];
+function nestByPath(keyPath: McpKeyPath, name: string, value: unknown): Record<string, unknown> {
+  const segments = [...keySegments(keyPath), name];
   const root: Record<string, unknown> = {};
   let node = root;
   for (let i = 0; i < segments.length - 1; i++) {
@@ -381,6 +474,26 @@ function nestByPath(keyPath: string, name: string, value: unknown): Record<strin
   }
   node[segments[segments.length - 1]] = value;
   return root;
+}
+
+function keySegments(keyPath: McpKeyPath): string[] {
+  const segments = typeof keyPath === "string" ? keyPath.split(".") : [...keyPath];
+  if (segments.length === 0 || segments.some((segment) => !segment)) {
+    throw new Error("an MCP key path must contain non-empty segments");
+  }
+  return segments;
+}
+
+function displayKeyPath(keyPath: McpKeyPath): string {
+  return keySegments(keyPath).map((segment) => /^[A-Za-z0-9_-]+$/.test(segment) ? segment : "<workspace>").join(".");
+}
+
+function tomlKeyPath(keyPath: McpKeyPath): string {
+  const segments = keySegments(keyPath);
+  if (segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))) {
+    throw new Error("nested machine-specific TOML MCP paths are not supported");
+  }
+  return segments.join(".");
 }
 
 // --- Small pure utilities ---

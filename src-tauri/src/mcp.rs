@@ -429,8 +429,8 @@ impl KodadeMcp {
             Err(MemoryError::WorkspaceNotRegistered(_)) | Err(MemoryError::Io(_)) => {
                 return Err(tool_error(
                     "workspace_not_registered",
-                    &format!("workspace is not registered in Kodade: {root}"),
-                    json!({ "workspaceRoot": root }),
+                    "the requested workspace is not registered in Ködade",
+                    Value::Null,
                 ));
             }
             Err(error) => return Err(memory_error(error)),
@@ -443,7 +443,7 @@ impl KodadeMcp {
             return Err(tool_error(
                 "workspace_restricted",
                 "workspace is outside the root allowed by --workspace",
-                json!({ "workspaceRoot": root }),
+                Value::Null,
             ));
         }
         Ok(workspace)
@@ -635,10 +635,10 @@ fn tool_error(kind: &str, message: &str, details: Value) -> CallToolResult {
 fn memory_error(error: MemoryError) -> CallToolResult {
     let message = error.to_string();
     match error {
-        MemoryError::WorkspaceNotRegistered(root) => tool_error(
+        MemoryError::WorkspaceNotRegistered(_) => tool_error(
             "workspace_not_registered",
-            &message,
-            json!({ "workspaceRoot": root }),
+            "the requested workspace is not registered in Ködade",
+            Value::Null,
         ),
         MemoryError::WorkspaceRestricted(id) => {
             tool_error("workspace_restricted", &message, json!({ "id": id }))
@@ -658,7 +658,11 @@ fn memory_error(error: MemoryError) -> CallToolResult {
         MemoryError::Database(_)
         | MemoryError::Io(_)
         | MemoryError::Json(_)
-        | MemoryError::CorruptDatabase(_) => tool_error("store_error", &message, Value::Null),
+        | MemoryError::CorruptDatabase(_) => tool_error(
+            "store_error",
+            "KödMem could not complete the operation; inspect the local Memory pane",
+            Value::Null,
+        ),
     }
 }
 

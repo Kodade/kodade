@@ -1,6 +1,9 @@
 // In-memory mock of the PtyIpc contract for tests. Records calls and lets a
 // test script output/exit events back to whatever subscribed via onOutput/onExit.
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+
 import {
   type ConfigEnv,
   type ConfigIpc,
@@ -715,6 +718,7 @@ export class MockConfig implements ConfigIpc {
   // apply so a rescan after a rename reflects the change (drives verify).
   renameCalls: { path: string; newPath: string; projectRoot: string }[] = [];
   writeCalls: { path: string; contents: string; expectedHash: string; projectRoot: string }[] = [];
+  removeFileCalls: { path: string; expectedHash: string; projectRoot: string }[] = [];
   backupCalls: { path: string; projectRoot: string }[] = [];
   restoreCalls: { path: string; backupPath: string; projectRoot: string }[] = [];
   failRenameWith: string | null = null;
@@ -723,6 +727,7 @@ export class MockConfig implements ConfigIpc {
   failRestoreWith: string | null = null;
   kodSkillsBundle: KodSkillsPackBundle | null = null;
   dirSnapshots = new Map<string, ConfigDirSnapshot>();
+  externalSkillSnapshots = new Map<string, ConfigFileHash[]>();
   installDirCalls: {
     path: string;
     files: ConfigInstallFile[];
@@ -796,6 +801,17 @@ export class MockConfig implements ConfigIpc {
     this.reads.set(path, { kind: "text", content: contents });
     return Promise.resolve(backup);
   }
+  removeFile(path: string, expectedHash: string, projectRoot: string): Promise<void> {
+    this.removeFileCalls.push({ path, expectedHash, projectRoot });
+    const current = this.reads.get(path);
+    if (!current || current.kind !== "text") {
+      return Promise.reject(new Error("config file is unavailable"));
+    }
+    const actual = bytesToHex(sha256(utf8ToBytes(current.content)));
+    if (actual !== expectedHash) return Promise.reject(new Error("config changed since apply"));
+    this.reads.delete(path);
+    return Promise.resolve();
+  }
   backup(path: string, projectRoot: string): Promise<string> {
     this.backupCalls.push({ path, projectRoot });
     if (this.failBackupWith !== null) return Promise.reject(new Error(this.failBackupWith));
@@ -820,6 +836,13 @@ export class MockConfig implements ConfigIpc {
 
   dirSnapshot(path: string, _projectRoot: string): Promise<ConfigDirSnapshot> {
     return Promise.resolve(this.dirSnapshots.get(path) ?? { status: "missing", path });
+  }
+
+  externalSkillSnapshot(path: string, _projectRoot: string): Promise<ConfigFileHash[]> {
+    const snapshot = this.externalSkillSnapshots.get(path);
+    return snapshot
+      ? Promise.resolve(snapshot)
+      : Promise.reject(new Error("external skill is unavailable"));
   }
 
   installDir(

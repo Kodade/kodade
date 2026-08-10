@@ -631,7 +631,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
     expect(config.restoreCalls[0]).toMatchObject({ path: MCP, projectRoot: ROOT });
   });
 
-  it("creates a new config file (empty hash) and refuses to restore it", async () => {
+  it("creates a new config file and removes its exact bytes on rollback", async () => {
     const config = new MockConfig(); // MCP absent → new file
     const adapter = createClaudeAdapter(config);
 
@@ -652,7 +652,11 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
     const receipt = await adapter.apply(change);
     expect(receipt.backupPath).toBe(""); // nothing to back up
     expect(await adapter.verify(receipt)).toEqual({ ok: true });
-    await expect(adapter.restore(receipt)).rejects.toThrow(/newly created/);
+    await adapter.restore(receipt);
+    expect(config.removeFileCalls).toEqual([
+      expect.objectContaining({ path: MCP, projectRoot: ROOT }),
+    ]);
+    expect(config.reads.has(MCP)).toBe(false);
   });
 
   it("plan surfaces a corrupt-config abort before any write", async () => {

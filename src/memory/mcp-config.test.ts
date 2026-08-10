@@ -32,7 +32,7 @@ describe("KödMCP client configuration", () => {
     }
   }
 }`);
-    expect(codexMcpSnippet(setup)).toBe(` [mcp_servers.kodade-mem-01HZX3WQ]
+    expect(codexMcpSnippet(setup)).toBe(` [mcp_servers.kodade-mem-01HZX3WQ9F0E8R6V5B4A2C1D0E]
 command = "/Applications/Ködade Tools/kodade-mcp"
 args = [ "--workspace", "/Users/Keith/Projects/Ködade Space", "--client", "codex" ]`.trimStart());
   });
@@ -55,8 +55,8 @@ args = [ "--workspace", "/Users/Keith/Projects/Ködade Space", "--client", "code
     expect(second.state).toBe("ready");
     if (first.state !== "ready" || second.state !== "ready") throw new Error("expected ready setup");
 
-    expect(first.spec("codex").name).toBe("kodade-mem-01HZX3WQ");
-    expect(second.spec("codex").name).toBe("kodade-mem-02JAY4XR");
+    expect(first.spec("codex").name).toBe("kodade-mem-01HZX3WQ9F0E8R6V5B4A2C1D0E");
+    expect(second.spec("codex").name).toBe("kodade-mem-02JAY4XR8G1F7S5W4C3B2A1D0E");
     expect(first.spec("claude").name).toBe("kodade-mem");
     expect(second.spec("claude").name).toBe("kodade-mem");
   });
@@ -121,7 +121,7 @@ args = [ "--workspace", "/Users/Keith/Projects/Ködade Space", "--client", "code
       command: 'C:\\Program Files\\Ködade "Tools"\\kodade-mcp.exe',
       args: expectedArgs,
     });
-    expect(codex.mcp_servers["kodade-mem-01HZX3WQ"]).toEqual({
+    expect(codex.mcp_servers["kodade-mem-01HZX3WQ9F0E8R6V5B4A2C1D0E"]).toEqual({
       command: 'C:\\Program Files\\Ködade "Tools"\\kodade-mcp.exe',
       args: [...expectedArgs.slice(0, 3), "codex", "--read-only"],
     });

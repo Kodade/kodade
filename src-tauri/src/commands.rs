@@ -1935,6 +1935,21 @@ pub fn config_write(
     config::write_config(&target, &contents, &expected_hash, SystemTime::now())
 }
 
+// Roll back a config file created by a failed transaction. The exact current
+// bytes must still match the receipt from apply, so this cannot remove a file
+// another process changed after Ködade wrote it.
+#[tauri::command]
+pub fn config_remove_file(
+    path: String,
+    expected_hash: String,
+    project_root: String,
+) -> Result<(), String> {
+    let shell = ShellEnvironment::current();
+    let guard = ConfigGuard::new(shell.home(), std::path::Path::new(&project_root));
+    let target = guard.authorize(&path, Access::WriteFile)?;
+    config::remove_config(&target, &expected_hash)
+}
+
 // Explicit backup step of the receipt/restore flow: copy the file's current
 // bytes to a timestamped `.kodade-bak` sibling and return its path.
 #[tauri::command]
@@ -2074,6 +2089,22 @@ pub fn config_dir_snapshot(
     let guard = ConfigGuard::new(shell.home(), Path::new(&project_root));
     let target = authorize_skill_target(&guard, &path, false)?;
     config::snapshot_dir(&target)
+}
+
+#[tauri::command]
+pub fn config_external_skill_snapshot(
+    path: String,
+    project_root: String,
+) -> Result<Vec<config::ConfigFileHash>, String> {
+    let shell = ShellEnvironment::current();
+    let guard = ConfigGuard::new(shell.home(), std::path::Path::new(&project_root));
+    let link = guard.authorize(&path, Access::RenameEntry)?;
+    let metadata = std::fs::symlink_metadata(&link)
+        .map_err(|_| "external skill link is unavailable".to_string())?;
+    if !metadata.file_type().is_symlink() {
+        return Err("external skill entry is not a symlink".to_string());
+    }
+    config::snapshot_external_skill(&link)
 }
 
 #[tauri::command]

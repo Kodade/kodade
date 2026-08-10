@@ -16,7 +16,7 @@ import type {
   SkillDirPayload,
   VerifyResult,
 } from "../contract";
-import { lineDiff, mergeMcpServer, type McpFormat } from "../merge";
+import { lineDiff, mergeMcpServer, removeMcpServer, type McpFormat } from "../merge";
 import { nativeDirname } from "../../platform/native-path";
 import { harnessReadHalf } from "./read";
 
@@ -103,6 +103,8 @@ export function createHarnessAdapter(
           return planEdit(config, change);
         case "add-mcp-server":
           return planAddMcpServer(config, change);
+        case "remove-mcp-server":
+          return planRemoveMcpServer(config, change);
         case "install-skill":
         case "update-skill":
         case "remove-skill":
@@ -244,14 +246,15 @@ export function createHarnessAdapter(
         return;
       }
       if (receipt.change.format !== "dir-rename") {
-        // A byte write restores from the backup config_write took of the prior
-        // bytes. A brand-new file has no backup ("" path) and no prior version to
-        // roll back to — there is no config_delete primitive, so surface that
-        // honestly rather than pretend the change was reverted.
+        // A byte write restores from the prior backup. A brand-new file has no
+        // backup, so remove only the exact bytes this receipt wrote.
         if (!receipt.backupPath) {
-          throw new Error(
-            "cannot restore a newly created config file (no prior version to roll back to)",
+          await config.removeFile(
+            receipt.path,
+            sha256Hex(receipt.change.after),
+            receipt.change.projectRoot,
           );
+          return;
         }
         await config.restore(receipt.path, receipt.backupPath, receipt.change.projectRoot);
         return;
@@ -410,5 +413,36 @@ async function planAddMcpServer(
     mcpOperation: merge.operation,
     expectedHash: merge.isNewFile ? "" : sha256Hex(before),
     isNewFile: merge.isNewFile,
+  };
+}
+
+async function planRemoveMcpServer(
+  config: ConfigIpc,
+  change: HarnessChangeRequest,
+): Promise<ConfigChange> {
+  const payload = change.payload as AddMcpServerPayload | undefined;
+  if (!payload || typeof payload.path !== "string" || !payload.server) {
+    throw new Error("remove-mcp-server needs a { path, format, keyPath, server } payload");
+  }
+  const current = await readText(config, payload.path, change.projectRoot);
+  if (current === null) throw new Error("the managed MCP config is not present");
+  const merge = removeMcpServer(
+    current,
+    payload.format as McpFormat,
+    payload.keyPath,
+    payload.server,
+  );
+  return {
+    path: payload.path,
+    format: payload.format,
+    before: current,
+    after: merge.after,
+    diff: merge.diff,
+    backupPath: "",
+    projectRoot: change.projectRoot,
+    touchedKeys: [merge.touchedKey],
+    mcpOperation: "remove",
+    expectedHash: sha256Hex(current),
+    isNewFile: false,
   };
 }

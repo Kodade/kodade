@@ -64,10 +64,12 @@ export const CMD = {
   configEnv: "config_env",
   configRename: "config_rename",
   configWrite: "config_write",
+  configRemoveFile: "config_remove_file",
   configBackup: "config_backup",
   configRestore: "config_restore",
   kodSkillsPackRead: "kodskills_pack_read",
   configDirSnapshot: "config_dir_snapshot",
+  configExternalSkillSnapshot: "config_external_skill_snapshot",
   configInstallDir: "config_install_dir",
   configRemoveDir: "config_remove_dir",
   configRestoreDir: "config_restore_dir",
@@ -110,6 +112,7 @@ export const CMD = {
   memoryRecordActivity: "memory_record_activity",
   memoryDatabasePath: "memory_database_path",
   memoryMcpBinaryPath: "memory_mcp_binary_path",
+  memoryMcpHealth: "memory_mcp_health",
   sshDetect: "ssh_detect",
   sshConfigRead: "ssh_config_read",
   sshListDir: "ssh_list_dir",
@@ -381,6 +384,10 @@ export interface ConfigIpc {
     expectedHash: string,
     projectRoot: string,
   ): Promise<string>;
+  // Remove an exact newly-created config during transaction rollback. The
+  // current sha-256 must match the bytes Ködade wrote; no unrelated or changed
+  // file can be deleted through this primitive.
+  removeFile(path: string, expectedHash: string, projectRoot: string): Promise<void>;
   // Copy a file's current bytes to a timestamped `.kodade-bak` sibling; returns
   // the backup path.
   backup(path: string, projectRoot: string): Promise<string>;
@@ -394,6 +401,9 @@ export interface ConfigIpc {
   // Recursively hash one real skill directory. Symlinks at the directory or
   // anywhere below it are rejected rather than followed.
   dirSnapshot(path: string, projectRoot: string): Promise<ConfigDirSnapshot>;
+  // Hash an externally managed skill symlink without returning or mutating its
+  // target. Used only to prove exact bundled-contract equivalence.
+  externalSkillSnapshot(path: string, projectRoot: string): Promise<ConfigFileHash[]>;
   // Atomically create (expectedFiles=null) or replace (exact old snapshot)
   // one skill directory. Returns a backup path for replacement, else "".
   installDir(
@@ -833,6 +843,18 @@ export type MemoryMcpBinaryPath = {
   exists: boolean;
 };
 
+export type MemoryMcpHealth = {
+  ok: boolean;
+  client: "claude" | "codex";
+  access: "read-only" | "read-write";
+  workspaceId: string;
+  projectId: string | null;
+  stateHash: string | null;
+  tools: string[];
+  stage: string;
+  message: string;
+};
+
 export type MemoryLink = { targetId: string; relation: string };
 
 export type MemoryRecord = {
@@ -1192,6 +1214,11 @@ export interface MemoryIpc {
   recordActivity(input: NewActivity): Promise<ActivityEvent | null>;
   databasePath(): Promise<string>;
   mcpBinaryPath(): Promise<MemoryMcpBinaryPath>;
+  mcpHealth(
+    workspaceId: string,
+    client: "claude" | "codex",
+    readOnly: boolean,
+  ): Promise<MemoryMcpHealth>;
 }
 
 // Native capability flags are injectable so component behavior can be tested

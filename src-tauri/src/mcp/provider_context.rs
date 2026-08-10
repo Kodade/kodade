@@ -386,6 +386,15 @@ fn bound_string_lane(
 }
 
 fn remove_local_project_details(value: &mut Value) {
+    if let Some(workspace) = value.get_mut("workspace").and_then(Value::as_object_mut) {
+        workspace.remove("canonicalRoot");
+    }
+    if let Some(working) = value
+        .get_mut("workingMemory")
+        .and_then(Value::as_object_mut)
+    {
+        working.remove("directory");
+    }
     if let Some(project) = value
         .get_mut("projectKnowledge")
         .and_then(Value::as_object_mut)

@@ -1,6 +1,5 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { parse as parseToml } from "smol-toml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CMD, type MemoryRecord, type MemoryWorkspace } from "../ipc/contract";
 
@@ -84,7 +83,7 @@ describe("KödMem pane", () => {
   beforeEach(() => {
     invoke.mockReset();
     openDialog.mockReset();
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.readFile) {
         return Promise.resolve({ kind: "text", content: "# Current state" });
       }
@@ -150,6 +149,10 @@ describe("KödMem pane", () => {
       }
       if (command === CMD.memoryListDeleted) return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
       if (command === CMD.memoryGet) return Promise.resolve(decision);
+      if (command === CMD.configEnv) {
+        return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
+      }
+      if (command === CMD.configRead) return Promise.reject(new Error("missing"));
       throw new Error(`unexpected Tauri command: ${command}`);
     });
     memoryStore.setState({
@@ -240,7 +243,7 @@ describe("KödMem pane", () => {
   });
 
   it("shows an actionable mapped-project refresh error", async () => {
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -282,7 +285,7 @@ describe("KödMem pane", () => {
   });
 
   it("keeps the empty state concise and opens a new memory", async () => {
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -455,7 +458,7 @@ describe("KödMem pane", () => {
     });
   });
 
-  it("shows copyable Claude and Codex config with a read-only toggle", async () => {
+  it("shows one transactional Claude and Codex setup with an access toggle", async () => {
     await act(async () => {
       root.render(<MemoryPane workspaceId={workspace.id} />);
       await Promise.resolve();
@@ -466,13 +469,9 @@ describe("KödMem pane", () => {
 
     expect(container.textContent).toContain("Connect agents");
     expect(container.textContent).toContain("Claude Code");
-    expect(container.textContent).toContain("manual config · .mcp.json");
     expect(container.textContent).toContain("Codex");
-    expect(container.textContent).toContain(
-      "manual config · ~/.codex/config.toml",
-    );
-    expect(container.textContent).toContain('"--workspace"');
-    expect(container.textContent).toContain('"C:\\\\Work\\\\Ködade"');
+    expect(container.textContent).toContain("One preview installs the project workflow");
+    expect(container.textContent).toContain("review setup");
     expect(invoke).toHaveBeenCalledWith(CMD.memoryMcpBinaryPath);
 
     const readOnly = [...container.querySelectorAll("label")]
@@ -483,7 +482,7 @@ describe("KödMem pane", () => {
       readOnly?.click();
     });
 
-    expect(container.textContent).toContain("--read-only");
+    expect(readOnly?.checked).toBe(true);
   });
 
   it("reports the installed read-only mode independently from the setup toggle", async () => {
@@ -501,7 +500,7 @@ describe("KödMem pane", () => {
         },
       },
     });
-    mockInvoke((command: string) => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({
           workspace,
@@ -528,7 +527,17 @@ describe("KödMem pane", () => {
         });
       }
       if (command === CMD.configRead) {
-        return Promise.resolve({ kind: "text", content: readOnlyConfig });
+        const path = (payload as { path?: string } | undefined)?.path;
+        if (path?.endsWith(".claude.json")) {
+          return Promise.resolve({
+            kind: "text",
+            content: JSON.stringify({ projects: { [workspace.canonicalRoot]: JSON.parse(readOnlyConfig) } }),
+          });
+        }
+        return Promise.reject(new Error("missing"));
+      }
+      if (command === CMD.memoryMcpHealth) {
+        return Promise.resolve({ ok: true, client: "claude", access: "read-only" });
       }
       throw new Error(`unexpected Tauri command: ${command}`);
     });
@@ -541,7 +550,7 @@ describe("KödMem pane", () => {
     await expandAgentSetup();
     expect(
       [...container.querySelectorAll("span")].filter(
-        (span) => span.textContent === "connected · read-only",
+        (span) => span.textContent === "healthy · read-only",
       ),
     ).toHaveLength(1);
 
@@ -557,13 +566,13 @@ describe("KödMem pane", () => {
 
     expect(
       [...container.querySelectorAll("span")].filter(
-        (span) => span.textContent === "connected · read-only",
+        (span) => span.textContent === "healthy · read-only",
       ),
     ).toHaveLength(1);
   });
 
-  it("stages Claude setup through the shared safe-merge preview", async () => {
-    mockInvoke((command: string) => {
+  it("stages the full onboarding transaction through the shared preview", async () => {
+    mockInvoke((command: string, payload?: unknown) => {
       if (command === CMD.memoryContext) {
         return Promise.resolve({ workspace, latestCheckpoint: null, pinnedDecisions: [], openTasks: [], recentMemories: [] });
       }
@@ -574,8 +583,13 @@ describe("KödMem pane", () => {
         return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
       }
       if (command === CMD.configRead) {
-        return Promise.resolve({ kind: "text", content: '{ "mcpServers": {} }\n' });
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        if (path.endsWith(".claude.json")) return Promise.resolve({ kind: "text", content: '{ "projects": {} }\n' });
+        if (path.endsWith("config.toml")) return Promise.resolve({ kind: "text", content: "" });
+        return Promise.resolve({ kind: "text", content: "# Existing\n" });
       }
+      if (command === CMD.configExternalSkillSnapshot) return Promise.reject(new Error("missing"));
+      if (command === CMD.configScan) return Promise.resolve({ status: "missing", root: "skills" });
       throw new Error(`unexpected Tauri command: ${command}`);
     });
 
@@ -586,23 +600,27 @@ describe("KödMem pane", () => {
       await Promise.resolve();
     });
     await expandAgentSetup();
-    const addButtons = [...container.querySelectorAll("button")].filter(
-      (button) => button.textContent === "connect",
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "review setup",
     );
     await act(async () => {
-      addButtons[0]?.click();
+      review?.click();
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
 
     expect(invoke).toHaveBeenCalledWith(CMD.configRead, {
-      path: "C:\\Work\\Ködade\\.mcp.json",
+      path: "/Users/Keith/.claude.json",
       projectRoot: workspace.canonicalRoot,
     });
+    expect(harnessStore.getState().mutationError).toBeNull();
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(container.textContent).toContain("mcpServers.kodade-mem");
-    expect(container.textContent).toContain("a timestamped backup is written first");
+    expect(container.textContent).toContain("apply 6 KödSkills changes as one reversible batch");
+    expect(container.textContent).toContain("configure KödMCP for claude");
+    expect(container.textContent).toContain("configure KödMCP for codex");
 
     await act(async () => harnessStore.getState().cancelPendingChange());
   });
@@ -618,9 +636,9 @@ describe("KödMem pane", () => {
       if (command === CMD.configEnv) {
         return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
       }
-      if (command === CMD.configRead) {
-        return Promise.resolve({ kind: "text", content: '{ "mcpServers": {} }\n' });
-      }
+      if (command === CMD.configRead) return Promise.resolve({ kind: "text", content: "" });
+      if (command === CMD.configExternalSkillSnapshot) return Promise.reject(new Error("missing"));
+      if (command === CMD.configScan) return Promise.resolve({ status: "missing", root: "skills" });
       throw new Error(`unexpected Tauri command: ${command}`);
     });
 
@@ -629,9 +647,10 @@ describe("KödMem pane", () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
     await expandAgentSetup();
-    const add = [...container.querySelectorAll("button")].find((button) => button.textContent === "connect");
+    const add = [...container.querySelectorAll("button")].find((button) => button.textContent === "review setup");
     await act(async () => {
       add?.click();
       await Promise.resolve();
@@ -653,74 +672,7 @@ describe("KödMem pane", () => {
     await act(async () => cancel?.click());
     expect(harnessStore.getState().pendingChange).toBeNull();
     expect([...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "connect")?.disabled).toBe(false);
-  });
-
-  it.each([
-    ["Claude", 0, "C:\\Work\\Ködade\\.mcp.json"],
-    ["Codex", 1, "/Users/Keith/.codex/config.toml"],
-  ] as const)("confirms and applies the %s KödMCP merge with the generated spec", async (client, buttonIndex, path) => {
-    let persisted = client === "Claude" ? '{ "mcpServers": {} }\n' : "";
-    let written: { path: string; contents: string; projectRoot: string } | null = null;
-    mockInvoke((command: string, payload?: unknown) => {
-      if (command === CMD.memoryContext) {
-        return Promise.resolve({ workspace, latestCheckpoint: null, pinnedDecisions: [], openTasks: [], recentMemories: [] });
-      }
-      if (command === CMD.memoryAudit || command === CMD.memoryListDeleted) {
-        return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
-      }
-      if (command === CMD.configEnv) {
-        return Promise.resolve({ home: "/Users/Keith", platform: "mac", appDataRoaming: null, appDataLocal: null });
-      }
-      if (command === CMD.configRead) return Promise.resolve({ kind: "text", content: persisted });
-      if (command === CMD.configWrite) {
-        written = payload as typeof written;
-        persisted = written!.contents;
-        return Promise.resolve("/Users/Keith/.kodade/backups/mcp");
-      }
-      throw new Error(`unexpected Tauri command: ${command}`);
-    });
-
-    await act(async () => {
-      root.render(<MemoryPane workspaceId={workspace.id} />);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await expandAgentSetup();
-    const addButtons = [...container.querySelectorAll("button")].filter(
-      (button) => button.textContent === "connect",
-    );
-    await act(async () => {
-      addButtons[buttonIndex]?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-
-    const apply = [...container.querySelectorAll("button")].find((button) => button.textContent === "apply merge");
-    await act(async () => {
-      apply?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(written).toMatchObject({ path, projectRoot: workspace.canonicalRoot });
-    const server = client === "Claude"
-      ? (JSON.parse(written!.contents) as { mcpServers: Record<string, unknown> }).mcpServers["kodade-mem"]
-      : (parseToml(written!.contents) as { mcp_servers: Record<string, unknown> }).mcp_servers[`kodade-mem-${workspace.id.slice(0, 8)}`];
-    expect(server).toEqual({
-      command: "/Applications/Ködade/kodade-mcp",
-      args: ["--workspace", workspace.canonicalRoot, "--client", client.toLowerCase()],
-    });
-    expect(harnessStore.getState().pendingChange).toBeNull();
-    expect(
-      [...container.querySelectorAll("span")].some(
-        (span) => span.textContent?.startsWith("connected"),
-      ),
-    ).toBe(true);
+      .find((button) => button.textContent === "review setup")?.disabled).toBe(false);
   });
 
   it("explains how to build the helper when it is unavailable", async () => {

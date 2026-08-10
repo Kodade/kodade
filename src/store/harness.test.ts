@@ -572,6 +572,47 @@ describe("harness store mutation (M10d)", () => {
 });
 
 describe("harness store KödSkills batches (M15)", () => {
+  it("rolls every receipt back when post-apply health verification fails", async () => {
+    const config = new MockConfig();
+    const change: ConfigChange = {
+      path: "/root/AGENTS.md",
+      format: "markdown",
+      before: "before",
+      after: "after",
+      diff: [{ before: "before", after: "after" }],
+      backupPath: "",
+      projectRoot: "/root",
+    };
+    const restored: string[] = [];
+    const adapter: HarnessAdapter = {
+      cli: "claude",
+      detect: () => Promise.resolve([]),
+      scan: () => Promise.resolve({ artifacts: [], error: null }),
+      plan: () => Promise.resolve(change),
+      apply: () => Promise.resolve({ path: change.path, backupPath: "/backup", appliedAt: 1, hash: "", change }),
+      verify: () => Promise.resolve({ ok: true }),
+      restore: (receipt) => {
+        restored.push(receipt.path);
+        return Promise.resolve();
+      },
+    };
+    const store = createHarnessStore({ config, adapters: [adapter] });
+    store.setState({
+      pendingChange: {
+        cli: "claude",
+        title: "onboard agents",
+        change,
+        owner: { surface: "memory", scopeId: "ws_1" },
+        validate: () => Promise.resolve({ ok: false, reason: "actual context did not match" }),
+      },
+    });
+
+    await store.getState().confirmPendingChange();
+
+    expect(restored).toEqual([change.path]);
+    expect(store.getState().mutationError).toBe("batch reverted: actual context did not match");
+  });
+
   it("re-checks the license so a stale Pro model cannot stage a Codex install", async () => {
     const config = new MockConfig();
     config.kodSkillsBundle = kodSkillsBundle();
