@@ -108,6 +108,8 @@ describe("project knowledge setup", () => {
     });
     await render(<ProjectKnowledgeSetup workspaceId="ws_portable" ipc={ipc} />);
 
+    expect(container?.querySelector("#project-knowledge-setup")).not.toBeNull();
+
     expect(container?.textContent).toContain(
       "approved legacy-memory migration copies eligible history into canonical notes while retaining every source",
     );

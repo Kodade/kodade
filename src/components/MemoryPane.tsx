@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useStore } from "zustand";
 import type {
   MemoryKind,
+  MemoryMcpHealth,
   MemoryRecord,
   MemorySource,
   MemoryWorkspace,
@@ -547,6 +548,19 @@ type ConnectionStatus =
   | "configured-unhealthy-readonly"
   | "not-connected";
 
+type ProjectKnowledgeAction = NonNullable<MemoryMcpHealth["action"]>;
+
+function projectKnowledgeActionLabel(action: ProjectKnowledgeAction): string {
+  switch (action) {
+    case "setupProjectKnowledge":
+      return "set up project knowledge";
+    case "migrateLegacyMemory":
+      return "review project migration";
+    case "recoverMigration":
+      return "recover project migration";
+  }
+}
+
 function isConfiguredConnection(status: ConnectionStatus): boolean {
   return status.startsWith("connected") || status.startsWith("configured-unhealthy");
 }
@@ -584,6 +598,8 @@ function ConnectAgentsSection({
   const [binary, setBinary] = useState<BinaryStatus>({ kind: "loading" });
   const [delegateBundle, setDelegateBundle] = useState<BinaryStatus>({ kind: "loading" });
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [knowledgeAction, setKnowledgeAction] =
+    useState<ProjectKnowledgeAction | null>(null);
   const [configHome, setConfigHome] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [connections, setConnections] = useState<
@@ -688,6 +704,7 @@ function ConnectAgentsSection({
     const env = await configIpc.env().catch(() => null);
     if (!env) {
       setConnections({ claude: "not-connected", codex: "not-connected" });
+      setKnowledgeAction(null);
       return;
     }
     setConfigHome(env.home);
@@ -708,7 +725,7 @@ function ConnectAgentsSection({
             writableSetup.state !== "ready" ||
             readOnlySetup.state !== "ready"
           ) {
-            return [client.id, "not-connected"] as const;
+            return [client.id, "not-connected", null] as const;
           }
           const writable = memoryMcpConfigMatches(
             read.content,
@@ -723,20 +740,27 @@ function ConnectAgentsSection({
             readOnlySetup.spec(client.id),
           );
           const detectedReadOnly = writable ? false : connectedReadOnly ? true : null;
-          if (detectedReadOnly === null) return [client.id, "not-connected"] as const;
+          if (detectedReadOnly === null) {
+            return [client.id, "not-connected", null] as const;
+          }
           const health = await memoryIpc.mcpHealth(workspace.id, client.id, detectedReadOnly);
-          return [client.id, health.ok
+          const status: ConnectionStatus = health.ok
             ? detectedReadOnly ? "connected-readonly" : "connected-readwrite"
-            : detectedReadOnly ? "configured-unhealthy-readonly" : "configured-unhealthy-readwrite"] as const;
+            : detectedReadOnly ? "configured-unhealthy-readonly" : "configured-unhealthy-readwrite";
+          return [client.id, status, health.action] as const;
         } catch {
-          return [client.id, "not-connected"] as const;
+          return [client.id, "not-connected", null] as const;
         }
       }),
     );
-    setConnections(Object.fromEntries(checked) as Record<
-      MemoryMcpClient,
-      ConnectionStatus
-    >);
+    setConnections(
+      Object.fromEntries(
+        checked.map(([client, status]) => [client, status]),
+      ) as Record<MemoryMcpClient, ConnectionStatus>,
+    );
+    setKnowledgeAction(
+      checked.find(([, , action]) => action !== null)?.[2] ?? null,
+    );
   };
 
   const previouslyPending = useRef(pendingForWorkspace !== null);
@@ -798,9 +822,14 @@ function ConnectAgentsSection({
         pendingOwner,
         action === "connect"
           ? async () => {
-              const checked = await Promise.all(MCP_CLIENTS.map((client) =>
-                memoryIpc.mcpHealth(workspace.id, client.id, readOnly)
-              ));
+              const checked = await Promise.all(
+                MCP_CLIENTS.map((client) =>
+                  memoryIpc.mcpHealth(workspace.id, client.id, readOnly),
+                ),
+              );
+              setKnowledgeAction(
+                checked.find((health) => health.action !== null)?.action ?? null,
+              );
               const failed = checked.find((health) => !health.ok);
               return failed
                 ? { ok: false as const, reason: failed.message }
@@ -921,6 +950,19 @@ function ConnectAgentsSection({
               blocks, and configures both clients. Health verifies client discovery,
               KödMCP tools, and context for this project.
             </p>
+            {knowledgeAction && (
+              <div className="mt-3 rounded border border-border bg-bg/70 p-2 text-[10px] leading-4 text-text-dim">
+                <p>
+                  Writable agent access needs active project knowledge authority.
+                </p>
+                <a
+                  className="mt-1 inline-block text-accent"
+                  href="#project-knowledge-setup"
+                >
+                  {projectKnowledgeActionLabel(knowledgeAction)}
+                </a>
+              </div>
+            )}
             <div className="mt-3 flex justify-end gap-2">
               {Object.values(connections).some(isConfiguredConnection) && (
                 <button className="memory-action" disabled={busy} type="button" onClick={() => void prepareOnboarding("remove")}>

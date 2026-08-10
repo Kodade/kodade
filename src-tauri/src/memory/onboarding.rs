@@ -10,7 +10,15 @@ use serde_json::{json, Value};
 
 use crate::shell::ShellEnvironment;
 
-use super::Workspace;
+use super::{LegacyMigrationStatus, MemoryStore, Workspace};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpHealthAction {
+    SetupProjectKnowledge,
+    MigrateLegacyMemory,
+    RecoverMigration,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +32,7 @@ pub struct McpHealth {
     tools: Vec<String>,
     stage: String,
     message: String,
+    action: Option<McpHealthAction>,
 }
 
 #[doc(hidden)]
@@ -51,6 +60,39 @@ pub(super) fn failed_mcp_health(
         tools: Vec::new(),
         stage: stage.into(),
         message: message.into(),
+        action: None,
+    }
+}
+
+fn failed_authority_health(
+    client: &str,
+    read_only: bool,
+    workspace_id: &str,
+    project_id: &str,
+    action: McpHealthAction,
+) -> McpHealth {
+    let message = match action {
+        McpHealthAction::SetupProjectKnowledge => {
+            "Set up project knowledge before enabling writable agent access"
+        }
+        McpHealthAction::MigrateLegacyMemory => {
+            "Migrate legacy project memory before enabling writable agent access"
+        }
+        McpHealthAction::RecoverMigration => {
+            "Recover or roll back the project knowledge migration before enabling writable agent access"
+        }
+    };
+    McpHealth {
+        ok: false,
+        client: client.into(),
+        access: if read_only { "read-only" } else { "read-write" }.into(),
+        workspace_id: workspace_id.into(),
+        project_id: Some(project_id.into()),
+        state_hash: None,
+        tools: Vec::new(),
+        stage: "authority".into(),
+        message: message.into(),
+        action: Some(action),
     }
 }
 
@@ -103,7 +145,7 @@ pub fn run_mcp_health_with_discovery(
     let mut command = Command::new(binary);
     command
         .arg("--db")
-        .arg(db)
+        .arg(&db)
         .arg("--workspace")
         .arg(&workspace.canonical_root)
         .arg("--client")
@@ -246,6 +288,21 @@ pub fn run_mcp_health_with_discovery(
             "KödMCP advertised the wrong access mode",
         );
     }
+    let authority_action = match project_authority_action(&db, &workspace.id) {
+        Ok(action) => action,
+        Err(()) => Some(McpHealthAction::RecoverMigration),
+    };
+    if let Some(action) = authority_action {
+        if !read_only || action != McpHealthAction::SetupProjectKnowledge {
+            return failed_authority_health(
+                &client,
+                read_only,
+                &workspace.id,
+                &expected_project_id,
+                action,
+            );
+        }
+    }
     let Some(context) = responses
         .get(&3)
         .and_then(|value| value.pointer("/result/structuredContent"))
@@ -304,7 +361,30 @@ pub fn run_mcp_health_with_discovery(
         state_hash: Some(state_hash),
         tools,
         stage: "ready".into(),
-        message: "KödMCP returned context for this workspace".into(),
+        message: if authority_action.is_some() {
+            "KödMCP returned read-only legacy context; set up project knowledge before writable access"
+                .into()
+        } else {
+            "KödMCP returned context for this workspace".into()
+        },
+        action: authority_action,
+    }
+}
+
+fn project_authority_action(
+    db: &std::path::Path,
+    workspace_id: &str,
+) -> Result<Option<McpHealthAction>, ()> {
+    let store = MemoryStore::open(db).map_err(|_| ())?;
+    match store.portable_authority(workspace_id) {
+        Ok(Some(_)) => Ok(None),
+        Ok(None) => Ok(Some(McpHealthAction::SetupProjectKnowledge)),
+        Err(_) => Ok(Some(match store.preview_legacy_migration(workspace_id) {
+            Ok(plan) if plan.status == LegacyMigrationStatus::Ready => {
+                McpHealthAction::MigrateLegacyMemory
+            }
+            _ => McpHealthAction::RecoverMigration,
+        })),
     }
 }
 

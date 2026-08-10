@@ -855,6 +855,11 @@ export type MemoryMcpHealth = {
   ok: boolean;
   client: "claude" | "codex";
   access: "read-only" | "read-write";
+  action:
+    | "setupProjectKnowledge"
+    | "migrateLegacyMemory"
+    | "recoverMigration"
+    | null;
   workspaceId: string;
   projectId: string | null;
   stateHash: string | null;

@@ -4,7 +4,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use kodade_lib::memory::{
     run_mcp_health_with_discovery, McpDiscoveryProcess, MemoryKind, MemorySource, MemoryStore,
-    NewCheckpoint, NewMemory, WorkingMemoryMode,
+    NewCheckpoint, NewMemory, WorkingMemoryMode, Workspace,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -195,14 +195,40 @@ fn discovery_script(temp: &TempDir, name: &str, body: &str) -> std::path::PathBu
 }
 
 #[cfg(unix)]
+fn authority_health(
+    temp: &TempDir,
+    db: &Path,
+    workspace: &Workspace,
+    project_id: &str,
+    read_only: bool,
+) -> Value {
+    let client = discovery_script(temp, "authority-agent-client", "exit 0");
+    serde_json::to_value(run_mcp_health_with_discovery(
+        env!("CARGO_BIN_EXE_kodade-mcp").into(),
+        db.into(),
+        workspace.clone(),
+        project_id.into(),
+        "claude".into(),
+        read_only,
+        McpDiscoveryProcess {
+            executable: client,
+            path: None,
+            timeout: std::time::Duration::from_secs(2),
+        },
+    ))
+    .expect("serialize authority health")
+}
+
+#[cfg(unix)]
 #[test]
-fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
+fn onboarding_health_allows_legacy_reads_without_claiming_writable_authority() {
     let temp = tempfile::tempdir().expect("create health fixture");
     let workspace_root = temp.path().join("workspace");
     std::fs::create_dir(&workspace_root).expect("create workspace");
     let workspace_root = std::fs::canonicalize(workspace_root).expect("canonicalize workspace");
     let vault = temp.path().join("projects-vault");
     std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.join("10-Projects")).expect("create projects directory");
     let project = vault.join("10-Projects/health-project");
     std::fs::create_dir_all(&project).expect("create mapped project");
     std::fs::write(project.join("Project.md"), "# Health project\n").expect("write project hub");
@@ -289,17 +315,243 @@ fn onboarding_health_composes_client_discovery_with_real_stdio_context() {
             let serialized = health.to_string();
             assert!(!serialized.contains(&workspace_root.to_string_lossy().to_string()));
             assert!(!serialized.contains(&vault.to_string_lossy().to_string()));
-            assert_eq!(health["ok"], true, "{agent_client} health should pass");
+            assert_eq!(health["ok"], read_only, "{agent_client} authority result");
             assert_eq!(health["client"], agent_client);
             assert_eq!(
                 health["access"],
                 if read_only { "read-only" } else { "read-write" }
             );
-            assert_eq!(health["projectId"], "health-project");
-            assert_eq!(health["stateHash"].as_str().map(str::len), Some(64));
-            let tools = health["tools"].as_array().expect("health tools");
-            let has_checkpoint = tools.iter().any(|tool| tool == "checkpoint");
-            assert_eq!(has_checkpoint, !read_only);
+            assert_eq!(health["action"], "setupProjectKnowledge");
+            if read_only {
+                assert_eq!(health["projectId"], "health-project");
+                assert_eq!(health["stateHash"].as_str().map(str::len), Some(64));
+                assert_eq!(health["stage"], "ready");
+                assert!(health["message"]
+                    .as_str()
+                    .expect("read-only health message")
+                    .contains("read-only"));
+            } else {
+                assert_eq!(health["stage"], "authority");
+                assert_eq!(health["projectId"], "health-project");
+                assert!(health["message"]
+                    .as_str()
+                    .expect("writable authority message")
+                    .contains("Set up project knowledge"));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn onboarding_writable_health_requires_migration_then_passes_after_cutover() {
+    let temp = tempfile::tempdir().expect("create migration health fixture");
+    let workspace_root = temp.path().join("workspace");
+    std::fs::create_dir(&workspace_root).expect("create workspace");
+    let workspace_root = std::fs::canonicalize(workspace_root).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.join("10-Projects")).expect("create projects directory");
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open migration health store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&workspace_root, "Migration health", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&workspace.id, None, "migration-health", "Migration health")
+        .expect("map workspace");
+    store
+        .remember(NewMemory {
+            workspace_id: workspace.id.clone(),
+            kind: MemoryKind::Summary,
+            title: "Legacy context".into(),
+            body: "This record must migrate before writable agent access.".into(),
+            source: MemorySource::Agent,
+            source_client: "migration-health-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("migration-health-legacy".into()),
+            links: Vec::new(),
+        })
+        .expect("write eligible legacy memory");
+    let scaffold = store
+        .preview_project_scaffold(&workspace.id)
+        .expect("preview project scaffold");
+    store
+        .apply_project_scaffold(&workspace.id, &scaffold.fingerprint)
+        .expect("apply project scaffold");
+    drop(store);
+
+    let before = authority_health(&temp, &db, &workspace, "migration-health", false);
+    assert_eq!(before["ok"], false);
+    assert_eq!(before["stage"], "authority");
+    assert_eq!(before["action"], "migrateLegacyMemory");
+    assert!(before["message"]
+        .as_str()
+        .expect("migration-required message")
+        .contains("Migrate legacy project memory"));
+
+    let store = MemoryStore::open(&db).expect("reopen migration health store");
+    let migration = store
+        .preview_legacy_migration(&workspace.id)
+        .expect("preview legacy migration");
+    store
+        .apply_legacy_migration(&workspace.id, &migration.fingerprint)
+        .expect("apply legacy migration");
+    drop(store);
+
+    let after = authority_health(&temp, &db, &workspace, "migration-health", false);
+    assert_eq!(after["ok"], true);
+    assert_eq!(after["stage"], "ready");
+    assert_eq!(after["action"], Value::Null);
+    assert_eq!(after["projectId"], "migration-health");
+    assert_eq!(after["stateHash"].as_str().map(str::len), Some(64));
+}
+
+#[cfg(unix)]
+#[test]
+fn onboarding_writable_health_passes_for_active_greenfield_authority() {
+    let temp = tempfile::tempdir().expect("create greenfield health fixture");
+    let workspace_root = temp.path().join("workspace");
+    std::fs::create_dir(&workspace_root).expect("create workspace");
+    let workspace_root = std::fs::canonicalize(workspace_root).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.join("10-Projects")).expect("create projects directory");
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open greenfield health store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&workspace_root, "Greenfield health", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(
+            &workspace.id,
+            None,
+            "greenfield-health",
+            "Greenfield health",
+        )
+        .expect("map workspace");
+    let scaffold = store
+        .preview_project_scaffold(&workspace.id)
+        .expect("preview project scaffold");
+    store
+        .apply_project_scaffold(&workspace.id, &scaffold.fingerprint)
+        .expect("apply project scaffold");
+    drop(store);
+
+    let health = authority_health(&temp, &db, &workspace, "greenfield-health", false);
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["stage"], "ready");
+    assert_eq!(health["action"], Value::Null);
+    assert_eq!(health["projectId"], "greenfield-health");
+    assert_eq!(health["stateHash"].as_str().map(str::len), Some(64));
+}
+
+#[cfg(unix)]
+#[test]
+fn onboarding_health_directs_blocked_pending_and_rolling_migrations_to_recovery() {
+    let temp = tempfile::tempdir().expect("create recovery health fixture");
+    let workspace_root = temp.path().join("workspace");
+    std::fs::create_dir(&workspace_root).expect("create workspace");
+    let workspace_root = std::fs::canonicalize(workspace_root).expect("canonicalize workspace");
+    let vault = temp.path().join("projects-vault");
+    std::fs::create_dir_all(vault.join(".obsidian")).expect("create Obsidian config");
+    std::fs::create_dir(vault.join("10-Projects")).expect("create projects directory");
+    let db = temp.path().join("kodade-memory.sqlite3");
+    let store = MemoryStore::open(&db).expect("open recovery health store");
+    store
+        .register_projects_vault(&vault)
+        .expect("register projects vault");
+    let workspace = store
+        .register_workspace(&workspace_root, "Recovery health", None)
+        .expect("register workspace");
+    store
+        .map_workspace_to_project(&workspace.id, None, "recovery-health", "Recovery health")
+        .expect("map workspace");
+    store
+        .activate_working_memory(&workspace.id, WorkingMemoryMode::Commit, false)
+        .expect("activate legacy working memory");
+    std::fs::write(
+        workspace_root.join(".kodade/memory/STATE.md"),
+        "# State\n\nLegacy state must be migrated.\n",
+    )
+    .expect("write legacy state");
+    let scaffold = store
+        .preview_project_scaffold(&workspace.id)
+        .expect("preview project scaffold");
+    store
+        .apply_project_scaffold(&workspace.id, &scaffold.fingerprint)
+        .expect("apply project scaffold");
+    drop(store);
+
+    let project_path = vault.join("10-Projects/recovery-health/Project.md");
+    let state_path = vault.join("10-Projects/recovery-health/STATE.md");
+    let scaffold_state = std::fs::read_to_string(&state_path).expect("read scaffold STATE.md");
+    std::fs::write(&state_path, "# Human state\n\nThis blocks migration.\n")
+        .expect("write conflicting STATE.md");
+    let blocked_store = MemoryStore::open(&db).expect("open blocked health store");
+    let blocked = blocked_store
+        .preview_legacy_migration(&workspace.id)
+        .expect("preview blocked migration");
+    assert_eq!(
+        blocked.status,
+        kodade_lib::memory::LegacyMigrationStatus::Blocked
+    );
+    drop(blocked_store);
+    for read_only in [true, false] {
+        let health = authority_health(&temp, &db, &workspace, "recovery-health", read_only);
+        assert_eq!(health["ok"], false, "blocked read_only={read_only}");
+        assert_eq!(
+            health["stage"], "authority",
+            "blocked read_only={read_only}"
+        );
+        assert_eq!(
+            health["action"], "recoverMigration",
+            "blocked read_only={read_only}"
+        );
+    }
+    std::fs::write(&state_path, scaffold_state).expect("restore scaffold STATE.md");
+
+    let active = std::fs::read_to_string(&project_path).expect("read active Project.md");
+    for phase in ["applying", "rollingBack"] {
+        let pending = format!(
+            "<!-- kodmem-migration-pending {{\"schema\":1,\"projectId\":\"recovery-health\",\"migrationId\":\"kmig_{}\",\"manifestSha256\":\"{}\",\"recoveryAnchorSha256\":\"{}\",\"phase\":\"{phase}\"}} -->",
+            "1".repeat(32),
+            "2".repeat(64),
+            "3".repeat(64),
+        );
+        let mut injected = String::new();
+        for line in active.lines() {
+            injected.push_str(line);
+            injected.push('\n');
+            if line.starts_with("<!-- kodmem-project ") {
+                injected.push_str(&pending);
+                injected.push('\n');
+            }
+        }
+        std::fs::write(&project_path, injected).expect("write pending Project.md");
+
+        for read_only in [true, false] {
+            let health = authority_health(&temp, &db, &workspace, "recovery-health", read_only);
+            assert_eq!(health["ok"], false, "{phase} read_only={read_only}");
+            assert_eq!(
+                health["stage"], "authority",
+                "{phase} read_only={read_only}"
+            );
+            assert_eq!(
+                health["action"], "recoverMigration",
+                "{phase} read_only={read_only}"
+            );
+            assert!(health["message"]
+                .as_str()
+                .expect("recovery-required message")
+                .contains("Recover or roll back"));
         }
     }
 }

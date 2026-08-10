@@ -150,6 +150,7 @@ export function ProjectKnowledgeSetup({
 
   return (
     <section
+      id="project-knowledge-setup"
       aria-label="Project knowledge setup"
       className="mt-3 border-t border-border pt-3 sm:col-span-3"
     >

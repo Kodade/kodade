@@ -615,8 +615,9 @@ describe("KödMem pane", () => {
           projectId: "kodade",
           stateHash: null,
           tools: [],
-          stage: "context",
-          message: "mapped context is stale",
+          stage: "authority",
+          message: "Migrate legacy project memory before enabling writable agent access",
+          action: "migrateLegacyMemory",
         });
       }
       throw new Error(`unexpected Tauri command: ${command}`);
@@ -634,6 +635,13 @@ describe("KödMem pane", () => {
     expect([...container.querySelectorAll("button")].some(
       (button) => button.textContent === "disconnect",
     )).toBe(true);
+    const migration = container.querySelector<HTMLAnchorElement>(
+      'a[href="#project-knowledge-setup"]',
+    );
+    expect(migration?.textContent).toBe("review project migration");
+    expect(container.textContent).toContain(
+      "Writable agent access needs active project knowledge authority.",
+    );
   });
 
   it("stages the full onboarding transaction through the shared preview", async () => {
