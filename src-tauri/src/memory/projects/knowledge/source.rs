@@ -33,16 +33,39 @@ const MAX_CONTEXT_JSON_BYTES: usize = 32 * 1024;
 pub(super) fn collect_project_documents(
     location: &ProjectLocation,
 ) -> Result<Vec<IndexedProjectDocument>> {
+    collect_project_documents_with_project_override(location, None)
+}
+
+pub(super) fn collect_project_documents_with_project_override(
+    location: &ProjectLocation,
+    project_override: Option<&str>,
+) -> Result<Vec<IndexedProjectDocument>> {
     validate_projects_vault_root(&location.vault_root)?;
     require_confined_directory(
         &location.vault_root,
         &location.project_root,
         "mapped project",
     )?;
-    let mut documents = vec![
-        read_project_document(location, PROJECT_FILE, ProjectKnowledgeKind::Project)?,
-        read_project_document(location, STATE_FILE, ProjectKnowledgeKind::State)?,
-    ];
+    let mut project = read_project_document(location, PROJECT_FILE, ProjectKnowledgeKind::Project)?;
+    if let Some(project_override) = project_override {
+        validate_no_likely_credential("mapped project note", project_override)?;
+        project.body = project_override.into();
+        project.sha256 = format!("{:x}", Sha256::digest(project_override.as_bytes()));
+        project.title = frontmatter_value(project_override, "title")
+            .or_else(|| heading_title(project_override))
+            .unwrap_or_else(|| "Project knowledge".into());
+    }
+    let project_text = project.body.clone();
+    let mut state = read_project_document(location, STATE_FILE, ProjectKnowledgeKind::State)?;
+    let mut documents = vec![project];
+    if crate::memory::portable::migration::migration_note_is_visible(
+        &project_text,
+        &state.body,
+        &location.project_id,
+    )? {
+        apply_migration_timestamp(&mut state)?;
+        documents.push(state);
+    }
 
     let mut worklogs = collect_markdown_paths(
         &location.project_root,
@@ -53,12 +76,20 @@ pub(super) fn collect_project_documents(
     worklogs.sort_by(|left, right| right.1.cmp(&left.1));
     worklogs.truncate(INDEXED_WORKLOG_DAYS);
     for (path, relative_path) in worklogs {
-        documents.push(read_document(
+        let mut document = read_document(
             location,
             &path,
             relative_path,
             ProjectKnowledgeKind::Worklog,
-        )?);
+        )?;
+        if crate::memory::portable::migration::migration_note_is_visible(
+            &project_text,
+            &document.body,
+            &location.project_id,
+        )? {
+            apply_migration_timestamp(&mut document)?;
+            documents.push(document);
+        }
     }
 
     let mut decisions = collect_markdown_paths(
@@ -74,6 +105,14 @@ pub(super) fn collect_project_documents(
             relative_path,
             ProjectKnowledgeKind::Decision,
         )?;
+        if !crate::memory::portable::migration::migration_note_is_visible(
+            &project_text,
+            &document.body,
+            &location.project_id,
+        )? {
+            continue;
+        }
+        apply_migration_timestamp(&mut document)?;
         if let Some(marker) = canonical_memory_marker(
             &document.body,
             &location.project_id,
@@ -107,6 +146,14 @@ pub(super) fn collect_project_documents(
             relative_path,
             ProjectKnowledgeKind::Knowledge,
         )?;
+        if !crate::memory::portable::migration::migration_note_is_visible(
+            &project_text,
+            &document.body,
+            &location.project_id,
+        )? {
+            continue;
+        }
+        apply_migration_timestamp(&mut document)?;
         if let Some(marker) = canonical_memory_marker(
             &document.body,
             &location.project_id,
@@ -262,6 +309,23 @@ fn read_document(
         sha256,
         modified_at,
     })
+}
+
+fn apply_migration_timestamp(document: &mut IndexedProjectDocument) -> Result<()> {
+    let Some(modified_at) =
+        crate::memory::portable::migration::migration_source_modified_at(&document.body)?
+    else {
+        return Ok(());
+    };
+    let declared = frontmatter_value(&document.body, "legacy_source_updated_at")
+        .and_then(|value| value.parse::<i64>().ok());
+    if declared != Some(modified_at) {
+        return Err(MemoryError::InvalidInput(
+            "migration source timestamp does not match its canonical provenance marker".into(),
+        ));
+    }
+    document.canonical_updated_at = Some(modified_at);
+    Ok(())
 }
 
 fn collect_markdown_paths(
@@ -446,7 +510,13 @@ fn canonical_memory_marker(
         "deletedAt",
         "links",
     ];
-    if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
+    let known_migration = object
+        .get("migration")
+        .is_some_and(|value| value.is_object());
+    if required.iter().any(|key| !object.contains_key(*key))
+        || !(object.len() == required.len()
+            || (object.len() == required.len() + 1 && known_migration))
+    {
         return Err(MemoryError::InvalidInput(
             "canonical memory marker schema is invalid".into(),
         ));
@@ -587,7 +657,9 @@ pub(super) fn project_context(
             title,
             content: String::new(),
             sha256: document.sha256.clone(),
-            modified_at: document.modified_at,
+            modified_at: document
+                .canonical_updated_at
+                .unwrap_or(document.modified_at),
             truncated: title_truncated,
         };
         let Some((source, serialized_truncated)) =

@@ -308,6 +308,11 @@ fn stdio_advertises_write_tools_only_when_writable() {
                 "checkpoint",
             ]
         );
+        assert!(tool_names(&tools).iter().all(|name| {
+            !name.contains("legacy_migration")
+                && !name.contains("migration_preview")
+                && !name.contains("migration_rollback")
+        }));
     }
 
     let mut process = McpProcess::spawn(&db, true, "2025-11-25");

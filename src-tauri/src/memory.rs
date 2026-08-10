@@ -18,6 +18,11 @@ mod projects;
 mod scaffold;
 mod working;
 
+pub use portable::migration::{
+    LegacyMigrationAction, LegacyMigrationApply, LegacyMigrationCounts, LegacyMigrationOperation,
+    LegacyMigrationPlan, LegacyMigrationRecovery, LegacyMigrationRecoveryPhase,
+    LegacyMigrationRollback, LegacyMigrationSource, LegacyMigrationStatus,
+};
 pub use projects::{
     LogicalProject, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeProvenance,
     ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus, ProjectsVault,
@@ -98,6 +103,7 @@ impl From<serde_json::Error> for MemoryError {
 #[derive(Clone, Debug)]
 pub struct MemoryStore {
     path: PathBuf,
+    migration_recovery_root: PathBuf,
     access: StoreAccess,
 }
 
@@ -545,11 +551,38 @@ pub struct Page<T> {
 impl MemoryStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
+        let recovery_root = path.parent().ok_or_else(|| {
+            MemoryError::InvalidInput("memory database has no app-data parent".into())
+        })?;
+        Self::open_with_migration_recovery_root(path.clone(), recovery_root)
+    }
+
+    #[doc(hidden)]
+    pub fn open_with_migration_recovery_root(
+        path: impl AsRef<Path>,
+        recovery_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let recovery_root = recovery_root.as_ref();
+        match std::fs::symlink_metadata(recovery_root) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(MemoryError::InvalidInput(
+                    "migration recovery root must be a regular directory".into(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(recovery_root)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let recovery_root = std::fs::canonicalize(recovery_root)?;
         let store = Self {
             path,
+            migration_recovery_root: recovery_root,
             access: StoreAccess::Writable {
                 recovery: Arc::new(Mutex::new(RecoveryState::default())),
             },
@@ -571,7 +604,14 @@ impl MemoryStore {
                 path.display()
             )));
         }
+        let recovery_root = path
+            .parent()
+            .ok_or_else(|| {
+                MemoryError::InvalidInput("memory database has no app-data parent".into())
+            })?
+            .canonicalize()?;
         let store = Self {
+            migration_recovery_root: recovery_root,
             path,
             access: StoreAccess::ReadOnly,
         };
@@ -825,36 +865,55 @@ impl MemoryStore {
     }
 
     pub fn context(&self, workspace_id: &str) -> Result<WorkspaceContext> {
+        let portable_active = self.portable_authority(workspace_id)?.is_some();
         let portable = self.prepare_portable_read(workspace_id)?;
         let mut context = self.run_with_recovery(|| {
             let connection = self.connection()?;
             let workspace = workspace_with_connection(&connection, workspace_id)?;
+            let canonical_filter = if portable_active {
+                " AND canonical_project_id = (
+                    SELECT project_id FROM workspace_project_mappings WHERE workspace_id = ?1
+                  )"
+            } else {
+                " AND canonical_project_id IS NULL"
+            };
             let pinned_decisions = memories_for_query(
                 &connection,
-                "SELECT id FROM memories
+                &format!(
+                    "SELECT id FROM memories
              WHERE workspace_id = ?1 AND deleted_at IS NULL
-                   AND kind = 'decision' AND pinned = 1
-             ORDER BY updated_at DESC, id LIMIT 20",
+                   AND kind = 'decision' AND pinned = 1{canonical_filter}
+             ORDER BY updated_at DESC, id LIMIT 20"
+                ),
                 workspace_id,
             )?;
             let open_tasks = memories_for_query(
                 &connection,
-                "SELECT id FROM memories
+                &format!(
+                    "SELECT id FROM memories
              WHERE workspace_id = ?1 AND deleted_at IS NULL AND kind = 'task'
-             ORDER BY pinned DESC, updated_at DESC, id LIMIT 50",
+                   {canonical_filter}
+             ORDER BY pinned DESC, updated_at DESC, id LIMIT 50"
+                ),
                 workspace_id,
             )?;
             let recent_memories = memories_for_query(
                 &connection,
-                "SELECT id FROM memories
+                &format!(
+                    "SELECT id FROM memories
              WHERE workspace_id = ?1 AND deleted_at IS NULL
-             ORDER BY updated_at DESC, id LIMIT 30",
+                   {canonical_filter}
+             ORDER BY updated_at DESC, id LIMIT 30"
+                ),
                 workspace_id,
             )?;
             let latest_checkpoint_id = connection
                 .query_row(
-                    "SELECT id FROM checkpoints WHERE workspace_id = ?1
-                 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    &format!(
+                        "SELECT id FROM checkpoints WHERE workspace_id = ?1
+                        {canonical_filter}
+                 ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                    ),
                     [workspace_id],
                     |row| row.get::<_, String>(0),
                 )
@@ -903,7 +962,11 @@ impl MemoryStore {
                 .into_iter()
                 .max_by_key(|checkpoint| checkpoint.created_at);
         }
-        context.working_memory = self.working_memory_context(&context.workspace)?;
+        context.working_memory = if portable_active {
+            None
+        } else {
+            self.working_memory_context(&context.workspace)?
+        };
         context.project_knowledge = self.project_knowledge_context(&context.workspace.id)?;
         Ok(context)
     }
@@ -1554,10 +1617,71 @@ impl MemoryStore {
     }
 
     pub fn checkpoint_by_id(&self, id: &str) -> Result<Checkpoint> {
-        self.run_with_recovery(|| {
+        let direct_workspace = self.run_with_recovery(|| {
             let connection = self.connection()?;
-            checkpoint_with_connection(&connection, id)
-        })
+            connection
+                .query_row(
+                    "SELECT workspace_id FROM checkpoints WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        let workspace_ids = if let Some(workspace_id) = direct_workspace.clone() {
+            vec![workspace_id]
+        } else {
+            self.run_with_recovery(|| {
+                let connection = self.connection()?;
+                let mut statement = connection.prepare(
+                    "SELECT workspace_id FROM workspace_project_mappings ORDER BY workspace_id",
+                )?;
+                let workspace_ids = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(workspace_ids)
+            })?
+        };
+        for workspace_id in workspace_ids {
+            let authority = self.portable_authority(&workspace_id)?;
+            if let Some(snapshot) = self.prepare_portable_read(&workspace_id)? {
+                if let Some(checkpoint) = snapshot
+                    .checkpoints
+                    .into_iter()
+                    .find(|checkpoint| checkpoint.id == id)
+                {
+                    return Ok(checkpoint);
+                }
+                continue;
+            }
+            if let Some(location) = authority {
+                let projected = self.run_with_recovery(|| {
+                    let connection = self.connection()?;
+                    let present = connection.query_row(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM checkpoints
+                            WHERE id = ?1 AND workspace_id = ?2 AND canonical_project_id = ?3
+                        )",
+                        params![id, &workspace_id, &location.project_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    present
+                        .then(|| checkpoint_with_connection(&connection, id))
+                        .transpose()
+                })?;
+                if let Some(checkpoint) = projected {
+                    return Ok(checkpoint);
+                }
+                continue;
+            }
+            if direct_workspace.as_deref() == Some(workspace_id.as_str()) {
+                return self.run_with_recovery(|| {
+                    let connection = self.connection()?;
+                    checkpoint_with_connection(&connection, id)
+                });
+            }
+        }
+        Err(MemoryError::NotFound(id.into()))
     }
 
     pub fn search_checkpoints(&self, query: CheckpointQuery) -> Result<Page<CheckpointSearchHit>> {
@@ -1566,14 +1690,66 @@ impl MemoryStore {
                 "workspace id cannot be empty".into(),
             ));
         }
+        let portable_project_id = self
+            .portable_authority(&query.workspace_id)?
+            .map(|location| location.project_id);
+        if let Some(portable) = self.prepare_portable_read(&query.workspace_id)? {
+            let terms = query
+                .text
+                .split_whitespace()
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>();
+            let mut matching = portable
+                .checkpoints
+                .into_iter()
+                .filter(|checkpoint| {
+                    let summary = checkpoint.summary.to_lowercase();
+                    terms.iter().all(|term| summary.contains(term))
+                })
+                .collect::<Vec<_>>();
+            matching.sort_by(|left, right| {
+                right
+                    .created_at
+                    .cmp(&left.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let total = matching.len() as u64;
+            let limit = query.limit.clamp(1, 100);
+            let start = (query.offset as usize).min(matching.len());
+            let end = start.saturating_add(limit as usize).min(matching.len());
+            let items = matching[start..end]
+                .iter()
+                .map(|checkpoint| CheckpointSearchHit {
+                    id: checkpoint.id.clone(),
+                    workspace_id: checkpoint.workspace_id.clone(),
+                    summary: checkpoint.summary.clone(),
+                    excerpt: checkpoint.summary.chars().take(240).collect(),
+                    source: checkpoint.source,
+                    source_client: checkpoint.source_client.clone(),
+                    session_id: checkpoint.session_id.clone(),
+                    created_at: checkpoint.created_at,
+                })
+                .collect();
+            return Ok(Page {
+                items,
+                total,
+                limit,
+                offset: query.offset,
+            });
+        }
         self.run_with_recovery(|| {
             let limit = query.limit.clamp(1, 100);
             let connection = self.connection()?;
             let fts = fts_query(&query.text);
+            let canonical_filter = if portable_project_id.is_some() {
+                " AND c.canonical_project_id = ?"
+            } else {
+                " AND c.canonical_project_id IS NULL"
+            };
             let (from, filter, excerpt, order, mut values) = if let Some(fts) = fts {
                 (
                     "checkpoint_fts JOIN checkpoints c ON c.id = checkpoint_fts.checkpoint_id",
-                    "c.workspace_id = ? AND checkpoint_fts MATCH ?",
+                    format!("c.workspace_id = ? AND checkpoint_fts MATCH ?{canonical_filter}"),
                     "snippet(checkpoint_fts, 2, '<mark>', '</mark>', '…', 20)",
                     "bm25(checkpoint_fts), c.created_at DESC",
                     vec![Value::Text(query.workspace_id.clone()), Value::Text(fts)],
@@ -1581,12 +1757,15 @@ impl MemoryStore {
             } else {
                 (
                     "checkpoints c",
-                    "c.workspace_id = ?",
+                    format!("c.workspace_id = ?{canonical_filter}"),
                     "substr(c.summary, 1, 240)",
                     "c.created_at DESC",
                     vec![Value::Text(query.workspace_id.clone())],
                 )
             };
+            if let Some(project_id) = portable_project_id.as_ref() {
+                values.push(Value::Text(project_id.clone()));
+            }
             let total = connection.query_row(
                 &format!("SELECT COUNT(*) FROM {from} WHERE {filter}"),
                 params_from_iter(values.iter()),
@@ -1706,28 +1885,52 @@ impl MemoryStore {
     }
 
     pub fn export_workspace(&self, workspace_id: &str) -> Result<ExportBundle> {
+        let portable_project_id = self
+            .portable_authority(workspace_id)?
+            .map(|location| location.project_id);
+        let portable_snapshot = self.prepare_portable_read(workspace_id)?;
         self.run_with_recovery(|| {
             let mut connection = self.connection()?;
             let transaction = connection.transaction()?;
             let workspace = workspace_with_connection(&transaction, workspace_id)?;
-            let memory_ids = query_ids(
-                &transaction,
-                "SELECT id FROM memories WHERE workspace_id = ?1 ORDER BY created_at, id",
-                workspace_id,
-            )?;
-            let memories = memory_ids
-                .iter()
-                .map(|id| memory_with_connection(&transaction, id))
-                .collect::<Result<Vec<_>>>()?;
-            let checkpoint_ids = query_ids(
-                &transaction,
-                "SELECT id FROM checkpoints WHERE workspace_id = ?1 ORDER BY created_at, id",
-                workspace_id,
-            )?;
-            let checkpoints = checkpoint_ids
-                .iter()
-                .map(|id| checkpoint_with_connection(&transaction, id))
-                .collect::<Result<Vec<_>>>()?;
+            let (memories, checkpoints) = if let Some(snapshot) = portable_snapshot.as_ref() {
+                (snapshot.records.clone(), snapshot.checkpoints.clone())
+            } else {
+                let (memory_sql, checkpoint_sql, project): (&str, &str, Option<&str>) =
+                    if let Some(project_id) = portable_project_id.as_deref() {
+                        (
+                            "SELECT id FROM memories WHERE workspace_id = ?1 AND canonical_project_id = ?2 ORDER BY created_at, id",
+                            "SELECT id FROM checkpoints WHERE workspace_id = ?1 AND canonical_project_id = ?2 ORDER BY created_at, id",
+                            Some(project_id),
+                        )
+                    } else {
+                        (
+                            "SELECT id FROM memories WHERE workspace_id = ?1 AND canonical_project_id IS NULL ORDER BY created_at, id",
+                            "SELECT id FROM checkpoints WHERE workspace_id = ?1 AND canonical_project_id IS NULL ORDER BY created_at, id",
+                            None,
+                        )
+                    };
+                let query = |sql: &str| -> Result<Vec<String>> {
+                    if let Some(project_id) = project {
+                        let mut statement = transaction.prepare(sql)?;
+                        let ids = statement
+                            .query_map(params![workspace_id, project_id], |row| row.get(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        Ok(ids)
+                    } else {
+                        query_ids(&transaction, sql, workspace_id)
+                    }
+                };
+                let memories = query(memory_sql)?
+                    .iter()
+                    .map(|id| memory_with_connection(&transaction, id))
+                    .collect::<Result<Vec<_>>>()?;
+                let checkpoints = query(checkpoint_sql)?
+                    .iter()
+                    .map(|id| checkpoint_with_connection(&transaction, id))
+                    .collect::<Result<Vec<_>>>()?;
+                (memories, checkpoints)
+            };
             let activity = activity_for_workspace(&transaction, workspace_id)?;
             let audit = audit_for_workspace(&transaction, workspace_id)?;
             let exported_at = now_millis();
@@ -1889,32 +2092,43 @@ impl MemoryStore {
     }
 
     pub fn memory(&self, id: &str) -> Result<MemoryRecord> {
-        self.run_with_recovery(|| {
+        let record = self.run_with_recovery(|| {
             let connection = self.connection()?;
             memory_with_connection(&connection, id)
-        })
+        })?;
+        let canonical_project_id = self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT canonical_project_id FROM memories WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .map_err(Into::into)
+        })?;
+        match self.portable_authority(&record.workspace_id)? {
+            Some(location)
+                if canonical_project_id.as_deref() == Some(location.project_id.as_str()) =>
+            {
+                Ok(record)
+            }
+            Some(_) => Err(MemoryError::NotFound(id.into())),
+            None if canonical_project_id.is_none() => Ok(record),
+            None => Err(MemoryError::NotFound(id.into())),
+        }
     }
 
     /// Lists only tombstones still inside this workspace's configured restore window.
     /// Retention removes expired rows in batches; the cutoff also prevents a stale,
     /// not-yet-purged row from being presented as restorable.
     pub fn deleted_memories(&self, workspace_id: &str, limit: u32) -> Result<Vec<MemoryRecord>> {
-        self.run_with_recovery(|| {
-            let connection = self.connection()?;
-            let workspace = workspace_with_connection(&connection, workspace_id)?;
-            let ids = query_ids_with_limit(
-                &connection,
-                "SELECT id FROM memories
-                 WHERE workspace_id = ?1 AND deleted_at IS NOT NULL AND deleted_at >= ?2
-                 ORDER BY deleted_at DESC, id LIMIT ?3",
-                workspace_id,
-                retention_cutoff(now_millis(), workspace.tombstone_retention_days),
-                limit.clamp(1, 500),
-            )?;
-            ids.iter()
-                .map(|id| memory_with_connection(&connection, id))
-                .collect()
-        })
+        Ok(self
+            .deleted_memory_page(DeletedMemoryQuery {
+                workspace_id: workspace_id.into(),
+                limit: limit.clamp(1, 100),
+                offset: 0,
+            })?
+            .items)
     }
 
     pub fn deleted_memory_page(&self, query: DeletedMemoryQuery) -> Result<Page<MemoryRecord>> {
@@ -1924,27 +2138,66 @@ impl MemoryStore {
             ));
         }
         validate_no_likely_credential("deleted memory workspace id", &query.workspace_id)?;
+        let portable_project_id = self
+            .portable_authority(&query.workspace_id)?
+            .map(|location| location.project_id);
+        let workspace = self.workspace(&query.workspace_id)?;
+        let cutoff = retention_cutoff(now_millis(), workspace.tombstone_retention_days);
+        if let Some(portable) = self.prepare_portable_read(&query.workspace_id)? {
+            let mut records = portable
+                .records
+                .into_iter()
+                .filter(|record| record.deleted_at.is_some_and(|deleted| deleted >= cutoff))
+                .collect::<Vec<_>>();
+            records.sort_by(|left, right| {
+                right
+                    .deleted_at
+                    .cmp(&left.deleted_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let total = records.len() as u64;
+            let limit = query.limit.clamp(1, 100);
+            let start = (query.offset as usize).min(records.len());
+            let end = start.saturating_add(limit as usize).min(records.len());
+            return Ok(Page {
+                items: records[start..end].to_vec(),
+                total,
+                limit,
+                offset: query.offset,
+            });
+        }
         self.run_with_recovery(|| {
             let connection = self.connection()?;
-            let workspace = workspace_with_connection(&connection, &query.workspace_id)?;
-            let cutoff = retention_cutoff(now_millis(), workspace.tombstone_retention_days);
             let limit = query.limit.clamp(1, 100);
+            let canonical_filter = if portable_project_id.is_some() {
+                " AND canonical_project_id = ?3"
+            } else {
+                " AND canonical_project_id IS NULL"
+            };
+            let mut values = vec![
+                Value::Text(query.workspace_id.clone()),
+                Value::Integer(cutoff),
+            ];
+            if let Some(project_id) = portable_project_id.as_ref() {
+                values.push(Value::Text(project_id.clone()));
+            }
             let total = connection.query_row(
-                "SELECT COUNT(*) FROM memories
-                 WHERE workspace_id = ?1 AND deleted_at IS NOT NULL AND deleted_at >= ?2",
-                params![&query.workspace_id, cutoff],
+                &format!("SELECT COUNT(*) FROM memories
+                 WHERE workspace_id = ?1 AND deleted_at IS NOT NULL AND deleted_at >= ?2{canonical_filter}"),
+                params_from_iter(values.iter()),
                 |row| row.get(0),
             )?;
-            let mut statement = connection.prepare(
+            values.push(Value::Integer(i64::from(limit)));
+            values.push(Value::Integer(i64::from(query.offset)));
+            let limit_param = values.len() - 1;
+            let offset_param = values.len();
+            let mut statement = connection.prepare(&format!(
                 "SELECT id FROM memories
-                 WHERE workspace_id = ?1 AND deleted_at IS NOT NULL AND deleted_at >= ?2
-                 ORDER BY deleted_at DESC, id LIMIT ?3 OFFSET ?4",
-            )?;
+                 WHERE workspace_id = ?1 AND deleted_at IS NOT NULL AND deleted_at >= ?2{canonical_filter}
+                 ORDER BY deleted_at DESC, id LIMIT ?{limit_param} OFFSET ?{offset_param}"
+            ))?;
             let ids = statement
-                .query_map(
-                    params![&query.workspace_id, cutoff, limit, query.offset],
-                    |row| row.get::<_, String>(0),
-                )?
+                .query_map(params_from_iter(values.iter()), |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let items = ids
                 .iter()
@@ -1970,32 +2223,34 @@ impl MemoryStore {
                 "memory search offset cannot exceed {SEARCH_OFFSET_LIMIT}"
             )));
         }
+        let portable_project_id = self
+            .portable_authority(&query.workspace_id)?
+            .map(|location| location.project_id);
+        let portable_active = portable_project_id.is_some();
         self.prepare_portable_read(&query.workspace_id)?;
-        if !matches!(self.access, StoreAccess::ReadOnly)
+        if !portable_active
+            && !matches!(self.access, StoreAccess::ReadOnly)
             && self.working_memory_status(&query.workspace_id)?.is_some()
         {
             self.sync_working_memory(&query.workspace_id)?;
         }
         let project_refresh = self.refresh_project_knowledge(&query.workspace_id)?;
-        let fresh_markdown_project = if matches!(self.access, StoreAccess::ReadOnly) {
-            project_refresh
-                .as_ref()
-                .map(|refresh| refresh.project_id().to_string())
-        } else {
-            None
-        };
         self.run_with_recovery(|| {
             let limit = query.limit.clamp(1, 100);
             let needed = query.offset.saturating_add(limit);
-            let (database_items, database_total) = {
+            let (database_items, database_total) = if portable_active
+                && matches!(self.access, StoreAccess::ReadOnly)
+            {
+                (Vec::new(), 0)
+            } else {
                 let mut items = Vec::new();
                 let mut offset = 0_u32;
                 loop {
                     let mut database_query = query.clone();
                     database_query.limit = needed.saturating_sub(offset).clamp(1, 100);
                     database_query.offset = offset;
-                    let page = self
-                        .search_database_once(&database_query, fresh_markdown_project.as_deref())?;
+                    let page =
+                        self.search_database_once(&database_query, portable_project_id.as_deref())?;
                     let page_len = page.items.len() as u32;
                     offset = offset.saturating_add(page_len);
                     items.extend(page.items);
@@ -2004,7 +2259,9 @@ impl MemoryStore {
                     }
                 }
             };
-            let (file_items, file_total) = {
+            let (file_items, file_total) = if portable_active {
+                (Vec::new(), 0)
+            } else {
                 let mut items = Vec::new();
                 let mut offset = 0_u32;
                 loop {
@@ -2069,7 +2326,7 @@ impl MemoryStore {
     fn search_database_once(
         &self,
         query: &MemoryQuery,
-        fresh_markdown_project: Option<&str>,
+        canonical_project_id: Option<&str>,
     ) -> Result<Page<MemorySearchHit>> {
         let limit = query.limit.clamp(1, 100);
         let connection = self.connection()?;
@@ -2077,10 +2334,11 @@ impl MemoryStore {
         let mut values = Vec::<Value>::new();
         let mut filters = String::from("m.workspace_id = ? AND m.deleted_at IS NULL");
         values.push(query.workspace_id.clone().into());
-        if let Some(project_id) = fresh_markdown_project {
-            filters
-                .push_str(" AND (m.canonical_project_id IS NULL OR m.canonical_project_id <> ?)");
-            values.push(Value::Text(project_id.into()));
+        if let Some(project_id) = canonical_project_id {
+            filters.push_str(" AND m.canonical_project_id = ?");
+            values.push(project_id.to_string().into());
+        } else {
+            filters.push_str(" AND m.canonical_project_id IS NULL");
         }
         if !query.kinds.is_empty() {
             filters.push_str(" AND m.kind IN (");
@@ -2469,20 +2727,6 @@ fn memories_for_query(
         .iter()
         .map(|id| memory_with_connection(connection, id))
         .collect()
-}
-
-fn query_ids_with_limit(
-    connection: &Connection,
-    sql: &str,
-    workspace_id: &str,
-    cutoff: i64,
-    limit: u32,
-) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(sql)?;
-    let ids = statement
-        .query_map(params![workspace_id, cutoff, limit], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(ids)
 }
 
 fn workspace_with_connection(connection: &Connection, id: &str) -> Result<Workspace> {

@@ -17,6 +17,9 @@ export type ProjectsVaultIpc = Pick<
   | "projectWorkspaceMappings"
   | "previewProjectScaffold"
   | "applyProjectScaffold"
+  | "previewLegacyMigration"
+  | "applyLegacyMigration"
+  | "rollbackLegacyMigration"
   | "openProjectInObsidian"
 >;
 

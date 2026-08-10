@@ -476,19 +476,11 @@ fn parse_project_id_scalar(value: &str) -> Result<String> {
 }
 
 pub(super) fn validate_authority_marker(text: &str, expected_project_id: &str) -> Result<bool> {
-    let markers = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("<!-- kodmem-project"))
-        .collect::<Vec<_>>();
-    if markers.len() > 1 {
-        return Err(MemoryError::InvalidInput(
-            "Project.md contains more than one kodmem-project authority marker".into(),
-        ));
-    }
-    let Some(marker) = markers.first() else {
+    let lines = text.lines().collect::<Vec<_>>();
+    let Some(index) = authority_marker_line_index(&lines)? else {
         return Ok(false);
     };
-    let marker = marker.trim();
+    let marker = lines[index];
     let json = marker
         .strip_prefix("<!-- kodmem-project ")
         .and_then(|value| value.strip_suffix(" -->"))
@@ -513,15 +505,37 @@ pub(super) fn validate_authority_marker(text: &str, expected_project_id: &str) -
     Ok(true)
 }
 
-fn required_artifacts(project_id: &str, project_name: &str) -> Result<Vec<RequiredArtifact>> {
-    let policy: ScaffoldPolicy = serde_json::from_str(include_str!(
-        "../../../resources/kodmem/project-scaffold.json"
-    ))?;
-    if policy.schema != 1 {
+pub(super) fn authority_marker_line_index(lines: &[&str]) -> Result<Option<usize>> {
+    if lines.first().copied() != Some("---") {
+        return Ok(None);
+    }
+    let Some(frontmatter_end) = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (*line == "---").then_some(index))
+    else {
         return Err(MemoryError::InvalidInput(
-            "project scaffold policy uses an unsupported schema".into(),
+            "Project.md frontmatter is not closed".into(),
+        ));
+    };
+    let Some(index) = ((frontmatter_end + 1)..lines.len()).find(|index| !lines[*index].is_empty())
+    else {
+        return Ok(None);
+    };
+    if !lines[index].starts_with("<!-- kodmem-project") {
+        return Ok(None);
+    }
+    if !lines[index].starts_with("<!-- kodmem-project ") || !lines[index].ends_with(" -->") {
+        return Err(MemoryError::InvalidInput(
+            "Project.md contains a malformed kodmem-project authority marker".into(),
         ));
     }
+    Ok(Some(index))
+}
+
+fn required_artifacts(project_id: &str, project_name: &str) -> Result<Vec<RequiredArtifact>> {
+    let policy = scaffold_policy()?;
     let mut seen = HashSet::new();
     policy
         .artifacts
@@ -550,6 +564,80 @@ fn required_artifacts(project_id: &str, project_name: &str) -> Result<Vec<Requir
             })
         })
         .collect()
+}
+
+fn scaffold_policy() -> Result<ScaffoldPolicy> {
+    let policy: ScaffoldPolicy = serde_json::from_str(include_str!(
+        "../../../resources/kodmem/project-scaffold.json"
+    ))?;
+    if policy.schema != 1 {
+        return Err(MemoryError::InvalidInput(
+            "project scaffold policy uses an unsupported schema".into(),
+        ));
+    }
+    Ok(policy)
+}
+
+/// Return the declarative scaffold paths used by portable project scanners.
+pub(super) fn project_scaffold_paths() -> Result<(Vec<String>, Vec<String>)> {
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let mut seen = HashSet::new();
+    for artifact in scaffold_policy()?.artifacts {
+        let (path, is_directory) = match artifact {
+            ArtifactPolicy::Directory { path } => (path, true),
+            ArtifactPolicy::File { path, .. } => (path, false),
+        };
+        validate_policy_path(&path)?;
+        if !seen.insert(path.clone()) {
+            return Err(MemoryError::InvalidInput(format!(
+                "project scaffold policy repeats path: {path}"
+            )));
+        }
+        if is_directory {
+            directories.push(path);
+        } else {
+            files.push(path);
+        }
+    }
+    files.sort();
+    directories.sort();
+    Ok((files, directories))
+}
+
+pub(super) fn project_note_relative_path() -> Result<String> {
+    scaffold_policy()?
+        .artifacts
+        .into_iter()
+        .find_map(|artifact| match artifact {
+            ArtifactPolicy::File { path, lines }
+                if lines.iter().any(|line| line.contains("kodmem-project")) =>
+            {
+                Some(path)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            MemoryError::InvalidInput(
+                "project scaffold policy is missing its authority note".into(),
+            )
+        })
+}
+
+pub(super) fn rendered_file_placeholder(
+    project_id: &str,
+    project_name: &str,
+    relative_path: &str,
+) -> Result<String> {
+    required_artifacts(project_id, project_name)?
+        .into_iter()
+        .find(|artifact| artifact.suffix == relative_path)
+        .and_then(|artifact| artifact.content)
+        .ok_or_else(|| {
+            MemoryError::InvalidInput(format!(
+                "project scaffold policy is missing required file: {relative_path}"
+            ))
+        })
 }
 
 fn validate_policy_path(path: &str) -> Result<()> {

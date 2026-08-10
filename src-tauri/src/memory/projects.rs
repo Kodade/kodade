@@ -141,6 +141,31 @@ impl MemoryStore {
         validate_projects_vault_root(Path::new(&vault.canonical_root))?;
         validate_project_folder(&vault.canonical_root, project_id)?;
 
+        // Mapping changes participate in the same canonical-root locks as
+        // portable writes and migrations. Sorting the exact roots avoids
+        // deadlock when a remap spans two logical projects.
+        let mut locked_locations = Vec::new();
+        if let Some(current) = self.project_location(workspace_id)? {
+            locked_locations.push(current);
+        }
+        let destination = ProjectLocation {
+            project_id: project_id.into(),
+            project_display_name: project_display_name.into(),
+            vault_root: PathBuf::from(&vault.canonical_root),
+            project_root: PathBuf::from(&vault.canonical_root)
+                .join("10-Projects")
+                .join(project_id),
+        };
+        if destination.project_root.is_dir() {
+            locked_locations.push(destination);
+        }
+        locked_locations.sort_by(|left, right| left.project_root.cmp(&right.project_root));
+        locked_locations.dedup_by(|left, right| left.project_root == right.project_root);
+        let mut _project_locks = Vec::with_capacity(locked_locations.len());
+        for location in &locked_locations {
+            _project_locks.push(self.lock_portable_project(location)?);
+        }
+
         let now = now_millis();
         self.run_with_recovery(|| {
             let mut connection = self.connection()?;

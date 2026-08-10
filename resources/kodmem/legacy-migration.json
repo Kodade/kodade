@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "maxSourceFiles": 256,
+  "maxSourceWorkspaces": 64,
+  "maxSourceReceipts": 256,
+  "maxTargetScanFiles": 512,
+  "maxSourceBytes": 4194304,
+  "maxDocumentBytes": 262144,
+  "maxDatabaseRecords": 5000,
+  "maxDatabaseLinks": 10000,
+  "maxDatabaseBytes": 8388608,
+  "maxCanonicalFiles": 512,
+  "maxCanonicalBytes": 4194304,
+  "maxBackupBytes": 33554432,
+  "maxCutoverBytes": 262144,
+  "backupNamespace": "kodade-kodmem-migrations",
+  "repoSources": [
+    {
+      "kind": "state",
+      "exactPaths": ["STATE.md"],
+      "targetPattern": "STATE.md",
+      "historyPattern": "Knowledge/Legacy/{{sha12}}-STATE.md",
+      "noteType": "state",
+      "status": "approved"
+    },
+    {
+      "kind": "worklog",
+      "exactPaths": ["WORKLOG.md"],
+      "rootPrefix": "WORKLOG-",
+      "rootSuffix": ".md",
+      "targetPattern": "Worklog/Legacy/{{sha12}}-{{basename}}",
+      "noteType": "worklog",
+      "status": "approved"
+    },
+    {
+      "kind": "decisions",
+      "exactPaths": ["decisions.md"],
+      "targetPattern": "Decisions/Legacy/{{sha12}}-{{basename}}",
+      "noteType": "decision",
+      "status": "accepted"
+    },
+    {
+      "kind": "imported-records",
+      "exactPaths": ["MEMORIES.md"],
+      "targetPattern": "Knowledge/Legacy/{{sha12}}-{{basename}}",
+      "noteType": "knowledge",
+      "status": "approved"
+    },
+    {
+      "kind": "plan",
+      "exactPaths": [],
+      "recursiveDirectory": "plans",
+      "recursiveExtension": "md",
+      "targetPattern": "Plans/Legacy/{{sha12}}-{{basename}}",
+      "noteType": "plan",
+      "status": "approved"
+    }
+  ],
+  "repoNoteTemplate": [
+    "---",
+    "title: {{title_json}}",
+    "type: {{type}}",
+    "status: {{status}}",
+    "agent_context: true",
+    "project_id: {{project_id}}",
+    "legacy_source_updated_at: {{source_modified_at}}",
+    "---",
+    "{{state_marker}}{{migration_marker}}",
+    "",
+    "# Imported legacy {{kind}}",
+    "",
+    "{{source_text}}"
+  ]
+}

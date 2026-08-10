@@ -9,6 +9,9 @@ import {
   type DeletedMemoryQuery,
   type ExportResult,
   type MemoryIpc,
+  type LegacyMigrationApply,
+  type LegacyMigrationPlan,
+  type LegacyMigrationRollback,
   type MemoryMcpBinaryPath,
   type MemoryRecord,
   type MemorySearchHit,
@@ -72,6 +75,25 @@ export const tauriMemory: MemoryIpc = {
     invoke<ProjectScaffoldApply>(CMD.memoryApplyProjectScaffold, {
       workspaceId,
       expectedFingerprint,
+    }),
+  previewLegacyMigration: (workspaceId) =>
+    invoke<LegacyMigrationPlan>(CMD.memoryPreviewLegacyMigration, {
+      workspaceId,
+    }),
+  applyLegacyMigration: (workspaceId, expectedFingerprint) =>
+    invoke<LegacyMigrationApply>(CMD.memoryApplyLegacyMigration, {
+      workspaceId,
+      expectedFingerprint,
+    }),
+  rollbackLegacyMigration: (
+    workspaceId,
+    migrationId,
+    expectedManifestSha256,
+  ) =>
+    invoke<LegacyMigrationRollback>(CMD.memoryRollbackLegacyMigration, {
+      workspaceId,
+      migrationId,
+      expectedManifestSha256,
     }),
   openProjectInObsidian: (workspaceId) =>
     invoke<void>(CMD.memoryOpenProjectInObsidian, { workspaceId }),

@@ -93,6 +93,12 @@ impl MemoryStore {
         export_existing: bool,
     ) -> Result<WorkingMemoryStatus> {
         self.require_writable_working_memory()?;
+        if self.portable_authority(workspace_id)?.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "projects-vault is authoritative for this project; repo-local working memory cannot be activated"
+                    .into(),
+            ));
+        }
         let workspace = self.workspace(workspace_id)?;
         let root = PathBuf::from(&workspace.canonical_root);
         let directory = working_directory(&root)?;

@@ -19,6 +19,11 @@
   already-projected read-only searches without stale duplicate hits; literal
   Obsidian template syntax now round-trips without substitution, and bounded
   authority/journal reads plus durable lane moves harden portable recovery.
+- Added a native-only preview, apply, recovery, and rollback workflow for
+  migrating eligible repo-local KödMem history into canonical projects-vault
+  Markdown. Portable cutover receipts are committed last, legacy sources are
+  retained but deactivated, and interrupted or cross-machine migrations fail
+  closed until their durable recovery state is resolved.
 
 ## 1.5.1 - 2026-08-08
 

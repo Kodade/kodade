@@ -83,6 +83,9 @@ export const CMD = {
   memoryProjectWorkspaceMappings: "memory_project_workspace_mappings",
   memoryPreviewProjectScaffold: "memory_preview_project_scaffold",
   memoryApplyProjectScaffold: "memory_apply_project_scaffold",
+  memoryPreviewLegacyMigration: "memory_preview_legacy_migration",
+  memoryApplyLegacyMigration: "memory_apply_legacy_migration",
+  memoryRollbackLegacyMigration: "memory_rollback_legacy_migration",
   memoryOpenProjectInObsidian: "memory_open_project_in_obsidian",
   memoryContext: "memory_context",
   memorySearch: "memory_search",
@@ -733,6 +736,96 @@ export type ProjectScaffoldApply = {
   created: ScaffoldOperation[];
 };
 
+export type LegacyMigrationStatus =
+  | "noLegacy"
+  | "ready"
+  | "blocked"
+  | "complete";
+
+export type LegacyMigrationAction =
+  | "create"
+  | "append"
+  | "replacePlaceholder"
+  | "skipDuplicate";
+
+export type LegacyMigrationOperation = {
+  action: LegacyMigrationAction;
+  sourceKind: string;
+  sourceRelativePath: string | null;
+  sourceSha256: string;
+  targetRelativePath: string;
+  expectedTargetSha256: string | null;
+  targetSha256: string | null;
+  itemCount: number;
+  conflict: string | null;
+};
+
+export type LegacyMigrationPlan = {
+  schema: number;
+  status: LegacyMigrationStatus;
+  workspaceId: string;
+  projectId: string;
+  projectDisplayName: string;
+  fingerprint: string;
+  migrationId: string | null;
+  manifestSha256: string | null;
+  sources: Array<{
+    workspaceId: string;
+    workspaceDisplayName: string;
+    snapshotCount: number;
+  }>;
+  sourceSnapshots: Array<{ kind: string; sha256: string }>;
+  counts: {
+    sourceFiles: number;
+    memories: number;
+    checkpoints: number;
+    operations: number;
+    duplicates: number;
+    conflicts: number;
+  };
+  operations: LegacyMigrationOperation[];
+  systemOperations: Array<{
+    sequence: number;
+    kind: string;
+    target: string;
+    localOnly: boolean;
+  }>;
+  canApply: boolean;
+  sourceRetained: boolean;
+  createsLocalRecoveryBackup: boolean;
+  writesCutoverLast: boolean;
+  recovery: {
+    migrationId: string;
+    manifestSha256: string;
+    phase:
+      | "prepared"
+      | "markdownWritten"
+      | "cutover"
+      | "complete"
+      | "rollingBack";
+    canRetry: boolean;
+    canRollback: boolean;
+  } | null;
+};
+
+export type LegacyMigrationApply = {
+  projectId: string;
+  migrationId: string;
+  manifestSha256: string;
+  written: number;
+  skipped: number;
+  backupPath: string;
+  sourceRetained: boolean;
+};
+
+export type LegacyMigrationRollback = {
+  projectId: string;
+  migrationId: string;
+  restored: number;
+  removed: number;
+  sourceRetained: boolean;
+};
+
 // The bundled KödMCP helper resolved by the desktop app. `path` stays nullable
 // so callers can model an unavailable helper without inventing a sentinel path.
 export type MemoryMcpBinaryPath = {
@@ -1037,6 +1130,16 @@ export interface MemoryIpc {
     workspaceId: string,
     expectedFingerprint: string,
   ): Promise<ProjectScaffoldApply>;
+  previewLegacyMigration(workspaceId: string): Promise<LegacyMigrationPlan>;
+  applyLegacyMigration(
+    workspaceId: string,
+    expectedFingerprint: string,
+  ): Promise<LegacyMigrationApply>;
+  rollbackLegacyMigration(
+    workspaceId: string,
+    migrationId: string,
+    expectedManifestSha256: string,
+  ): Promise<LegacyMigrationRollback>;
   openProjectInObsidian(workspaceId: string): Promise<void>;
   context(workspaceId: string): Promise<WorkspaceContext>;
   search(query: MemoryQuery): Promise<Page<MemorySearchHit>>;

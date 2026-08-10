@@ -29,6 +29,7 @@ const CHECKPOINT_MARKER_PREFIX: &str = "<!-- kodmem-checkpoint ";
 mod codec;
 mod io;
 mod journal;
+pub(crate) mod migration;
 
 pub(crate) use codec::portable_projected_memory_id;
 use codec::*;
@@ -96,7 +97,7 @@ struct Journal {
     operations: Vec<JournalOperation>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct JournalOperation {
@@ -132,6 +133,8 @@ struct RecordMarker {
     updated_at: i64,
     deleted_at: Option<i64>,
     links: Vec<MemoryLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migration: Option<MigrationProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -152,6 +155,28 @@ struct CheckpointMarker {
     decisions: Vec<String>,
     next_actions: Vec<String>,
     changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migration: Option<MigrationProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct MigrationProvenance {
+    migration_id: String,
+    legacy_id: String,
+    source_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    origins: Vec<MigrationOrigin>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct MigrationOrigin {
+    source_kind: String,
+    legacy_id: String,
+    source_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -160,15 +185,19 @@ struct CheckpointMarker {
 struct StateMarker {
     schema: u8,
     checkpoint_id: String,
+    #[serde(default)]
+    lineage_sha256: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-struct CheckpointDecisionMarker {
+pub(super) struct CheckpointDecisionMarker {
     schema: u8,
     checkpoint_id: String,
     index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migration: Option<MigrationProvenance>,
 }
 
 #[derive(Clone, Debug)]
@@ -383,7 +412,28 @@ impl MemoryStore {
                 project_note.as_bytes(),
                 &location.project_id,
             )?;
-            Ok(Some(location))
+            let cutover = migration::parse_cutover_marker(&project_note, &location.project_id)?;
+            if !migration::migration_artifacts_authorized(&location, &project_note)? {
+                return Err(MemoryError::InvalidInput(
+                    "mapped project contains migration-owned Markdown without a matching completed cutover receipt"
+                        .into(),
+                ));
+            }
+            let legacy = self.local_legacy_snapshot(&location.project_id)?;
+            if legacy.receipts.is_empty() {
+                return Ok(Some(location));
+            }
+            if cutover
+                .as_ref()
+                .is_some_and(|marker| migration::receipts_cover(marker, &legacy.receipts))
+            {
+                Ok(Some(location))
+            } else {
+                Err(MemoryError::InvalidInput(
+                    "mapped project has eligible repo-local KödMem data that is not covered by a projects-vault cutover receipt; preview and apply the legacy migration before continuing"
+                        .into(),
+                ))
+            }
         } else if self.has_portable_authority_evidence(&location)? {
             Err(MemoryError::InvalidInput(
                 "Project.md authority marker disappeared after portable writes; restore it before continuing"
@@ -470,6 +520,7 @@ impl MemoryStore {
                 MemoryError::InvalidInput("mapped project STATE.md is unavailable".into())
             })?;
         let state_hash = sha256_bytes(state_text.as_bytes());
+        let state_lineage = migration::state_lineage_sha256(&state_text)?;
         if update_state {
             let expected = expected_state_sha256.ok_or_else(|| {
                 MemoryError::InvalidInput(
@@ -502,6 +553,7 @@ impl MemoryStore {
             decisions: input.decisions.clone(),
             next_actions: input.next_actions.clone(),
             changed_paths: input.changed_paths.clone(),
+            migration: None,
         };
         let date = utc_date(SystemTime::now());
         let worklog_relative = fill_pattern(
@@ -520,7 +572,12 @@ impl MemoryStore {
                 mode: JournalOperationMode::Replace,
                 relative_path: policy.state_file.clone(),
                 expected_sha256: Some(expected_state_sha256.expect("checked above").into()),
-                contents: Some(render_state(&location, &marker, &input)),
+                contents: Some(render_state(
+                    &location,
+                    &marker,
+                    &input,
+                    state_lineage.as_deref(),
+                )),
             });
         }
         for (index, decision) in input.decisions.iter().enumerate() {
@@ -602,6 +659,7 @@ impl MemoryStore {
             updated_at: now,
             deleted_at: None,
             links: input.links,
+            migration: None,
         };
         let relative = record_relative_path(input.kind, &logical_id, false)?;
         let contents = render_memory_note(&location, &marker, input.title.trim(), &input.body)?;
@@ -872,7 +930,7 @@ impl MemoryStore {
         validate_project_root(location)
     }
 
-    fn lock_portable_project(&self, location: &ProjectLocation) -> Result<File> {
+    pub(crate) fn lock_portable_project(&self, location: &ProjectLocation) -> Result<File> {
         validate_project_root(location)?;
         let lock_root = portable_runtime_root(true)?;
         let path = lock_root.join(format!("{}.lock", portable_root_key(location)?));
@@ -1287,7 +1345,7 @@ fn required_content_hash(value: Option<&str>) -> Result<&str> {
     Ok(value)
 }
 
-fn validate_project_root(location: &ProjectLocation) -> Result<()> {
+pub(super) fn validate_project_root(location: &ProjectLocation) -> Result<()> {
     let canonical_vault = PathBuf::from(super::projects::validate_projects_vault_root(
         &location.vault_root,
     )?);

@@ -93,6 +93,7 @@ pub(super) fn render_state(
     location: &ProjectLocation,
     marker: &CheckpointMarker,
     input: &NewCheckpoint,
+    lineage_sha256: Option<&str>,
 ) -> String {
     let policy = portable_policy().expect("embedded portable authority policy is valid");
     let mut output = render_template(
@@ -106,10 +107,23 @@ pub(super) fn render_state(
             ("project_id", location.project_id.clone()),
             (
                 "marker",
-                format!(
-                    "<!-- kodmem-state {{\"schema\":1,\"checkpointId\":{}}} -->",
-                    serde_json::to_string(&marker.checkpoint_id).expect("checkpoint ID serializes")
-                ),
+                serde_json::json!({
+                    "schema": 1,
+                    "checkpointId": marker.checkpoint_id,
+                    "lineageSha256": lineage_sha256,
+                })
+                .as_object()
+                .map(|value| {
+                    let mut value = value.clone();
+                    if lineage_sha256.is_none() {
+                        value.remove("lineageSha256");
+                    }
+                    format!(
+                        "<!-- kodmem-state {} -->",
+                        serde_json::to_string(&value).expect("state marker serializes")
+                    )
+                })
+                .expect("state marker is an object"),
             ),
             ("project_name", location.project_display_name.clone()),
             ("summary", input.summary.trim().into()),
@@ -142,8 +156,13 @@ pub(super) fn render_checkpoint_decision(
             (
                 "marker",
                 format!(
-                    "<!-- kodmem-checkpoint-decision {{\"schema\":1,\"checkpointId\":{},\"index\":{index}}} -->",
-                    serde_json::to_string(&marker.checkpoint_id)?
+                    "<!-- kodmem-checkpoint-decision {} -->",
+                    serde_json::to_string(&CheckpointDecisionMarker {
+                        schema: 1,
+                        checkpoint_id: marker.checkpoint_id.clone(),
+                        index,
+                        migration: marker.migration.clone(),
+                    })?
                 ),
             ),
             ("title", title),
@@ -259,6 +278,12 @@ pub(super) fn collect_checkpoints_with_budget(
     let mut checkpoints = Vec::new();
     for path in paths {
         let text = read_bounded_canonical_file(location, &path, budget)?;
+        if super::migration::migration_source_modified_at(&text)?.is_some() {
+            // Imported legacy wrappers are project documents. Their verbatim
+            // body may document old checkpoint syntax, but never owns live
+            // canonical checkpoint entries.
+            continue;
+        }
         super::super::validate_no_likely_credential("canonical Worklog", &text).map_err(|_| {
             MemoryError::InvalidInput(format!(
                 "canonical Worklog contains likely credentials: {}",
@@ -362,7 +387,10 @@ pub(super) fn validate_checkpoint_artifacts(
                     "checkpoint decision artifact is missing its canonical marker".into(),
                 )
             })?;
-            if marker.checkpoint_id != checkpoint.marker.checkpoint_id || marker.index != index {
+            if marker.checkpoint_id != checkpoint.marker.checkpoint_id
+                || marker.index != index
+                || marker.migration != checkpoint.marker.migration
+            {
                 return Err(MemoryError::InvalidInput(
                     "checkpoint decision artifact does not match its Worklog entry".into(),
                 ));
@@ -579,19 +607,9 @@ pub(super) fn frontmatter_title(text: &str) -> Option<String> {
 }
 
 pub(super) fn note_body(text: &str) -> String {
-    let mut after_heading = false;
-    text.lines()
-        .filter_map(|line| {
-            if !after_heading && line.starts_with("# ") {
-                after_heading = true;
-                return None;
-            }
-            after_heading.then_some(line)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+    let mut lines = text.lines();
+    let _ = lines.find(|line| line.starts_with("# "));
+    lines.collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
 pub(super) fn collect_markdown_recursive(
@@ -691,6 +709,32 @@ pub(super) fn record_relative_path(kind: MemoryKind, id: &str, archived: bool) -
         },
         &[("record_id", id)],
     )
+}
+
+pub(super) fn checkpoint_worklog_relative(created_at: i64) -> Result<String> {
+    let stamp = crate::config::iso_timestamp(
+        UNIX_EPOCH + std::time::Duration::from_millis(created_at.max(0) as u64),
+    );
+    let date = stamp.get(..10).unwrap_or("1970-01-01");
+    fill_pattern(
+        &portable_policy()?.checkpoint.worklog_pattern,
+        &[("year", &date[..4]), ("date", date)],
+    )
+}
+
+pub(super) fn checkpoint_decision_relative(checkpoint_id: &str, index: usize) -> Result<String> {
+    let formatted_index = format!("{:02}", index + 1);
+    fill_pattern(
+        &portable_policy()?.checkpoint.decision_pattern,
+        &[
+            ("checkpoint_id", checkpoint_id),
+            ("index", formatted_index.as_str()),
+        ],
+    )
+}
+
+pub(super) fn state_relative_path() -> Result<String> {
+    Ok(portable_policy()?.state_file.clone())
 }
 
 pub(super) fn checkpoint_payload_hash(input: &NewCheckpoint, update_state: bool) -> Result<String> {

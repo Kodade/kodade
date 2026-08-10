@@ -10,7 +10,8 @@ use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopPlatform};
 
 use super::{
     ActivityEvent, AuditEntry, AuditQuery, Checkpoint, CheckpointQuery, CheckpointSearchHit,
-    DeletedMemoryQuery, ExportBundle, MemoryError, MemoryQuery, MemoryRecord, MemoryRevision,
+    DeletedMemoryQuery, ExportBundle, LegacyMigrationApply, LegacyMigrationPlan,
+    LegacyMigrationRollback, MemoryError, MemoryQuery, MemoryRecord, MemoryRevision,
     MemorySearchHit, MemoryStore, MutationProvenance, NewActivity, NewCheckpoint, NewMemory, Page,
     ProjectScaffoldApply, ProjectScaffoldPlan, ProjectsVault, RetentionReport, RetentionSettings,
     Tombstone, WorkingMemoryMode, WorkingMemoryStatus, Workspace, WorkspaceContext,
@@ -276,6 +277,42 @@ pub async fn memory_apply_project_scaffold(
 ) -> Result<ProjectScaffoldApply, String> {
     run_memory(app, move |store| {
         store.apply_project_scaffold(&workspace_id, &expected_fingerprint)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_preview_legacy_migration(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<LegacyMigrationPlan, String> {
+    run_memory(app, move |store| {
+        store.preview_legacy_migration(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_apply_legacy_migration(
+    app: AppHandle,
+    workspace_id: String,
+    expected_fingerprint: String,
+) -> Result<LegacyMigrationApply, String> {
+    run_memory(app, move |store| {
+        store.apply_legacy_migration(&workspace_id, &expected_fingerprint)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_rollback_legacy_migration(
+    app: AppHandle,
+    workspace_id: String,
+    migration_id: String,
+    expected_manifest_sha256: String,
+) -> Result<LegacyMigrationRollback, String> {
+    run_memory(app, move |store| {
+        store.rollback_legacy_migration(&workspace_id, &migration_id, &expected_manifest_sha256)
     })
     .await
 }

@@ -60,6 +60,9 @@ function mockMemoryIpc(): MemoryIpc {
     projectWorkspaceMappings: vi.fn().mockResolvedValue([]),
     previewProjectScaffold: vi.fn(),
     applyProjectScaffold: vi.fn(),
+    previewLegacyMigration: vi.fn(),
+    applyLegacyMigration: vi.fn(),
+    rollbackLegacyMigration: vi.fn(),
     openProjectInObsidian: vi.fn(),
     context: vi.fn().mockResolvedValue(context),
     search: vi

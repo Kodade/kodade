@@ -163,7 +163,7 @@ pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
-    result.map_err(Into::into)
+    result
 }
 
 pub(super) fn portable_runtime_root(create: bool) -> Result<PathBuf> {

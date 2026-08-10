@@ -142,8 +142,13 @@ pub(super) fn validate_journal_topology(
                     "state-updating checkpoint journal must CAS-replace STATE".into(),
                 ));
             }
+            let lineage = super::migration::state_lineage_sha256(
+                states[0].contents.as_deref().expect("checked above"),
+            )?;
             if states[0].contents.as_deref()
-                != Some(render_state(location, marker, &checkpoint_input).as_str())
+                != Some(
+                    render_state(location, marker, &checkpoint_input, lineage.as_deref()).as_str(),
+                )
             {
                 return Err(MemoryError::InvalidInput(
                     "checkpoint STATE bytes do not match structured payload".into(),

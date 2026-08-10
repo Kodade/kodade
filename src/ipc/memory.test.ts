@@ -225,6 +225,31 @@ describe("typed memory IPC", () => {
     });
   });
 
+  it("previews applies and rolls back legacy migration through native-only commands", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await tauriMemory.previewLegacyMigration("ws_checkout");
+    await tauriMemory.applyLegacyMigration("ws_checkout", "plan-fingerprint");
+    await tauriMemory.rollbackLegacyMigration(
+      "ws_checkout",
+      "kmig_1234",
+      "manifest-sha",
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(1, CMD.memoryPreviewLegacyMigration, {
+      workspaceId: "ws_checkout",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, CMD.memoryApplyLegacyMigration, {
+      workspaceId: "ws_checkout",
+      expectedFingerprint: "plan-fingerprint",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, CMD.memoryRollbackLegacyMigration, {
+      workspaceId: "ws_checkout",
+      migrationId: "kmig_1234",
+      expectedManifestSha256: "manifest-sha",
+    });
+  });
+
   it("maps the bundled KödMCP helper lookup without a payload", async () => {
     invoke.mockResolvedValue({ path: "/Applications/Ködade/kodade-mcp", exists: true });
 

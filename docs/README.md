@@ -53,9 +53,15 @@ conflicting writes fail instead of overwriting them.
 
 An existing `Project.md` is accepted for mapping when its `project_id` matches,
 but Ködade does not inject the authority marker into an existing note. Projects
-that already contain legacy durable KödMem data still require the separately
-validated migration and cutover workflow planned for the next development
-slice; source data is not deleted or silently superseded.
+that contain legacy durable KödMem data remain blocked until the native setup
+screen previews and applies a validated migration. The preview names the target
+logical project, proposed Markdown operations, duplicates, and conflicts. Apply
+creates a durable local recovery backup, writes bounded provenance-tagged notes,
+rebuilds the SQLite projection, and commits the portable cutover receipt last.
+Interrupted work can be retried or rolled back without overwriting later human
+edits. Legacy `.kodade/memory` files and SQLite rows are retained as recovery
+sources but are excluded from active context, search, lookup, and export after
+cutover. Migration is intentionally unavailable through KödMCP.
 
 Portable writes use stable idempotency markers, a machine-local project lock,
 and a recoverable journal. Rebuild validates confined regular files, bounded

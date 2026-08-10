@@ -1,9 +1,10 @@
-use std::fs::OpenOptions;
+use std::fs::{File, FileTimes, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use kodade_lib::memory::{
     ActivityKind, AuditQuery, CheckpointQuery, DeletedMemoryQuery, MemoryError, MemoryKind,
     MemoryLink, MemoryQuery, MemoryRevision, MemorySource, MemoryStore, MutationProvenance,
@@ -90,6 +91,29 @@ fn portable_journal_path(project_root: &Path) -> PathBuf {
     std::env::temp_dir()
         .join("kodade-kodmem-project-locks")
         .join(format!("{key}-.kodmem-write-journal.json"))
+}
+
+fn migration_backup_integrity(backup: &serde_json::Value) -> String {
+    let payload = serde_json::json!([
+        backup["schema"].clone(),
+        backup["projectId"].clone(),
+        backup["migrationId"].clone(),
+        backup["manifestSha256"].clone(),
+        backup["previewFingerprint"].clone(),
+        backup["projectNoteSha256"].clone(),
+        backup["projectNoteBase64"].clone(),
+        backup["phase"].clone(),
+        backup["plan"].clone(),
+        backup["writes"].clone(),
+        backup["sourceSnapshots"].clone(),
+        backup["sourceFiles"].clone(),
+        backup["exports"].clone(),
+        backup["targets"].clone(),
+    ]);
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&payload).unwrap())
+    )
 }
 
 #[test]
@@ -4415,6 +4439,3029 @@ fn project_scaffold_preview_lists_every_missing_role_without_writing() {
 }
 
 #[test]
+fn legacy_migration_preview_is_complete_and_does_not_write() {
+    let fixture = MappedProjectsVault::new("legacy-migration-preview", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .expect("activate legacy readable memory before portable cutover");
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# Project state\n\nUpdated: 2026-08-10T12:00:00Z\n\nThe legacy compiler migration is in review.\n",
+    )
+    .expect("write substantive legacy state");
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+        "# Project worklog\n\n## 2026-08-10\n\n- Preserved the old checkpoint marker.\n",
+    )
+    .expect("write legacy worklog");
+
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .expect("preview scaffold");
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .expect("create portable scaffold");
+    let project_before = std::fs::read(fixture.project_root().join("Project.md")).unwrap();
+    let state_before = std::fs::read(fixture.project_root().join("STATE.md")).unwrap();
+    let app_data_before = tree_hashes(fixture._app_data.root());
+    let vault_before = tree_hashes(&fixture.vault_root);
+
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("preview legacy migration");
+
+    assert_eq!(preview.project_id, "portable-project");
+    assert_eq!(
+        preview.status,
+        kodade_lib::memory::LegacyMigrationStatus::Ready
+    );
+    assert!(preview.can_apply);
+    assert!(preview.source_retained);
+    assert_eq!(preview.counts.source_files, 2);
+    assert_eq!(preview.sources.len(), 1);
+    assert!(preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/STATE.md")
+            && operation.target_relative_path == "STATE.md"
+    }));
+    assert!(preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/WORKLOG.md")
+    }));
+    assert_eq!(
+        std::fs::read(fixture.project_root().join("Project.md")).unwrap(),
+        project_before,
+        "preview must not add the cutover receipt"
+    );
+    assert_eq!(
+        std::fs::read(fixture.project_root().join("STATE.md")).unwrap(),
+        state_before,
+        "preview must not replace the scaffold placeholder"
+    );
+    assert_eq!(tree_hashes(fixture._app_data.root()), app_data_before);
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+    assert!(!fixture
+        ._app_data
+        .root()
+        .join("kodade-kodmem-migrations")
+        .exists());
+}
+
+#[test]
+fn legacy_migration_preserves_repo_file_timestamps_in_provenance_and_index_metadata() {
+    let fixture = MappedProjectsVault::new("legacy-migration-file-timestamps", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let generated_checkpoint = fixture
+        .store
+        .checkpoint(NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "Timestamp state signal".into(),
+            decisions: Vec::new(),
+            next_actions: vec!["Preserve the producer timestamp".into()],
+            changed_paths: vec!["STATE.md".into()],
+            source: MemorySource::Agent,
+            source_client: "migration-timestamp-test".into(),
+            session_id: None,
+            idempotency_key: Some("legacy-producer-timestamp".into()),
+        })
+        .unwrap();
+    let generated_state =
+        std::fs::read_to_string(fixture.checkout.join(".kodade/memory/STATE.md")).unwrap();
+    let generated_stamp = generated_state
+        .lines()
+        .find_map(|line| line.strip_prefix("Updated: "))
+        .expect("legacy producer writes its timestamp");
+    assert_eq!(generated_stamp.len(), 24);
+    assert_eq!(&generated_stamp[13..14], "-");
+    assert_eq!(&generated_stamp[19..20], "-");
+    let sources = [
+        (
+            "WORKLOG.md",
+            "# Worklog\n\nUpdated: 1700000002000\n\nTimestamp worklog signal.\n",
+            1_700_000_002_000_i64,
+        ),
+        (
+            "decisions.md",
+            "# Decisions\n\nUpdated: 1700000003000\n\nTimestamp decision signal.\n",
+            1_700_000_003_000_i64,
+        ),
+        (
+            "plans/timestamp-plan.md",
+            "# Plan\n\nUpdated: 1700000004000\n\nTimestamp plan signal.\n",
+            1_700_000_004_000_i64,
+        ),
+    ];
+    for (relative, content, modified_at) in sources {
+        let path = fixture.checkout.join(".kodade/memory").join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(
+                FileTimes::new()
+                    .set_modified(UNIX_EPOCH + Duration::from_millis(modified_at as u64)),
+            )
+            .unwrap();
+    }
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+
+    let migrated = tree_text(&fixture.project_root());
+    for modified_at in [
+        generated_checkpoint.created_at,
+        1_700_000_002_000,
+        1_700_000_003_000,
+        1_700_000_004_000,
+    ] {
+        assert!(migrated.contains(&format!("sourceModifiedAt\":{modified_at}")));
+        assert!(migrated.contains(&format!("legacy_source_updated_at: {modified_at}")));
+    }
+    let state_hit = fixture
+        .store
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "Timestamp state signal".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    let state_note = state_hit
+        .items
+        .iter()
+        .find(|item| {
+            item.project_source
+                .as_ref()
+                .is_some_and(|source| source.relative_path == "STATE.md")
+        })
+        .expect("migrated STATE is indexed with project provenance");
+    assert_eq!(state_note.updated_at, generated_checkpoint.created_at);
+}
+
+#[test]
+fn legacy_migration_applies_cutover_last_retains_sources_and_rebuilds_projection() {
+    let fixture = MappedProjectsVault::new("legacy-migration-apply", "Portable project");
+    let legacy_record = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Retain the migration source".into(),
+            body: "Legacy data stays available for recovery after cutover.".into(),
+            source: MemorySource::User,
+            source_client: "migration-test".into(),
+            session_id: Some("legacy-session".into()),
+            pinned: true,
+            idempotency_key: Some("legacy-record".into()),
+            links: Vec::new(),
+        })
+        .expect("seed legacy database row");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .expect("activate legacy readable memory");
+    let legacy_state_path = fixture.checkout.join(".kodade/memory/STATE.md");
+    let legacy_state =
+        "# Project state\n\nUpdated: 2026-08-10T12:00:00Z\n\nThe portable cutover is ready.\n";
+    std::fs::write(&legacy_state_path, legacy_state).unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+
+    let blocked = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Must not choose an authority lane".into(),
+            body: "This write happens while migration is required.".into(),
+            source: MemorySource::Agent,
+            source_client: "migration-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: None,
+            links: Vec::new(),
+        })
+        .expect_err("legacy and portable writes fail closed before cutover");
+    assert!(blocked.to_string().contains("cutover receipt"));
+
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(preview.counts.memories, 1);
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("apply migration");
+
+    assert!(std::path::Path::new(&applied.backup_path).is_file());
+    assert!(applied.source_retained);
+    assert_eq!(
+        std::fs::read_to_string(&legacy_state_path).unwrap(),
+        legacy_state
+    );
+    let project = std::fs::read_to_string(fixture.project_root().join("Project.md")).unwrap();
+    assert!(project.contains("<!-- kodmem-cutover "));
+    assert!(project.contains(&applied.migration_id));
+    let context = fixture.store.context(&fixture.workspace.id).unwrap();
+    assert_eq!(context.working_memory, None);
+    assert!(context
+        .project_knowledge
+        .unwrap()
+        .sources
+        .iter()
+        .any(|source| source.content.contains("portable cutover is ready")));
+    assert!(context
+        .recent_memories
+        .iter()
+        .any(|record| record.title == "Retain the migration source"));
+    let export = fixture
+        .store
+        .export_workspace(&fixture.workspace.id)
+        .expect("portable export excludes retained legacy rows");
+    assert_eq!(
+        export.json.matches("Retain the migration source").count(),
+        1
+    );
+    let export_json: serde_json::Value = serde_json::from_str(&export.json).unwrap();
+    assert!(!export_json["memories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|memory| memory["id"] == legacy_record.id));
+    let imported_path = walk_files(&fixture.project_root().join("Decisions"))
+        .into_iter()
+        .find(|path| {
+            std::fs::read_to_string(path)
+                .is_ok_and(|text| text.contains("Retain the migration source"))
+        })
+        .unwrap();
+    let imported = std::fs::read_to_string(&imported_path).unwrap();
+    let imported_marker: serde_json::Value = imported
+        .lines()
+        .find(|line| line.starts_with("<!-- kodmem-memory "))
+        .map(|line| {
+            serde_json::from_str(
+                line.strip_prefix("<!-- kodmem-memory ")
+                    .unwrap()
+                    .strip_suffix(" -->")
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .unwrap();
+    let old_logical_id = imported_marker["recordId"].as_str().unwrap();
+    let forged_logical_id = format!("km_{}", "f".repeat(32));
+    let forged = imported.replace(old_logical_id, &forged_logical_id);
+    let forged_path = fixture
+        .project_root()
+        .join("Decisions")
+        .join(format!("{forged_logical_id}.md"));
+    std::fs::write(&forged_path, forged).unwrap();
+    assert!(fixture.store.context(&fixture.workspace.id).is_err());
+    std::fs::remove_file(forged_path).unwrap();
+    let repeated = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("repeating the same apply is a no-op");
+    assert_eq!(repeated.migration_id, applied.migration_id);
+    assert_eq!(repeated.written, 0);
+    let complete = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(
+        complete.status,
+        kodade_lib::memory::LegacyMigrationStatus::Complete
+    );
+    assert!(complete.operations.is_empty());
+}
+
+#[test]
+fn legacy_migration_preserves_checkpoint_state_and_idempotent_retry_semantics() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-checkpoint-history", "Portable project");
+    let memory_input = NewMemory {
+        workspace_id: fixture.workspace.id.clone(),
+        kind: MemoryKind::Fact,
+        title: "Stable imported fact".into(),
+        body: "Retrying this durable fact must resolve to the imported record.".into(),
+        source: MemorySource::User,
+        source_client: "migration-test".into(),
+        session_id: Some("legacy-session".into()),
+        pinned: false,
+        idempotency_key: Some("legacy-memory-key".into()),
+        links: Vec::new(),
+    };
+    let legacy_memory = fixture.store.remember(memory_input.clone()).unwrap();
+    let append_input = NewCheckpoint {
+        workspace_id: fixture.workspace.id.clone(),
+        summary: "Append-only imported checkpoint".into(),
+        decisions: vec!["Keep append-only history".into()],
+        next_actions: vec!["Verify its marker".into()],
+        changed_paths: vec!["src/history.rs".into()],
+        source: MemorySource::Agent,
+        source_client: "migration-test".into(),
+        session_id: Some("legacy-session".into()),
+        idempotency_key: Some("legacy-append-key".into()),
+    };
+    let state_input = NewCheckpoint {
+        workspace_id: fixture.workspace.id.clone(),
+        summary: "State-updating imported checkpoint".into(),
+        decisions: vec!["Preserve state update intent".into()],
+        next_actions: vec!["Verify delayed retry".into()],
+        changed_paths: vec!["STATE.md".into()],
+        source: MemorySource::Agent,
+        source_client: "migration-test".into(),
+        session_id: Some("legacy-session".into()),
+        idempotency_key: Some("legacy-state-key".into()),
+    };
+    let append = fixture
+        .store
+        .checkpoint_with_authority(append_input.clone(), false, None)
+        .unwrap();
+    let state = fixture
+        .store
+        .checkpoint_with_authority(state_input.clone(), true, None)
+        .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+
+    assert!(matches!(
+        fixture.store.checkpoint_by_id(&append.id),
+        Err(kodade_lib::memory::MemoryError::NotFound(_))
+    ));
+    assert!(matches!(
+        fixture.store.checkpoint_by_id(&state.id),
+        Err(kodade_lib::memory::MemoryError::NotFound(_))
+    ));
+    let export = fixture
+        .store
+        .export_workspace(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(
+        export
+            .json
+            .matches("Append-only imported checkpoint")
+            .count(),
+        1
+    );
+    assert_eq!(
+        export
+            .json
+            .matches("State-updating imported checkpoint")
+            .count(),
+        1
+    );
+    let export_json: serde_json::Value = serde_json::from_str(&export.json).unwrap();
+    let checkpoint_ids = export_json["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|checkpoint| checkpoint["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(!checkpoint_ids.contains(&append.id.as_str()));
+    assert!(!checkpoint_ids.contains(&state.id.as_str()));
+    let fresh_data = TempProject::new("legacy-migration-checkpoint-fresh-read-only");
+    let fresh = MemoryStore::open(fresh_data.db()).unwrap();
+    fresh.register_projects_vault(&fixture.vault_root).unwrap();
+    let fresh_workspace = fresh
+        .register_workspace(&fixture.checkout, "Fresh read-only checkout", None)
+        .unwrap();
+    fresh
+        .map_workspace_to_project(
+            &fresh_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    drop(fresh);
+    let read_only = MemoryStore::open_read_only(fresh_data.db()).unwrap();
+    let fresh_export = read_only.export_workspace(&fresh_workspace.id).unwrap();
+    assert_eq!(
+        fresh_export
+            .json
+            .matches("Append-only imported checkpoint")
+            .count(),
+        1
+    );
+    let fresh_export_json: serde_json::Value = serde_json::from_str(&fresh_export.json).unwrap();
+    let projected_checkpoint_id = fresh_export_json["checkpoints"].as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        read_only
+            .checkpoint_by_id(projected_checkpoint_id)
+            .unwrap()
+            .workspace_id,
+        fresh_workspace.id
+    );
+
+    let worklogs = walk_files(&fixture.project_root().join("Worklog"))
+        .into_iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect::<String>();
+    assert!(worklogs.contains("\"updatesState\":false"));
+    assert!(worklogs.contains("\"updatesState\":true"));
+    let append_key_hash = format!("{:x}", Sha256::digest(b"legacy-append-key"));
+    let state_key_hash = format!("{:x}", Sha256::digest(b"legacy-state-key"));
+    assert!(worklogs.contains(&format!("\"idempotencyKeyHash\":\"{append_key_hash}\"")));
+    assert!(worklogs.contains(&format!("\"idempotencyKeyHash\":\"{state_key_hash}\"")));
+
+    let imported_memory = fixture
+        .store
+        .search(MemoryQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "Stable imported fact".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(imported_memory.total, 1);
+    let imported_memory_id = imported_memory.items[0].id.clone();
+    let imported_checkpoints = fixture
+        .store
+        .search_checkpoints(CheckpointQuery {
+            workspace_id: fixture.workspace.id.clone(),
+            text: "imported checkpoint".into(),
+            limit: 20,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(imported_checkpoints.total, 2);
+    let imported_checkpoint_ids = imported_checkpoints
+        .items
+        .iter()
+        .map(|checkpoint| (checkpoint.summary.clone(), checkpoint.id.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let reopened = MemoryStore::open(fixture._app_data.db()).unwrap();
+    let memory_retry = reopened.remember(memory_input.clone()).unwrap();
+    assert_ne!(memory_retry.id, legacy_memory.id);
+    assert_eq!(memory_retry.id, imported_memory_id);
+    assert_eq!(memory_retry.title, "Stable imported fact");
+    let append_retry = reopened
+        .checkpoint_with_authority(append_input, false, None)
+        .unwrap();
+    let state_retry = reopened
+        .checkpoint_with_authority(state_input, true, None)
+        .unwrap();
+    assert_ne!(append_retry.id, append.id);
+    assert_ne!(state_retry.id, state.id);
+    assert_eq!(
+        append_retry.id,
+        imported_checkpoint_ids["Append-only imported checkpoint"]
+    );
+    assert_eq!(
+        state_retry.id,
+        imported_checkpoint_ids["State-updating imported checkpoint"]
+    );
+    assert_eq!(append_retry.summary, append.summary);
+    assert_eq!(state_retry.summary, state.summary);
+    let mut conflicting_memory = memory_input;
+    conflicting_memory.body = "A different payload must conflict.".into();
+    assert!(reopened
+        .remember(conflicting_memory)
+        .expect_err("same imported key with different memory payload conflicts")
+        .to_string()
+        .contains("different payload"));
+    assert_eq!(
+        reopened
+            .search_checkpoints(CheckpointQuery {
+                workspace_id: fixture.workspace.id.clone(),
+                text: "imported checkpoint".into(),
+                limit: 20,
+                offset: 0,
+            })
+            .unwrap()
+            .total,
+        2,
+        "idempotent retries must not append duplicate checkpoint markers"
+    );
+}
+
+#[test]
+fn legacy_checkpoint_and_repo_state_pair_migrates_without_competing_state_writes() {
+    let fixture = MappedProjectsVault::new("legacy-migration-paired-state", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let checkpoint = fixture
+        .store
+        .checkpoint(NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "Paired state summary".into(),
+            decisions: vec!["Keep the readable state snapshot".into()],
+            next_actions: vec!["Migrate the paired history".into()],
+            changed_paths: vec!["STATE.md".into()],
+            source: MemorySource::Agent,
+            source_client: "migration-test".into(),
+            session_id: None,
+            idempotency_key: Some("paired-state-checkpoint".into()),
+        })
+        .unwrap();
+    let source_state =
+        std::fs::read_to_string(fixture.checkout.join(".kodade/memory/STATE.md")).unwrap();
+    assert!(source_state.contains("Paired state summary"));
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert!(preview.can_apply);
+    assert_eq!(
+        preview
+            .operations
+            .iter()
+            .filter(|operation| operation.target_relative_path == "STATE.md")
+            .count(),
+        1
+    );
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let canonical_state = std::fs::read_to_string(fixture.project_root().join("STATE.md")).unwrap();
+    assert!(canonical_state.contains("Paired state summary"));
+    assert!(canonical_state.contains("<!-- kodmem-state "));
+    assert!(canonical_state.contains("<!-- kodmem-migration "));
+    assert_eq!(
+        fixture
+            .store
+            .context(&fixture.workspace.id)
+            .unwrap()
+            .latest_checkpoint
+            .unwrap()
+            .summary,
+        checkpoint.summary
+    );
+}
+
+#[test]
+fn legacy_migration_rollback_restores_preimages_and_refuses_later_edits() {
+    let fixture = MappedProjectsVault::new("legacy-migration-rollback", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let source_path = fixture.checkout.join(".kodade/memory/STATE.md");
+    std::fs::write(&source_path, "# State\n\nLegacy rollback source.\n").unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let state_path = fixture.project_root().join("STATE.md");
+    let placeholder = std::fs::read_to_string(&state_path).unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let migrated_state = std::fs::read_to_string(&state_path).unwrap();
+
+    std::fs::write(
+        &state_path,
+        "# Human edit\n\nPreserve this after migration.\n",
+    )
+    .unwrap();
+    let conflict = fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &applied.migration_id,
+            &applied.manifest_sha256,
+        )
+        .expect_err("rollback must not clobber later edits");
+    assert!(conflict.to_string().contains("later edits"));
+    assert!(std::fs::read_to_string(&state_path)
+        .unwrap()
+        .contains("Preserve this"));
+
+    let migrated = std::fs::read_to_string(&source_path).unwrap();
+    let state_target = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("removing migrated state provenance must block portable authority");
+    assert!(state_target.to_string().contains("artifacts"));
+    assert!(migrated.contains("Legacy rollback source"));
+
+    // Restore the recorded postimage to exercise the safe rollback path.
+    std::fs::write(&state_path, migrated_state).unwrap();
+    let rolled_back = fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &applied.migration_id,
+            &applied.manifest_sha256,
+        )
+        .expect("rollback unchanged migration outputs");
+    assert_eq!(rolled_back.restored, 1);
+    assert_eq!(std::fs::read_to_string(&state_path).unwrap(), placeholder);
+    assert!(
+        !std::fs::read_to_string(fixture.project_root().join("Project.md"))
+            .unwrap()
+            .contains("kodmem-cutover")
+    );
+}
+
+#[test]
+fn legacy_migration_aggregates_workspaces_and_cutover_is_machine_local_digest_safe() {
+    let fixture = MappedProjectsVault::new("legacy-migration-multi-workspace", "Portable project");
+    let second_root = fixture._app_data.root().join("second-checkout");
+    std::fs::create_dir(&second_root).unwrap();
+    let second = fixture
+        .store
+        .register_workspace(&second_root, "Second checkout", None)
+        .unwrap();
+    fixture
+        .store
+        .map_workspace_to_project(&second.id, None, "portable-project", "Portable project")
+        .unwrap();
+    for workspace in [&fixture.workspace, &second] {
+        fixture
+            .store
+            .activate_working_memory(&workspace.id, WorkingMemoryMode::Commit, false)
+            .unwrap();
+        std::fs::write(
+            Path::new(&workspace.canonical_root).join(".kodade/memory/STATE.md"),
+            "# State\n\nShared legacy source.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            Path::new(&workspace.canonical_root).join(".kodade/memory/WORKLOG.md"),
+            "# Worklog\n\n- Shared historical entry.\n",
+        )
+        .unwrap();
+    }
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(preview.sources.len(), 2);
+    assert!(preview.can_apply);
+    assert!(preview.operations.iter().any(|operation| {
+        operation.target_relative_path == "STATE.md" && operation.item_count == 1
+    }));
+    assert!(preview.operations.iter().any(|operation| {
+        operation
+            .target_relative_path
+            .starts_with("Worklog/Legacy/")
+            && operation.item_count == 1
+    }));
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+
+    let matching_data = TempProject::new("legacy-migration-machine-b");
+    let matching = MemoryStore::open(matching_data.db()).unwrap();
+    matching
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    let matching_workspace = matching
+        .register_workspace(&fixture.checkout, "Matching checkout", None)
+        .unwrap();
+    matching
+        .remember(NewMemory {
+            workspace_id: matching_workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Machine B durable detail".into(),
+            body: "Only this new SQLite receipt needs incremental migration.".into(),
+            source: MemorySource::User,
+            source_client: "migration-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("machine-b-new-row".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    matching
+        .map_workspace_to_project(
+            &matching_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let blocked = matching
+        .context(&matching_workspace.id)
+        .expect_err("the uncovered SQLite receipt still needs incremental cutover");
+    assert!(blocked.to_string().contains("cutover receipt"));
+    let incremental = matching
+        .preview_legacy_migration(&matching_workspace.id)
+        .expect("preview only the uncovered machine-B component");
+    assert_eq!(incremental.counts.source_files, 0);
+    assert_eq!(incremental.counts.memories, 1);
+    assert!(incremental
+        .operations
+        .iter()
+        .all(|operation| operation.source_kind == "sqlite-memory"));
+    matching
+        .apply_legacy_migration(&matching_workspace.id, &incremental.fingerprint)
+        .expect("incremental apply merges a second cutover receipt");
+    let machine_b_context = matching.context(&matching_workspace.id).unwrap();
+    assert!(machine_b_context
+        .recent_memories
+        .iter()
+        .any(|memory| memory.title == "Machine B durable detail"));
+    assert!(fixture.store.context(&fixture.workspace.id).is_ok());
+    assert!(
+        std::fs::read_to_string(fixture.project_root().join("Project.md"))
+            .unwrap()
+            .matches("\"migrationId\"")
+            .count()
+            >= 2
+    );
+
+    let different_data = TempProject::new("legacy-migration-machine-c");
+    let different_checkout = different_data.root().join("different-checkout");
+    std::fs::create_dir(&different_checkout).unwrap();
+    let different = MemoryStore::open(different_data.db()).unwrap();
+    let different_workspace = different
+        .register_workspace(&different_checkout, "Different checkout", None)
+        .unwrap();
+    different
+        .activate_working_memory(&different_workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        different_checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nMachine C has distinct legacy history.\n",
+    )
+    .unwrap();
+    different
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    different
+        .map_workspace_to_project(
+            &different_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let blocked = different
+        .context(&different_workspace.id)
+        .expect_err("an unknown machine-local digest cannot inherit cutover authority");
+    assert!(blocked.to_string().contains("cutover receipt"));
+    let incremental = different
+        .preview_legacy_migration(&different_workspace.id)
+        .unwrap();
+    assert_eq!(
+        incremental.status,
+        kodade_lib::memory::LegacyMigrationStatus::Blocked
+    );
+}
+
+#[test]
+fn interrupted_pre_cutover_migration_is_hidden_from_fresh_machine_and_rolls_back() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-projection-failure", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nPending migration must stay hidden.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .env("KODADE_MIGRATION_CHILD_FAILPOINT", "projection")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let project = std::fs::read_to_string(fixture.project_root().join("Project.md")).unwrap();
+    assert!(!project.contains("kodmem-cutover"));
+    assert!(
+        std::fs::read_to_string(fixture.project_root().join("STATE.md"))
+            .unwrap()
+            .contains("Pending migration")
+    );
+
+    let fresh_data = TempProject::new("legacy-migration-fresh-pre-cutover");
+    let fresh_checkout = fresh_data.root().join("checkout");
+    std::fs::create_dir(&fresh_checkout).unwrap();
+    let fresh = MemoryStore::open(fresh_data.db()).unwrap();
+    fresh.register_projects_vault(&fixture.vault_root).unwrap();
+    let fresh_workspace = fresh
+        .register_workspace(&fresh_checkout, "Fresh machine", None)
+        .unwrap();
+    fresh
+        .map_workspace_to_project(
+            &fresh_workspace.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let hidden = fresh
+        .context(&fresh_workspace.id)
+        .expect_err("pending migration-owned Markdown must fail closed on a fresh machine");
+    assert!(hidden.to_string().contains("migration-owned Markdown"));
+    let search_hidden = fresh
+        .search(MemoryQuery {
+            workspace_id: fresh_workspace.id,
+            text: "Pending migration".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .expect_err("pending migration must not enter fresh-machine search");
+    assert!(search_hidden
+        .to_string()
+        .contains("migration-owned Markdown"));
+
+    let recovery = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap()
+        .recovery
+        .expect("preview exposes durable recovery metadata");
+    assert!(recovery.can_retry);
+    assert!(recovery.can_rollback);
+    fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &recovery.migration_id,
+            &recovery.manifest_sha256,
+        )
+        .expect("pre-cutover rollback converges");
+    assert!(
+        !std::fs::read_to_string(fixture.project_root().join("STATE.md"))
+            .unwrap()
+            .contains("Pending migration")
+    );
+}
+
+#[test]
+fn deleted_only_partial_migration_is_hidden_from_a_fresh_machine_archive_scan() {
+    let fixture = MappedProjectsVault::new("legacy-migration-deleted-partial", "Portable project");
+    let record = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Deleted migration sentinel".into(),
+            body: "Archive-only migration artifacts remain hidden before cutover.".into(),
+            source: MemorySource::User,
+            source_client: "migration-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("deleted-only-migration".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    fixture
+        .store
+        .forget(&record.id, record.version, "migration-test", None)
+        .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .env("KODADE_MIGRATION_CHILD_FAILPOINT", "projection")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(walk_files(&fixture.project_root())
+        .iter()
+        .any(|path| path.to_string_lossy().contains("/Archive/km_")));
+
+    let fresh_data = TempProject::new("legacy-migration-deleted-fresh");
+    let fresh_checkout = fresh_data.root().join("checkout");
+    std::fs::create_dir(&fresh_checkout).unwrap();
+    let fresh = MemoryStore::open(fresh_data.db()).unwrap();
+    fresh.register_projects_vault(&fixture.vault_root).unwrap();
+    let workspace = fresh
+        .register_workspace(&fresh_checkout, "Fresh archive reader", None)
+        .unwrap();
+    fresh
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+        .unwrap();
+    assert!(fresh.context(&workspace.id).is_err());
+    assert!(fresh
+        .search(MemoryQuery {
+            workspace_id: workspace.id.clone(),
+            text: "Deleted migration sentinel".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 20,
+            offset: 0,
+        })
+        .is_err());
+    assert!(fresh
+        .deleted_memory_page(DeletedMemoryQuery {
+            workspace_id: workspace.id,
+            limit: 20,
+            offset: 0,
+        })
+        .is_err());
+}
+
+#[test]
+fn interrupted_pre_cutover_migration_retries_from_immutable_backup_then_rolls_back_exactly() {
+    for failpoint in [
+        "backup",
+        "pending",
+        "markdown-1",
+        "markdown-2",
+        "validation",
+        "projection",
+    ] {
+        let fixture = MappedProjectsVault::new(
+            &format!("legacy-migration-retry-{}", failpoint.replace('-', "_")),
+            "Portable project",
+        );
+        fixture
+            .store
+            .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+            .unwrap();
+        let state_source = fixture.checkout.join(".kodade/memory/STATE.md");
+        let worklog_source = fixture.checkout.join(".kodade/memory/WORKLOG.md");
+        std::fs::write(&state_source, "# State\n\nImmutable recovery source.\n").unwrap();
+        std::fs::write(
+            &worklog_source,
+            "# Worklog\n\n- Recovery must preserve the original preimages.\n",
+        )
+        .unwrap();
+        let scaffold = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+            .unwrap();
+        let project_before = tree_hashes(&fixture.project_root());
+        let state_source_before = std::fs::read(&state_source).unwrap();
+        let worklog_source_before = std::fs::read(&worklog_source).unwrap();
+        let preview = fixture
+            .store
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap();
+        let manifest = preview.manifest_sha256.clone().unwrap();
+
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("legacy_migration_child_process_helper")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+            .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+            .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+            .env("KODADE_MIGRATION_CHILD_FAILPOINT", failpoint)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(
+            !std::fs::read_to_string(fixture.project_root().join("Project.md"))
+                .unwrap()
+                .contains("kodmem-cutover")
+        );
+
+        let recovery = fixture
+            .store
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap();
+        assert_eq!(recovery.manifest_sha256.as_deref(), Some(manifest.as_str()));
+        assert!(recovery.recovery.as_ref().is_some_and(|state| {
+            state.can_retry && state.can_rollback && state.manifest_sha256 == manifest
+        }));
+        let applied = fixture
+            .store
+            .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+            .expect("retry resumes the immutable original backup");
+        assert_eq!(applied.manifest_sha256, manifest);
+        fixture
+            .store
+            .rollback_legacy_migration(
+                &fixture.workspace.id,
+                &applied.migration_id,
+                &applied.manifest_sha256,
+            )
+            .expect("completed retry remains byte-exactly rollbackable");
+        assert_eq!(tree_hashes(&fixture.project_root()), project_before);
+        assert_eq!(std::fs::read(&state_source).unwrap(), state_source_before);
+        assert_eq!(
+            std::fs::read(&worklog_source).unwrap(),
+            worklog_source_before
+        );
+    }
+}
+
+#[test]
+fn cutover_receipt_crash_repairs_local_phase_and_remains_exactly_rollbackable() {
+    let fixture = MappedProjectsVault::new("legacy-migration-cutover-receipt", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nCutover receipt crash state.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let before = tree_hashes(&fixture.project_root());
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let migration_id = preview.migration_id.clone().unwrap();
+    let manifest = preview.manifest_sha256.clone().unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .env("KODADE_MIGRATION_CHILD_FAILPOINT", "cutover-receipt")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(
+        std::fs::read_to_string(fixture.project_root().join("Project.md"))
+            .unwrap()
+            .contains("kodmem-cutover")
+    );
+
+    let recovered_apply = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("apply repairs the local post-receipt phase");
+    assert_eq!(recovered_apply.written, 0);
+    let repaired = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("preview sees the repaired completion");
+    assert_eq!(
+        repaired.status,
+        kodade_lib::memory::LegacyMigrationStatus::Complete
+    );
+    assert!(fixture
+        .store
+        .context(&fixture.workspace.id)
+        .unwrap()
+        .project_knowledge
+        .unwrap()
+        .sources
+        .iter()
+        .any(|source| source.content.contains("Cutover receipt crash state")));
+    fixture
+        .store
+        .rollback_legacy_migration(&fixture.workspace.id, &migration_id, &manifest)
+        .expect("repaired receipt remains rollbackable");
+    assert_eq!(tree_hashes(&fixture.project_root()), before);
+}
+
+#[test]
+fn interrupted_completed_rollback_is_discoverable_after_receipt_removal_and_resumes() {
+    for failpoint in [
+        "rollback-cutover",
+        "rollback-target-1",
+        "rollback-finalized",
+        "rollback-project-restored",
+    ] {
+        let fixture = MappedProjectsVault::new(
+            &format!(
+                "legacy-migration-rollback-restart-{}",
+                failpoint.replace('-', "_")
+            ),
+            "Portable project",
+        );
+        fixture
+            .store
+            .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+            .unwrap();
+        std::fs::write(
+            fixture.checkout.join(".kodade/memory/STATE.md"),
+            "# State\n\nRollback restart state.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+            "# Worklog\n\n- Rollback restart history.\n",
+        )
+        .unwrap();
+        let scaffold = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+            .unwrap();
+        let before = tree_hashes(&fixture.project_root());
+        let preview = fixture
+            .store
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap();
+        let applied = fixture
+            .store
+            .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+            .unwrap();
+
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("legacy_migration_child_process_helper")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+            .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+            .env("KODADE_MIGRATION_CHILD_ROLLBACK_ID", &applied.migration_id)
+            .env(
+                "KODADE_MIGRATION_CHILD_ROLLBACK_MANIFEST",
+                &applied.manifest_sha256,
+            )
+            .env("KODADE_MIGRATION_CHILD_FAILPOINT", failpoint)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let rolling_project =
+            std::fs::read_to_string(fixture.project_root().join("Project.md")).unwrap();
+        if failpoint == "rollback-project-restored" {
+            assert!(!rolling_project.contains("kodmem-migration-pending"));
+            fixture
+                .store
+                .rollback_legacy_migration(
+                    &fixture.workspace.id,
+                    &applied.migration_id,
+                    &applied.manifest_sha256,
+                )
+                .expect("terminal rollback is idempotent after its final Project.md write");
+            assert_eq!(tree_hashes(&fixture.project_root()), before);
+            continue;
+        }
+        assert!(rolling_project.contains("kodmem-migration-pending"));
+        assert!(rolling_project.contains("rollingBack"));
+        assert!(rolling_project.contains(&applied.migration_id));
+        assert!(!rolling_project.contains("kodmem-cutover"));
+
+        let recovery = MemoryStore::open(fixture._app_data.db())
+            .unwrap()
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap()
+            .recovery
+            .expect("restart preview discovers RollingBack without a cutover receipt");
+        assert!(!recovery.can_retry);
+        assert!(recovery.can_rollback);
+        fixture
+            .store
+            .rollback_legacy_migration(
+                &fixture.workspace.id,
+                &recovery.migration_id,
+                &recovery.manifest_sha256,
+            )
+            .expect("rollback resumes from its durable target CAS journal");
+        assert_eq!(tree_hashes(&fixture.project_root()), before);
+    }
+}
+
+#[test]
+fn greenfield_authority_rejects_any_malformed_reserved_cutover_marker() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-malformed-cutover", "Portable project");
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let project_path = fixture.project_root().join("Project.md");
+    let project = std::fs::read_to_string(&project_path).unwrap();
+    let project = project.replacen(
+        " -->\n\n# Portable project",
+        " -->\n<!-- kodmem-cutover {\"schema\":1,\"projectId\":\"wrong\"} -->\n\n# Portable project",
+        1,
+    );
+    std::fs::write(&project_path, project).unwrap();
+
+    let error = fixture
+        .store
+        .context(&fixture.workspace.id)
+        .expect_err("reserved cutover markers always parse fail closed");
+    assert!(error.to_string().contains("malformed kodmem-cutover"));
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_migration_rejects_symlinked_source_directories_without_residue() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = MappedProjectsVault::new("legacy-migration-source-symlink", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nSafe legacy content.\n",
+    )
+    .unwrap();
+    let external = fixture._app_data.root().join("external-plans");
+    std::fs::create_dir(&external).unwrap();
+    std::fs::write(external.join("escape.md"), "# Escaped\n\nDo not import.\n").unwrap();
+    let plans = fixture.checkout.join(".kodade/memory/plans");
+    std::fs::remove_dir(&plans).unwrap();
+    symlink(&external, &plans).unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let before = tree_hashes(&fixture.project_root());
+
+    let error = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("symlinked legacy plan roots fail closed");
+    assert!(error.to_string().contains("regular directory"));
+    assert_eq!(tree_hashes(&fixture.project_root()), before);
+    assert!(!fixture
+        ._app_data
+        .root()
+        .join("kodade-kodmem-migrations")
+        .exists());
+}
+
+#[test]
+fn legacy_migration_rejects_oversized_database_fields_and_generated_postimages_before_residue() {
+    let database_fixture =
+        MappedProjectsVault::new("legacy-migration-oversized-database", "Portable project");
+    let connection = rusqlite::Connection::open(database_fixture._app_data.db()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO memories (
+                id, workspace_id, kind, title, body, source, source_client,
+                pinned, version, created_at, updated_at
+             ) VALUES (?1, ?2, 'fact', 'Oversized', ?3, 'user', 'migration-test', 0, 1, 1, 1)",
+            rusqlite::params![
+                "mem_oversized_direct_sql",
+                database_fixture.workspace.id,
+                "x".repeat(300_000)
+            ],
+        )
+        .unwrap();
+    drop(connection);
+    let scaffold = database_fixture
+        .store
+        .preview_project_scaffold(&database_fixture.workspace.id)
+        .unwrap();
+    database_fixture
+        .store
+        .apply_project_scaffold(&database_fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let vault_before = tree_hashes(&database_fixture.vault_root);
+    let error = database_fixture
+        .store
+        .preview_legacy_migration(&database_fixture.workspace.id)
+        .expect_err("SQL-side field bounds reject before row materialization/export");
+    assert!(error.to_string().contains("per-field migration limit"));
+    assert_eq!(tree_hashes(&database_fixture.vault_root), vault_before);
+    assert!(!database_fixture
+        ._app_data
+        .root()
+        .join("kodade-kodmem-migrations")
+        .exists());
+
+    let wrapped_fixture =
+        MappedProjectsVault::new("legacy-migration-oversized-postimage", "Portable project");
+    wrapped_fixture
+        .store
+        .activate_working_memory(
+            &wrapped_fixture.workspace.id,
+            WorkingMemoryMode::Commit,
+            false,
+        )
+        .unwrap();
+    std::fs::write(
+        wrapped_fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+        format!("# Worklog\n\n{}\n", "h".repeat(261_900)),
+    )
+    .unwrap();
+    let scaffold = wrapped_fixture
+        .store
+        .preview_project_scaffold(&wrapped_fixture.workspace.id)
+        .unwrap();
+    wrapped_fixture
+        .store
+        .apply_project_scaffold(&wrapped_fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let vault_before = tree_hashes(&wrapped_fixture.vault_root);
+    let error = wrapped_fixture
+        .store
+        .preview_legacy_migration(&wrapped_fixture.workspace.id)
+        .expect_err("generated wrapper must fit before any backup or target write");
+    assert!(error.to_string().contains("generated migration target"));
+    assert_eq!(tree_hashes(&wrapped_fixture.vault_root), vault_before);
+    assert!(!wrapped_fixture
+        ._app_data
+        .root()
+        .join("kodade-kodmem-migrations")
+        .exists());
+}
+
+#[test]
+fn legacy_migration_includes_heading_only_history_but_omits_exact_empty_scaffolds() {
+    let fixture = MappedProjectsVault::new("legacy-migration-heading-history", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/decisions.md"),
+        "## Adopt SQLite\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/MEMORIES.md"),
+        "## Durable heading-only fact\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/plans/heading.md"),
+        "## Ship heading-only plan\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(preview.counts.source_files, 3);
+    assert!(preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/decisions.md")
+    }));
+    assert!(preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/MEMORIES.md")
+    }));
+    assert!(preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/plans/heading.md")
+    }));
+    assert!(!preview.operations.iter().any(|operation| {
+        operation.source_relative_path.as_deref() == Some(".kodade/memory/WORKLOG.md")
+    }));
+}
+
+#[test]
+fn migration_backup_phase_and_anchor_tampering_fail_before_rollback_mutation() {
+    let fixture = MappedProjectsVault::new("legacy-migration-backup-tamper", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nTamper-resistant migration recovery.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let vault_before = tree_hashes(&fixture.vault_root);
+    let backup_path = PathBuf::from(&applied.backup_path);
+    let mut backup: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&backup_path).unwrap()).unwrap();
+    backup["phase"] = serde_json::Value::String("prepared".into());
+    std::fs::write(&backup_path, serde_json::to_string_pretty(&backup).unwrap()).unwrap();
+    let phase_error = fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &applied.migration_id,
+            &applied.manifest_sha256,
+        )
+        .expect_err("phase-only backup tampering invalidates its integrity");
+    assert!(phase_error.to_string().contains("integrity"));
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+
+    backup["phase"] = serde_json::Value::String("complete".into());
+    std::fs::write(&backup_path, serde_json::to_string_pretty(&backup).unwrap()).unwrap();
+    let anchor_path = backup_path.with_file_name(format!(
+        "{}.anchor.json",
+        backup_path.file_stem().unwrap().to_string_lossy()
+    ));
+    let mut anchor: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&anchor_path).unwrap()).unwrap();
+    anchor["manifestSha256"] = serde_json::Value::String("b".repeat(64));
+    std::fs::write(&anchor_path, serde_json::to_string_pretty(&anchor).unwrap()).unwrap();
+    let anchor_error = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("independent preview anchor rejects self-consistent backup replacement");
+    assert!(anchor_error.to_string().contains("anchor"));
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+}
+
+#[test]
+fn self_consistent_recovery_envelope_tampering_is_rejected_before_any_project_mutation() {
+    let fixture = MappedProjectsVault::new("legacy-migration-envelope-tamper", "Portable project");
+    fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Recovery export sentinel".into(),
+            body: "The migration backup contains a bounded database export.".into(),
+            source: MemorySource::User,
+            source_client: "migration-test".into(),
+            session_id: None,
+            pinned: false,
+            idempotency_key: Some("recovery-envelope-tamper".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let source_path = fixture.checkout.join(".kodade/memory/STATE.md");
+    std::fs::write(&source_path, "# State\n\nRecovery envelope state.\n").unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let backup_path = PathBuf::from(&applied.backup_path);
+    let original = std::fs::read_to_string(&backup_path).unwrap();
+    let secret = "AKIAABCDEFGHIJKLMNOP";
+
+    for case in [
+        "project",
+        "target",
+        "source",
+        "export-json",
+        "export-markdown",
+    ] {
+        let mut backup: serde_json::Value = serde_json::from_str(&original).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(secret.as_bytes());
+        match case {
+            "project" => backup["projectNoteBase64"] = encoded.into(),
+            "target" => {
+                let target = backup["targets"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|target| !target["beforeBase64"].is_null())
+                    .unwrap();
+                target["beforeBase64"] = encoded.into();
+            }
+            "source" => {
+                let source = &mut backup["sourceFiles"][0];
+                source["bytesBase64"] = encoded.into();
+                source["sha256"] = format!("{:x}", Sha256::digest(secret.as_bytes())).into();
+            }
+            "export-json" => {
+                let mut value: serde_json::Value =
+                    serde_json::from_str(backup["exports"][0]["json"].as_str().unwrap()).unwrap();
+                value["credential"] = secret.into();
+                backup["exports"][0]["json"] = serde_json::to_string(&value).unwrap().into();
+            }
+            "export-markdown" => {
+                let markdown = backup["exports"][0]["markdown"].as_str().unwrap();
+                backup["exports"][0]["markdown"] = format!("{markdown}\n{secret}\n").into();
+            }
+            _ => unreachable!(),
+        }
+        backup["integritySha256"] = migration_backup_integrity(&backup).into();
+        std::fs::write(&backup_path, serde_json::to_string_pretty(&backup).unwrap()).unwrap();
+        let vault_before = tree_hashes(&fixture.vault_root);
+        let app_before = tree_hashes(fixture._app_data.root());
+        let database_before = std::fs::read(fixture._app_data.db()).unwrap();
+        let source_before = std::fs::read(&source_path).unwrap();
+        let error = fixture
+            .store
+            .rollback_legacy_migration(
+                &fixture.workspace.id,
+                &applied.migration_id,
+                &applied.manifest_sha256,
+            )
+            .expect_err("tampered recovery envelope must fail closed");
+        assert!(!error.to_string().contains(secret));
+        assert_eq!(tree_hashes(&fixture.vault_root), vault_before, "{case}");
+        assert_eq!(tree_hashes(fixture._app_data.root()), app_before, "{case}");
+        assert_eq!(
+            std::fs::read(fixture._app_data.db()).unwrap(),
+            database_before,
+            "{case}"
+        );
+        assert_eq!(
+            std::fs::read(&source_path).unwrap(),
+            source_before,
+            "{case}"
+        );
+    }
+    std::fs::write(backup_path, original).unwrap();
+}
+
+#[test]
+fn self_consistent_premature_rolled_back_phase_cannot_hide_unrestored_targets() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-premature-rolled-back", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+        "# Worklog\n\n- Target that must be restored before terminal rollback.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let target = fixture
+        .project_root()
+        .join(&preview.operations[0].target_relative_path);
+    let target_postimage = std::fs::read(&target).unwrap();
+    let backup_path = PathBuf::from(&applied.backup_path);
+    let mut backup: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&backup_path).unwrap()).unwrap();
+    let integrity_for = |backup: &serde_json::Value| {
+        let payload = serde_json::json!([
+            backup["schema"].clone(),
+            backup["projectId"].clone(),
+            backup["migrationId"].clone(),
+            backup["manifestSha256"].clone(),
+            backup["previewFingerprint"].clone(),
+            backup["projectNoteSha256"].clone(),
+            backup["projectNoteBase64"].clone(),
+            backup["phase"].clone(),
+            backup["plan"].clone(),
+            backup["writes"].clone(),
+            backup["sourceSnapshots"].clone(),
+            backup["sourceFiles"].clone(),
+            backup["exports"].clone(),
+            backup["targets"].clone(),
+        ]);
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&payload).unwrap())
+        )
+    };
+    assert_eq!(
+        integrity_for(&backup),
+        backup["integritySha256"].as_str().unwrap()
+    );
+    backup["phase"] = "rolledBack".into();
+    backup["integritySha256"] = integrity_for(&backup).into();
+    std::fs::write(&backup_path, serde_json::to_string_pretty(&backup).unwrap()).unwrap();
+    let project_preimage = base64::engine::general_purpose::STANDARD
+        .decode(backup["projectNoteBase64"].as_str().unwrap())
+        .unwrap();
+    std::fs::write(fixture.project_root().join("Project.md"), project_preimage).unwrap();
+
+    let error = fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &applied.migration_id,
+            &applied.manifest_sha256,
+        )
+        .expect_err("RolledBack phase cannot be trusted while a target remains at its postimage");
+    assert!(
+        error.to_string().contains("target preimage"),
+        "unexpected rollback error: {error}"
+    );
+    assert_eq!(std::fs::read(target).unwrap(), target_postimage);
+}
+
+#[test]
+fn read_only_migration_preview_is_pure_and_apply_or_rollback_never_leave_residue() {
+    let fixture = MappedProjectsVault::new("legacy-migration-read-only", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nRead-only migration preview.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let read_only = MemoryStore::open_read_only(fixture._app_data.db()).unwrap();
+    let vault_before = tree_hashes(&fixture.vault_root);
+    let app_before = tree_hashes(fixture._app_data.root());
+    let preview = read_only
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("read-only preview remains available");
+    assert!(preview.can_apply);
+    assert!(read_only
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap_err()
+        .to_string()
+        .contains("read-only"));
+    assert!(read_only
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            "kmig_00000000000000000000000000000000",
+            &"0".repeat(64),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("read-only"));
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+    assert_eq!(tree_hashes(fixture._app_data.root()), app_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn project_note_orphan_temporaries_are_preview_pure_and_reconciled_only_under_lock() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = MappedProjectsVault::new("legacy-migration-project-temp", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nOrphan Project.md write recovery.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+
+    let strict_temp = fixture.project_root().join(".kodmem-write-42-1.tmp");
+    let foreign_temp = fixture.project_root().join(".kodmem-write-not-ours.tmp");
+    let outside = fixture.checkout.join("outside-temp-target");
+    std::fs::write(&outside, "must not be touched").unwrap();
+    symlink(&outside, &strict_temp).unwrap();
+    std::fs::write(&foreign_temp, "foreign temp").unwrap();
+    let vault_before = tree_hashes(&fixture.vault_root);
+    let app_before = tree_hashes(fixture._app_data.root());
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("preview ignores but never mutates strict orphan temp names");
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+    assert_eq!(tree_hashes(fixture._app_data.root()), app_before);
+
+    let error = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect_err("a symlinked recognized temp must fail before recovery residue");
+    assert!(error.to_string().contains("temporary entry"));
+    assert_eq!(tree_hashes(&fixture.vault_root), vault_before);
+    assert_eq!(tree_hashes(fixture._app_data.root()), app_before);
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "must not be touched"
+    );
+
+    std::fs::remove_file(&strict_temp).unwrap();
+    std::fs::write(&strict_temp, "published write already won").unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("locked apply durably removes an exact regular orphan temp");
+    assert!(!strict_temp.exists());
+    assert_eq!(
+        std::fs::read_to_string(&foreign_temp).unwrap(),
+        "foreign temp"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_namespace_temporaries_are_never_mutated_by_unlocked_preview() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = MappedProjectsVault::new("legacy-migration-runtime-temp", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nRuntime recovery temporary purity.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .env("KODADE_MIGRATION_CHILD_FAILPOINT", "backup")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let backup_path = walk_files(fixture._app_data.root())
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("kmig_") && name.ends_with(".json"))
+        })
+        .expect("prepared backup is durable");
+    let runtime = backup_path.parent().unwrap();
+    let strict_temp = runtime.join(".kodmem-write-777-1.tmp");
+    std::fs::write(&strict_temp, "orphaned unpublished backup bytes").unwrap();
+    let backup_before = std::fs::read(&backup_path).unwrap();
+    let temp_before = std::fs::read(&strict_temp).unwrap();
+    let writable_recovery = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("writable preview discovers recovery without cleanup");
+    let read_only = MemoryStore::open_read_only(fixture._app_data.db()).unwrap();
+    let read_only_recovery = read_only
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("read-only preview discovers recovery without cleanup");
+    assert_eq!(writable_recovery.recovery, read_only_recovery.recovery);
+    assert_eq!(std::fs::read(&backup_path).unwrap(), backup_before);
+    assert_eq!(std::fs::read(&strict_temp).unwrap(), temp_before);
+
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("locked apply reconciles the exact regular temp before resuming");
+    assert!(!strict_temp.exists());
+
+    let outside = fixture.checkout.join("runtime-temp-outside");
+    std::fs::write(&outside, "outside stays unchanged").unwrap();
+    let symlink_temp = runtime.join(".kodmem-anchor-777-2.tmp");
+    symlink(&outside, &symlink_temp).unwrap();
+    let error = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("preview fails closed on a symlinked recovery temp");
+    assert!(error.to_string().contains("non-regular"));
+    assert!(symlink_temp
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "outside stays unchanged"
+    );
+}
+
+#[test]
+fn migration_authority_rejects_an_over_aggregate_canonical_tree_before_projection() {
+    let fixture = MappedProjectsVault::new("legacy-migration-authority-budget", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nCanonical budget baseline.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+
+    let research = fixture.project_root().join("Research");
+    for index in 0..17 {
+        std::fs::write(
+            research.join(format!("aggregate-{index:02}.md")),
+            format!("# Aggregate {index}\n\n{}\n", "x".repeat(250_000)),
+        )
+        .unwrap();
+    }
+    let app_before = tree_hashes(fixture._app_data.root());
+    for error in [
+        fixture.store.context(&fixture.workspace.id).unwrap_err(),
+        fixture
+            .store
+            .search(MemoryQuery {
+                workspace_id: fixture.workspace.id.clone(),
+                text: "canonical".into(),
+                kinds: Vec::new(),
+                sources: Vec::new(),
+                updated_after: None,
+                limit: 20,
+                offset: 0,
+            })
+            .unwrap_err(),
+        fixture
+            .store
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap_err(),
+    ] {
+        assert!(
+            error.to_string().contains("byte limit")
+                || error.to_string().contains("project scan budget"),
+            "unexpected bounded-authority error: {error}"
+        );
+    }
+    assert_eq!(tree_hashes(fixture._app_data.root()), app_before);
+}
+
+#[test]
+fn durable_recovery_is_shared_across_distinct_database_parents_for_one_project_root() {
+    let fixture = MappedProjectsVault::new("legacy-migration-shared-recovery", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nShared durable recovery namespace.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+
+    let recovery = TempProject::new("legacy-migration-shared-recovery-root");
+    let store_a =
+        MemoryStore::open_with_migration_recovery_root(fixture._app_data.db(), recovery.root())
+            .unwrap();
+    let preview = store_a
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let before = tree_hashes(&fixture.project_root());
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .env("KODADE_MIGRATION_CHILD_FAILPOINT", "markdown-1")
+        .env("KODADE_MIGRATION_CHILD_RECOVERY_ROOT", recovery.root())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let machine_b = TempProject::new("legacy-migration-shared-recovery-b");
+    let checkout_b = machine_b.root().join("checkout");
+    std::fs::create_dir(&checkout_b).unwrap();
+    let store_b =
+        MemoryStore::open_with_migration_recovery_root(machine_b.db(), recovery.root()).unwrap();
+    store_b
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    let workspace_b = store_b
+        .register_workspace(&checkout_b, "Recovery machine B", None)
+        .unwrap();
+    store_b
+        .map_workspace_to_project(
+            &workspace_b.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let discovered = store_b
+        .preview_legacy_migration(&workspace_b.id)
+        .expect("distinct DB parent discovers canonical-root recovery");
+    let recovery_state = discovered.recovery.unwrap();
+    assert!(!recovery_state.can_retry);
+    assert!(recovery_state.can_rollback);
+    store_b
+        .rollback_legacy_migration(
+            &workspace_b.id,
+            &recovery_state.migration_id,
+            &recovery_state.manifest_sha256,
+        )
+        .expect("second store converges shared recovery");
+    assert_eq!(tree_hashes(&fixture.project_root()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_apply_and_rollback_reject_project_root_symlink_swaps_after_lock() {
+    use std::os::unix::fs::symlink;
+
+    for rollback in [false, true] {
+        let fixture = MappedProjectsVault::new(
+            if rollback {
+                "legacy-migration-root-swap-rollback"
+            } else {
+                "legacy-migration-root-swap-apply"
+            },
+            "Portable project",
+        );
+        fixture
+            .store
+            .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+            .unwrap();
+        std::fs::write(
+            fixture.checkout.join(".kodade/memory/STATE.md"),
+            "# State\n\nRoot swaps must fail closed.\n",
+        )
+        .unwrap();
+        let scaffold = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+            .unwrap();
+        let preview = fixture
+            .store
+            .preview_legacy_migration(&fixture.workspace.id)
+            .unwrap();
+        let applied = rollback.then(|| {
+            fixture
+                .store
+                .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+                .unwrap()
+        });
+
+        let ready = fixture._app_data.root().join("root-swap-ready");
+        let release = fixture._app_data.root().join("root-swap-release");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("legacy_migration_child_process_helper")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+            .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+            .env("KODADE_TEST_PORTABLE_LOCK_READY", &ready)
+            .env("KODADE_TEST_PORTABLE_LOCK_RELEASE", &release);
+        if let Some(applied) = applied.as_ref() {
+            command
+                .env("KODADE_MIGRATION_CHILD_ROLLBACK_ID", &applied.migration_id)
+                .env(
+                    "KODADE_MIGRATION_CHILD_ROLLBACK_MANIFEST",
+                    &applied.manifest_sha256,
+                );
+        } else {
+            command.env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint);
+        }
+        let mut child = command.spawn().unwrap();
+        wait_for_file(&ready, Duration::from_secs(5));
+
+        let project_root = fixture.project_root();
+        let saved = fixture.vault_root.join(if rollback {
+            "root-swap-rollback-saved"
+        } else {
+            "root-swap-apply-saved"
+        });
+        let outside = fixture._app_data.root().join(if rollback {
+            "outside-rollback"
+        } else {
+            "outside-apply"
+        });
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"unchanged").unwrap();
+        let outside_before = tree_hashes(&outside);
+        std::fs::rename(&project_root, &saved).unwrap();
+        symlink(&outside, &project_root).unwrap();
+        std::fs::write(&release, b"release").unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "root swap must abort migration");
+        assert_eq!(tree_hashes(&outside), outside_before);
+        std::fs::remove_file(&project_root).unwrap();
+        std::fs::rename(&saved, &project_root).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_recovery_root_rejects_symlink_and_non_directory_substitution() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = TempProject::new("legacy-migration-recovery-root-guard");
+    let target = fixture.root().join("target");
+    let link = fixture.root().join("recovery-link");
+    std::fs::create_dir(&target).unwrap();
+    symlink(&target, &link).unwrap();
+    assert!(MemoryStore::open_with_migration_recovery_root(
+        fixture.root().join("symlink.sqlite3"),
+        &link,
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("regular directory"));
+
+    let file = fixture.root().join("recovery-file");
+    std::fs::write(&file, b"not a directory").unwrap();
+    assert!(MemoryStore::open_with_migration_recovery_root(
+        fixture.root().join("file.sqlite3"),
+        &file,
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("regular directory"));
+}
+
+#[test]
+fn migration_waiting_on_project_lock_rejects_a_completed_workspace_remap_without_residue() {
+    let fixture = MappedProjectsVault::new("legacy-migration-remap-race", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# State\n\nRemapping must serialize with migration.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let original_before = tree_hashes(&fixture.project_root());
+    let ready = fixture._app_data.root().join("remap-ready");
+    let release = fixture._app_data.root().join("remap-release");
+
+    let mut remap = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_remap_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_TEST_PORTABLE_LOCK_READY", &ready)
+        .env("KODADE_TEST_PORTABLE_LOCK_RELEASE", &release)
+        .spawn()
+        .unwrap();
+    wait_for_file(&ready, Duration::from_secs(5));
+    let mut migration = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("legacy_migration_child_process_helper")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env("KODADE_MIGRATION_CHILD_DB", fixture._app_data.db())
+        .env("KODADE_MIGRATION_CHILD_WORKSPACE", &fixture.workspace.id)
+        .env("KODADE_MIGRATION_CHILD_FINGERPRINT", &preview.fingerprint)
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(migration.try_wait().unwrap().is_none());
+    std::fs::write(&release, b"release").unwrap();
+    assert!(remap.wait().unwrap().success());
+    assert!(!migration.wait().unwrap().success());
+    assert_eq!(tree_hashes(&fixture.project_root()), original_before);
+    assert!(!fixture
+        ._app_data
+        .root()
+        .join("kodade-kodmem-migrations")
+        .exists());
+    assert_eq!(
+        fixture
+            .store
+            .workspace_project_mapping(&fixture.workspace.id)
+            .unwrap()
+            .unwrap()
+            .project_id,
+        "replacement-project"
+    );
+}
+
+#[test]
+fn clone_identical_repo_registrations_produce_byte_identical_vault_cutover() {
+    fn prepare(fixture: &MappedProjectsVault, add_clone: bool) {
+        let mut workspaces = vec![fixture.workspace.clone()];
+        if add_clone {
+            let checkout = fixture._app_data.root().join("clone-checkout");
+            std::fs::create_dir(&checkout).unwrap();
+            let clone = fixture
+                .store
+                .register_workspace(&checkout, "Clone checkout", None)
+                .unwrap();
+            fixture
+                .store
+                .map_workspace_to_project(&clone.id, None, "portable-project", "Portable project")
+                .unwrap();
+            workspaces.push(clone);
+        }
+        for (index, workspace) in workspaces.into_iter().enumerate() {
+            let modified = FileTimes::new().set_modified(
+                UNIX_EPOCH
+                    + Duration::from_secs(if index == 0 {
+                        1_700_000_000
+                    } else {
+                        1_800_000_000
+                    }),
+            );
+            fixture
+                .store
+                .activate_working_memory(&workspace.id, WorkingMemoryMode::Commit, false)
+                .unwrap();
+            for (name, contents) in [
+                ("STATE.md", "# State\n\nPortable clone state.\n"),
+                ("WORKLOG.md", "# Worklog\n\n- Portable clone history.\n"),
+            ] {
+                let path = Path::new(&workspace.canonical_root)
+                    .join(".kodade/memory")
+                    .join(name);
+                std::fs::write(&path, contents).unwrap();
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_times(modified)
+                    .unwrap();
+            }
+        }
+        let scaffold = fixture
+            .store
+            .preview_project_scaffold(&fixture.workspace.id)
+            .unwrap();
+        fixture
+            .store
+            .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+            .unwrap();
+    }
+
+    let single = MappedProjectsVault::new("legacy-migration-single-clone", "Portable project");
+    let doubled = MappedProjectsVault::new("legacy-migration-double-clone", "Portable project");
+    prepare(&single, false);
+    prepare(&doubled, true);
+    let single_plan = single
+        .store
+        .preview_legacy_migration(&single.workspace.id)
+        .unwrap();
+    let doubled_plan = doubled
+        .store
+        .preview_legacy_migration(&doubled.workspace.id)
+        .unwrap();
+    assert_eq!(single_plan.migration_id, doubled_plan.migration_id);
+    assert_eq!(single_plan.manifest_sha256, doubled_plan.manifest_sha256);
+    assert_eq!(single_plan.fingerprint, doubled_plan.fingerprint);
+    assert_eq!(single_plan.counts, doubled_plan.counts);
+    assert_eq!(single_plan.operations, doubled_plan.operations);
+    single
+        .store
+        .apply_legacy_migration(&single.workspace.id, &single_plan.fingerprint)
+        .unwrap();
+    doubled
+        .store
+        .apply_legacy_migration(&doubled.workspace.id, &doubled_plan.fingerprint)
+        .unwrap();
+    assert_eq!(
+        tree_hashes(&single.project_root()),
+        tree_hashes(&doubled.project_root())
+    );
+}
+
+#[test]
+fn incremental_repo_snapshot_imports_only_new_components_and_preserves_prior_artifacts() {
+    let fixture = MappedProjectsVault::new("legacy-migration-incremental-repo", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let memory_root = fixture.checkout.join(".kodade/memory");
+    std::fs::write(
+        memory_root.join("STATE.md"),
+        "# State\n\nInitial portable state.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        memory_root.join("WORKLOG.md"),
+        "# Worklog\n\n- Initial portable history.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let first = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &first.fingerprint)
+        .unwrap();
+    let prior_artifacts = first
+        .operations
+        .iter()
+        .filter(|operation| operation.conflict.is_none())
+        .map(|operation| {
+            (
+                operation.target_relative_path.clone(),
+                std::fs::read(fixture.project_root().join(&operation.target_relative_path))
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    std::fs::create_dir_all(memory_root.join("plans")).unwrap();
+    std::fs::write(
+        memory_root.join("plans/incremental.md"),
+        "# Incremental plan\n\nShip only this newly discovered component.\n",
+    )
+    .unwrap();
+    let second = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert!(second.can_apply);
+    assert_eq!(second.counts.source_files, 1);
+    assert_eq!(second.operations.len(), 1);
+    assert_eq!(
+        second.operations[0].source_relative_path.as_deref(),
+        Some(".kodade/memory/plans/incremental.md")
+    );
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &second.fingerprint)
+        .unwrap();
+    for (relative, before) in prior_artifacts {
+        assert_eq!(
+            std::fs::read(fixture.project_root().join(relative)).unwrap(),
+            before,
+            "incremental migration must not rewrite already imported components"
+        );
+    }
+
+    let fresh_data = TempProject::new("legacy-migration-incremental-repo-fresh");
+    let fresh = MemoryStore::open(fresh_data.db()).unwrap();
+    fresh.register_projects_vault(&fixture.vault_root).unwrap();
+    let workspace = fresh
+        .register_workspace(&fixture.checkout, "Fresh checkout", None)
+        .unwrap();
+    fresh
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+        .unwrap();
+    fresh
+        .context(&workspace.id)
+        .expect("both repo snapshot receipts authorize on a fresh database");
+    assert_eq!(
+        fresh
+            .preview_legacy_migration(&workspace.id)
+            .unwrap()
+            .status,
+        kodade_lib::memory::LegacyMigrationStatus::Complete
+    );
+}
+
+#[test]
+fn incremental_preview_fails_closed_when_a_prior_repo_artifact_is_missing() {
+    let fixture = MappedProjectsVault::new("legacy-migration-missing-prior", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let memory_root = fixture.checkout.join(".kodade/memory");
+    std::fs::write(
+        memory_root.join("WORKLOG.md"),
+        "# Worklog\n\n- History that must not disappear.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let first = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &first.fingerprint)
+        .unwrap();
+    let worklog_target = first
+        .operations
+        .iter()
+        .find(|operation| operation.source_kind == "worklog")
+        .unwrap();
+    std::fs::remove_file(
+        fixture
+            .project_root()
+            .join(&worklog_target.target_relative_path),
+    )
+    .unwrap();
+    std::fs::create_dir_all(memory_root.join("plans")).unwrap();
+    std::fs::write(
+        memory_root.join("plans/new.md"),
+        "# New plan\n\nThis cannot hide missing prior history.\n",
+    )
+    .unwrap();
+    let error = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("missing prior cutover target must block before component coverage");
+    assert!(error.to_string().contains("artifacts"));
+}
+
+#[test]
+fn wrapper_authority_rejects_self_consistent_cross_lane_cutover_forgery() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-wrapper-route-forge", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+        "# Worklog\n\n- Route-bound provenance.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+    let original = preview
+        .operations
+        .iter()
+        .find(|operation| operation.source_kind == "worklog")
+        .unwrap()
+        .target_relative_path
+        .clone();
+    let original_bytes = std::fs::read(fixture.project_root().join(&original)).unwrap();
+    let copied = fixture
+        .project_root()
+        .join("Knowledge/Legacy/copied-authorized-wrapper.md");
+    std::fs::create_dir_all(copied.parent().unwrap()).unwrap();
+    std::fs::write(&copied, &original_bytes).unwrap();
+    assert!(fixture.store.context(&fixture.workspace.id).is_err());
+    std::fs::remove_file(copied).unwrap();
+    let forged = format!(
+        "Plans/Legacy/{}",
+        Path::new(&original).file_name().unwrap().to_string_lossy()
+    );
+    std::fs::create_dir_all(fixture.project_root().join("Plans/Legacy")).unwrap();
+    std::fs::rename(
+        fixture.project_root().join(&original),
+        fixture.project_root().join(&forged),
+    )
+    .unwrap();
+    let project_path = fixture.project_root().join("Project.md");
+    let project = std::fs::read_to_string(&project_path).unwrap();
+    let rewritten = project
+        .lines()
+        .map(|line| {
+            if !line.starts_with("<!-- kodmem-cutover ") {
+                return line.to_string();
+            }
+            let json = line
+                .strip_prefix("<!-- kodmem-cutover ")
+                .unwrap()
+                .strip_suffix(" -->")
+                .unwrap();
+            let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+            for migration in value["migrations"].as_array_mut().unwrap() {
+                for target in migration["targets"].as_array_mut().unwrap() {
+                    if target["relativePath"].as_str() == Some(original.as_str()) {
+                        target["relativePath"] = forged.clone().into();
+                        target["sourceKind"] = "plan".into();
+                    }
+                }
+            }
+            format!(
+                "<!-- kodmem-cutover {} -->",
+                serde_json::to_string(&value).unwrap()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(project_path, rewritten).unwrap();
+    let error = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect_err("portable source identity cannot be retagged into another lane");
+    assert!(error.to_string().contains("artifacts"));
+}
+
+#[test]
+fn completed_preview_selects_latest_rollback_leaf_not_reverse_lexical_migration_id() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-rollback-leaf-order", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let memory_root = fixture.checkout.join(".kodade/memory");
+    std::fs::write(
+        memory_root.join("WORKLOG.md"),
+        "# Worklog\n\n- First applied migration.\n",
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let first = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let first_applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &first.fingerprint)
+        .unwrap();
+
+    std::fs::create_dir_all(memory_root.join("plans")).unwrap();
+    let first_id = first_applied.migration_id.clone();
+    let second = (0..256)
+        .find_map(|nonce| {
+            std::fs::write(
+                memory_root.join("plans/leaf-order.md"),
+                format!("# Leaf order\n\nCandidate {nonce}.\n"),
+            )
+            .unwrap();
+            let candidate = fixture
+                .store
+                .preview_legacy_migration(&fixture.workspace.id)
+                .unwrap();
+            candidate
+                .migration_id
+                .as_ref()
+                .is_some_and(|id| id < &first_id)
+                .then_some(candidate)
+        })
+        .expect("find a later content-derived ID that sorts before the first migration");
+    let second_applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &second.fingerprint)
+        .unwrap();
+    assert!(second_applied.migration_id < first_applied.migration_id);
+
+    let complete = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    let recovery = complete.recovery.expect("latest leaf is rollbackable");
+    assert_eq!(recovery.migration_id, second_applied.migration_id);
+    fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &recovery.migration_id,
+            &recovery.manifest_sha256,
+        )
+        .unwrap();
+    std::fs::remove_file(memory_root.join("plans/leaf-order.md")).unwrap();
+    let prior = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    assert_eq!(
+        prior.recovery.unwrap().migration_id,
+        first_applied.migration_id
+    );
+}
+
+#[test]
+fn incremental_checkpoint_snapshot_batches_provenance_merges_and_new_daily_entry() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-checkpoint-batch-a", "Portable project");
+    let inputs = [
+        NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "First cloned checkpoint".into(),
+            decisions: vec!["Keep the first history item".into()],
+            next_actions: vec!["Clone it once".into()],
+            changed_paths: vec!["src/first.rs".into()],
+            source: MemorySource::Agent,
+            source_client: "migration-batch-test".into(),
+            session_id: Some("migration-batch".into()),
+            idempotency_key: Some("migration-batch-first".into()),
+        },
+        NewCheckpoint {
+            workspace_id: fixture.workspace.id.clone(),
+            summary: "Second cloned checkpoint".into(),
+            decisions: vec!["Keep the second history item".into()],
+            next_actions: vec!["Clone it once".into()],
+            changed_paths: vec!["src/second.rs".into()],
+            source: MemorySource::Agent,
+            source_client: "migration-batch-test".into(),
+            session_id: Some("migration-batch".into()),
+            idempotency_key: Some("migration-batch-second".into()),
+        },
+    ];
+    for input in &inputs {
+        fixture
+            .store
+            .checkpoint_with_authority(input.clone(), false, None)
+            .unwrap();
+    }
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let first = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &first.fingerprint)
+        .unwrap();
+
+    let machine_b = TempProject::new("legacy-migration-checkpoint-batch-b");
+    let checkout_b = machine_b.root().join("checkout");
+    std::fs::create_dir(&checkout_b).unwrap();
+    let store_b = MemoryStore::open(machine_b.db()).unwrap();
+    store_b
+        .register_projects_vault(&fixture.vault_root)
+        .unwrap();
+    let workspace_b = store_b
+        .register_workspace(&checkout_b, "Portable project B", None)
+        .unwrap();
+    let connection = rusqlite::Connection::open(machine_b.db()).unwrap();
+    let source_db = fixture._app_data.db().to_string_lossy().into_owned();
+    connection
+        .execute("ATTACH DATABASE ?1 AS source_db", [&source_db])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO checkpoints (
+                id, workspace_id, summary, decisions_json, next_actions_json,
+                changed_paths_json, source, source_client, session_id,
+                idempotency_key, created_at, updates_state, canonical_project_id,
+                canonical_checkpoint_id, canonical_relative_path
+             )
+             SELECT id, ?1, summary, decisions_json, next_actions_json,
+                changed_paths_json, source, source_client, session_id,
+                idempotency_key, created_at, updates_state, NULL, NULL, NULL
+             FROM source_db.checkpoints
+             WHERE workspace_id = ?2 AND canonical_project_id IS NULL",
+            rusqlite::params![workspace_b.id, fixture.workspace.id],
+        )
+        .unwrap();
+    connection.execute("DETACH DATABASE source_db", []).unwrap();
+    drop(connection);
+    store_b
+        .checkpoint_with_authority(
+            NewCheckpoint {
+                workspace_id: workspace_b.id.clone(),
+                summary: "New incremental checkpoint".into(),
+                decisions: vec!["Append exactly one new history item".into()],
+                next_actions: vec!["Verify the batched Worklog CAS".into()],
+                changed_paths: vec!["src/new.rs".into()],
+                source: MemorySource::Agent,
+                source_client: "migration-batch-test".into(),
+                session_id: Some("migration-batch".into()),
+                idempotency_key: Some("migration-batch-new".into()),
+            },
+            false,
+            None,
+        )
+        .unwrap();
+    store_b
+        .map_workspace_to_project(
+            &workspace_b.id,
+            None,
+            "portable-project",
+            "Portable project",
+        )
+        .unwrap();
+    let second = store_b.preview_legacy_migration(&workspace_b.id).unwrap();
+    assert!(second.can_apply, "operations: {:?}", second.operations);
+    assert_eq!(
+        second
+            .operations
+            .iter()
+            .filter(|operation| operation.source_kind == "sqlite-checkpoint"
+                && operation.conflict.is_none()
+                && operation.action != kodade_lib::memory::LegacyMigrationAction::SkipDuplicate)
+            .count(),
+        1,
+        "all daily checkpoint changes must share one Worklog CAS postimage"
+    );
+    store_b
+        .apply_legacy_migration(&workspace_b.id, &second.fingerprint)
+        .unwrap();
+    let worklog = walk_files(&fixture.project_root().join("Worklog"))
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<String>();
+    assert_eq!(worklog.matches("<!-- kodmem-checkpoint {").count(), 3);
+    assert_eq!(worklog.matches("First cloned checkpoint").count(), 2);
+    assert_eq!(worklog.matches("Second cloned checkpoint").count(), 2);
+    assert_eq!(worklog.matches("New incremental checkpoint").count(), 2);
+    store_b
+        .context(&workspace_b.id)
+        .expect("merged checkpoint provenance remains authoritative");
+    assert_eq!(
+        store_b
+            .preview_legacy_migration(&workspace_b.id)
+            .unwrap()
+            .status,
+        kodade_lib::memory::LegacyMigrationStatus::Complete
+    );
+}
+
+#[test]
+fn migrated_links_and_backlinks_rebuild_on_a_fresh_database() {
+    let fixture = MappedProjectsVault::new("legacy-migration-links", "Portable project");
+    let target = fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Fact,
+            title: "Legacy linked target".into(),
+            body: "This target must keep its backlink after migration.".into(),
+            source: MemorySource::User,
+            source_client: "migration-link-test".into(),
+            session_id: Some("migration-links".into()),
+            pinned: false,
+            idempotency_key: Some("migration-link-target".into()),
+            links: Vec::new(),
+        })
+        .unwrap();
+    fixture
+        .store
+        .remember(NewMemory {
+            workspace_id: fixture.workspace.id.clone(),
+            kind: MemoryKind::Decision,
+            title: "Legacy linked source".into(),
+            body: "This decision must point to the migrated target.".into(),
+            source: MemorySource::Agent,
+            source_client: "migration-link-test".into(),
+            session_id: Some("migration-links".into()),
+            pinned: true,
+            idempotency_key: Some("migration-link-source".into()),
+            links: vec![MemoryLink {
+                target_id: target.id,
+                relation: "supports".into(),
+            }],
+        })
+        .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .unwrap();
+
+    let fresh_data = TempProject::new("legacy-migration-links-fresh");
+    let fresh = MemoryStore::open(fresh_data.db()).unwrap();
+    fresh.register_projects_vault(&fixture.vault_root).unwrap();
+    let workspace = fresh
+        .register_workspace(&fixture.checkout, "Fresh link checkout", None)
+        .unwrap();
+    fresh
+        .map_workspace_to_project(&workspace.id, None, "portable-project", "Portable project")
+        .unwrap();
+    let source_hit = fresh
+        .search(MemoryQuery {
+            workspace_id: workspace.id.clone(),
+            text: "decision must point".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 10,
+            offset: 0,
+        })
+        .unwrap();
+    let target_hit = fresh
+        .search(MemoryQuery {
+            workspace_id: workspace.id.clone(),
+            text: "backlink after migration".into(),
+            kinds: Vec::new(),
+            sources: Vec::new(),
+            updated_after: None,
+            limit: 10,
+            offset: 0,
+        })
+        .unwrap();
+    assert_eq!(source_hit.total, 1, "source hits: {:?}", source_hit.items);
+    assert_eq!(target_hit.total, 1, "target hits: {:?}", target_hit.items);
+    let source = fresh.memory(&source_hit.items[0].id).unwrap();
+    let target = fresh.memory(&target_hit.items[0].id).unwrap();
+    assert_eq!(source.links.len(), 1);
+    assert_eq!(source.links[0].target_id, target.id);
+    assert_eq!(target.backlinks.len(), 1);
+    assert_eq!(target.backlinks[0].target_id, source.id);
+}
+
+#[test]
+fn migrated_wrapper_preserves_inert_marker_examples_in_legacy_body() {
+    let fixture = MappedProjectsVault::new("legacy-migration-marker-body", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .unwrap();
+    let example = format!(
+        "<!-- kodmem-migration {{\"schema\":1,\"migrationId\":\"kmig_{}\",\"sourceSha256\":\"{}\",\"sourceSnapshotSha256\":\"{}\",\"sourceOrigins\":[{{\"sourceKind\":\"repo-readable-v1\",\"sourceSnapshotSha256\":\"{}\",\"legacyIdentity\":\".kodade/memory/EXAMPLE.md\",\"sourceSha256\":\"{}\",\"sourceModifiedAt\":1}}],\"sourceModifiedAt\":1}} -->",
+        "a".repeat(32),
+        "b".repeat(64),
+        "c".repeat(64),
+        "c".repeat(64),
+        "b".repeat(64),
+    );
+    let checkpoint_example = format!(
+        "<!-- kodmem-checkpoint {} -->",
+        serde_json::json!({
+            "schema": 1,
+            "checkpointId": "km_checkpoint_example",
+            "projectId": "portable-project",
+            "source": "agent",
+            "sourceClient": "documentation",
+            "sessionId": null,
+            "idempotencyKeyHash": null,
+            "payloadHash": "d".repeat(64),
+            "createdAt": 1,
+            "updatesState": false,
+            "summary": "Historical example",
+            "decisions": [],
+            "nextActions": [],
+            "changedPaths": [],
+            "migration": {
+                "migrationId": format!("kmig_{}", "e".repeat(32)),
+                "legacyId": "legacy-checkpoint-example",
+                "sourceSha256": "f".repeat(64),
+                "origins": [{
+                    "sourceKind": "sqlite-legacy-v1",
+                    "legacyId": "legacy-checkpoint-example",
+                    "sourceSha256": "f".repeat(64),
+                }],
+            },
+        })
+    );
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/WORKLOG.md"),
+        format!(
+            "# Worklog\n\nHistorical documentation preserves this standalone example:\n\n{example}\n\n{checkpoint_example}\n## Historical checkpoint example\n\n- Real historical entry.\n"
+        ),
+    )
+    .unwrap();
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .unwrap();
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .unwrap();
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("body marker example is inert during preview");
+    fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("body marker example is inert during apply");
+    let target = fixture
+        .project_root()
+        .join(&preview.operations[0].target_relative_path);
+    let migrated = std::fs::read_to_string(target).unwrap();
+    assert!(migrated.contains(&example));
+    assert!(migrated.contains(&checkpoint_example));
+    fixture
+        .store
+        .context(&fixture.workspace.id)
+        .expect("body marker example never participates in authority");
+}
+
+#[test]
 fn mapped_authority_checkpoint_writes_markdown_first_and_retries_once() {
     let fixture = MappedProjectsVault::new("mapped-checkpoint-authority", "Portable project");
     let plan = fixture
@@ -5041,6 +8088,59 @@ fn portable_checkpoint_child_process_helper() {
     } else {
         result.expect("child recovers portable checkpoint");
     }
+}
+
+#[test]
+fn legacy_migration_child_process_helper() {
+    let Ok(db) = std::env::var("KODADE_MIGRATION_CHILD_DB") else {
+        return;
+    };
+    let workspace_id = std::env::var("KODADE_MIGRATION_CHILD_WORKSPACE").unwrap();
+    let failpoint = std::env::var("KODADE_MIGRATION_CHILD_FAILPOINT").ok();
+    if let Some(failpoint) = failpoint.as_deref() {
+        unsafe { std::env::set_var("KODADE_KODMEM_MIGRATION_FAILPOINT", failpoint) };
+    }
+    let store = if let Ok(recovery_root) = std::env::var("KODADE_MIGRATION_CHILD_RECOVERY_ROOT") {
+        MemoryStore::open_with_migration_recovery_root(db, recovery_root).unwrap()
+    } else {
+        MemoryStore::open(db).unwrap()
+    };
+    let result = if let Ok(migration_id) = std::env::var("KODADE_MIGRATION_CHILD_ROLLBACK_ID") {
+        let manifest = std::env::var("KODADE_MIGRATION_CHILD_ROLLBACK_MANIFEST").unwrap();
+        store
+            .rollback_legacy_migration(&workspace_id, &migration_id, &manifest)
+            .map(|_| ())
+    } else {
+        let fingerprint = std::env::var("KODADE_MIGRATION_CHILD_FINGERPRINT").unwrap();
+        store
+            .apply_legacy_migration(&workspace_id, &fingerprint)
+            .map(|_| ())
+    };
+    if failpoint.is_some() {
+        assert!(
+            result.is_err(),
+            "configured migration failpoint must interrupt apply"
+        );
+    } else {
+        result.expect("migration child applies");
+    }
+}
+
+#[test]
+fn legacy_migration_remap_child_process_helper() {
+    let Ok(db) = std::env::var("KODADE_MIGRATION_CHILD_DB") else {
+        return;
+    };
+    let workspace_id = std::env::var("KODADE_MIGRATION_CHILD_WORKSPACE").unwrap();
+    let store = MemoryStore::open(db).unwrap();
+    store
+        .map_workspace_to_project(
+            &workspace_id,
+            Some("portable-project"),
+            "replacement-project",
+            "Replacement project",
+        )
+        .expect("remap child commits after holding the old project lock");
 }
 
 #[cfg(unix)]
@@ -7093,6 +10193,14 @@ fn tree_hashes(root: &Path) -> Vec<(String, String)> {
             (relative, file_hash(&path))
         })
         .collect()
+}
+
+fn tree_text(root: &Path) -> String {
+    walk_files(root)
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn file_hash(path: &Path) -> String {

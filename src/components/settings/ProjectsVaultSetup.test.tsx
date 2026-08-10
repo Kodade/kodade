@@ -54,6 +54,9 @@ function projectsVaultIpc(
     projectWorkspaceMappings: vi.fn().mockResolvedValue([mapping]),
     previewProjectScaffold: vi.fn(),
     applyProjectScaffold: vi.fn(),
+    previewLegacyMigration: vi.fn(),
+    applyLegacyMigration: vi.fn(),
+    rollbackLegacyMigration: vi.fn(),
     openProjectInObsidian: vi.fn(),
     ...overrides,
   };

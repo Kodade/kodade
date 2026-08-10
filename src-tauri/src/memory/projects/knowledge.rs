@@ -11,7 +11,10 @@ use super::ProjectLocation;
 
 mod source;
 
-use source::{bounded_chars, collect_project_documents, project_context};
+use source::{
+    bounded_chars, collect_project_documents, collect_project_documents_with_project_override,
+    project_context,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -115,13 +118,35 @@ pub(crate) struct ProjectKnowledgeRefresh {
     documents: Vec<IndexedProjectDocument>,
 }
 
-impl ProjectKnowledgeRefresh {
-    pub(crate) fn project_id(&self) -> &str {
-        &self.context.project_id
-    }
-}
-
 impl MemoryStore {
+    pub(crate) fn validate_project_knowledge_sources(
+        &self,
+        location: &ProjectLocation,
+    ) -> Result<()> {
+        let _ = collect_project_documents(location)?;
+        Ok(())
+    }
+
+    pub(crate) fn stage_project_knowledge(
+        &self,
+        workspace_id: &str,
+        prospective_project: &str,
+    ) -> Result<()> {
+        let location = self.project_location(workspace_id)?.ok_or_else(|| {
+            super::super::MemoryError::InvalidInput(
+                "mapped project disappeared while staging migration knowledge".into(),
+            )
+        })?;
+        let documents =
+            collect_project_documents_with_project_override(&location, Some(prospective_project))?;
+        if matches!(self.access, StoreAccess::ReadOnly) {
+            return Err(super::super::MemoryError::InvalidInput(
+                "read-only stores cannot stage project knowledge".into(),
+            ));
+        }
+        self.replace_project_document_index(&location.project_id, &documents, now_millis())
+    }
+
     pub(crate) fn project_knowledge_context(
         &self,
         workspace_id: &str,
