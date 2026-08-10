@@ -33,6 +33,12 @@ describe("compiled public surface", () => {
     );
   });
 
+  it("keeps supported projects-vault KödMem in the public profile", () => {
+    expect(availableSettingsSections().map((section) => section.id)).toContain(
+      "memory",
+    );
+  });
+
   it("keeps the OpenCode and local Ollama chat providers in the public profile", () => {
     const providers = AVAILABLE_PROVIDERS;
     expect(providers.find((provider) => provider.id === "opencode")).toMatchObject({

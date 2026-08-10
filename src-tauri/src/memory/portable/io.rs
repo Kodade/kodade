@@ -267,6 +267,25 @@ pub(super) fn portable_failpoint(phase: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn portable_lock_test_expect_contention(lock: &File) -> Result<()> {
+    let Ok(proof) = std::env::var("KODADE_TEST_PORTABLE_LOCK_EXPECT_CONTENDED") else {
+        return Ok(());
+    };
+    match lock.try_lock_exclusive() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            std::fs::write(proof, b"contended")?;
+            Ok(())
+        }
+        Ok(()) => {
+            fs2::FileExt::unlock(lock)?;
+            Err(MemoryError::Io(std::io::Error::other(
+                "portable lock test expected real cross-process contention",
+            )))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(super) fn portable_lock_test_barrier() -> Result<()> {
     let (Ok(ready), Ok(release)) = (
         std::env::var("KODADE_TEST_PORTABLE_LOCK_READY"),

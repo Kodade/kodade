@@ -37,6 +37,7 @@
     "tauri:build:public": "PATH=/usr/bin:$PATH tauri build --config src-tauri/tauri.public.conf.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test scripts/*.test.mjs",
+    "test:projects-vault": "node scripts/projects-vault-acceptance.mjs",
     "test:public": "vitest run --config vitest.public.config.ts"
   },
   "dependencies": {

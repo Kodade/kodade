@@ -5,15 +5,13 @@ Research, internal design notes, planning records, monetization work, and
 release evidence are maintained outside the public repository.
 
 - [Roadmap](../ROADMAP.md)
-- [Projects vault workflow](#projects-vault-workflow) — in development
+- [Projects vault workflow](#projects-vault-workflow)
+- [Projects vault acceptance](PROJECTS-VAULT-ACCEPTANCE.md)
 - [macOS release process](RELEASING.md)
 - [Windows build and status](WINDOWS.md)
 - [Windows CI](WINDOWS-CI.md)
 
 ## Projects vault workflow
-
-> **Development status:** Projects-vault-backed KödMem is in development. It
-> is not part of the current supported public release.
 
 Ködade can register an Obsidian projects vault, map a workspace to a portable
 project identity, and preview the minimal knowledge structure for that project.
@@ -93,3 +91,9 @@ Provider-facing context omits machine-local workspace, working-memory, and vault
 paths. The project skill directs agents to refresh context, search before asking
 for prior facts, keep durable memories concise, and use the current `STATE`
 source hash as `expectedStateHash` for state-changing checkpoints.
+
+The automated durability, recovery, concurrency, conflict, isolation, and
+secret-residue proof is documented in the
+[projects vault acceptance procedure](PROJECTS-VAULT-ACCEPTANCE.md). Packaging,
+signing, installation, publication, and public-download verification remain
+separate release stages.

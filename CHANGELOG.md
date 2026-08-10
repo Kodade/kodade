@@ -28,6 +28,10 @@
   and Codex: project-scoped KödMCP discovery, exact managed instruction blocks,
   the versioned `kodmem-project` workflow, read-only or writable access, and
   real CLI plus stdio context health verification.
+- Added a clean-commit acceptance harness and owner procedure proving mapped
+  projects-vault recovery across machines, forced concurrent checkpoints,
+  Obsidian edit conflicts, scoped KödMCP isolation, failpoint recovery, and
+  zero secret residue.
 
 ## 1.5.1 - 2026-08-08
 

@@ -14,12 +14,12 @@ This file states the public product boundary.
   history bounded to the active provider/model. Ollama chat has no filesystem
   or tool access.
 - Native terminals, projects, files, and editor
-- KödMem, KödMCP, KödHarness, and KödSkills
+- KödMem, KödMCP, KödHarness, and KödSkills, including projects-vault-backed
+  durable memory, portable logical project identity, and agent onboarding
 - Embedded browser and GitHub desktop panes
 
 ## In development
 
-- Projects-vault-backed KödMem workflows and cross-machine project identity
 - Windows packaging, signing, and platform QA
 - KödLocal local-model workflows
 - KödWhisper local voice workflows

@@ -8,7 +8,7 @@
     "pnpm": "11.17.0"
   },
   "inputs": {
-    "package.json": "3485c87047a130ece37b5ba7792899ee41b3f033a1da20002158c620ac2c6f40",
+    "package.json": "7647bd32fd86d67c76daa44a2d362ed98b2d3e972eeb30fa204a19a73c855412",
     "pnpm-lock.yaml": "928ec199aa74ba90558b0774b12d84cda80811b7961786f8c0e6606d9046b127",
     "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
     "src-tauri/Cargo.toml": "e6148353eb21639015290d5c2117941fd2c017e942d42565679cdb13d78232df",

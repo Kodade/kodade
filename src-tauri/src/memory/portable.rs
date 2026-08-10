@@ -947,6 +947,7 @@ impl MemoryStore {
             .read(true)
             .write(true)
             .open(path)?;
+        portable_lock_test_expect_contention(&lock)?;
         lock.lock_exclusive()?;
         portable_lock_test_barrier()?;
         Ok(lock)

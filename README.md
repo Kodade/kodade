@@ -45,8 +45,10 @@ Windows support is under active development; Linux is planned.
 - **Real terminals** use your login shell, PATH, authentication, configuration,
   and provider subscriptions.
 - **Projects, files, and editor** keep code visible beside agent sessions.
-- **KödMem and KödMCP** preserve local project context in readable files and a
-  searchable local index.
+- **KödMem and KödMCP** preserve project context in readable files and a
+  searchable local index, with optional mapped Obsidian projects-vault
+  Markdown and portable project identity across local checkouts. SQLite stays
+  a rebuildable machine-local projection; it is not synced between machines.
 - **KödHarness and KödSkills** make agent instructions and skills inspectable.
 - **Browser and GitHub panes** keep previews, assistant links, and repository
   context in editor tabs without replacing the desktop workspace.
