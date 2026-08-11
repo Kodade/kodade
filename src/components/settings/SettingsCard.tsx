@@ -6,17 +6,20 @@ import type { ReactNode } from "react";
 
 export function SettingsCard({
   title,
+  action,
   children,
 }: {
   title?: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="rounded-md border border-border bg-surface">
       {title && (
-        <h3 className="border-b border-border px-4 py-2.5 text-xs font-semibold text-text">
-          {title}
-        </h3>
+        <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-2.5">
+          <h3 className="text-xs font-semibold text-text">{title}</h3>
+          {action}
+        </div>
       )}
       <div className="divide-y divide-border">{children}</div>
     </section>

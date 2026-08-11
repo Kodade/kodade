@@ -14,4 +14,8 @@ describe("public settings surface", () => {
   it("redirects a development-only deep link to the first public section", () => {
     expect(settingsSection("ssh", publicManifest).id).toBe("general");
   });
+
+  it("keeps the retired providers deep link pointed at KödChat", () => {
+    expect(settingsSection("providers", publicManifest).id).toBe("chat");
+  });
 });

@@ -1,6 +1,6 @@
 // The settings section registry: nav order, labels, icons, content component,
 // and (where one exists) how to restore that section's defaults. Adding a
-// future section — KödChat, for example — is one entry in this list.
+// future section is one entry in this list.
 
 import type { ComponentType } from "react";
 import {
@@ -19,7 +19,6 @@ import { HarnessSection } from "./HarnessSection";
 import { KeybindingsSection } from "./KeybindingsSection";
 import { LocalSection } from "./LocalSection";
 import { MemorySection } from "./MemorySection";
-import { ProvidersSection } from "./ProvidersSection";
 import { SshSection } from "./SshSection";
 import { VoiceSection } from "./VoiceSection";
 import {
@@ -29,7 +28,6 @@ import {
   KeyboardIcon,
   MemoryGlyph,
   MicIcon,
-  PluginIcon,
   RemoteIcon,
   SlidersIcon,
 } from "./icons";
@@ -60,13 +58,6 @@ export const SETTINGS_SECTIONS = [
       themeStore.getState().setSelection("system");
       appStore.getState().setSidebarMode("full");
     },
-  },
-  {
-    id: "providers",
-    label: "providers",
-    description: "The agent CLIs Ködade found on your PATH.",
-    icon: PluginIcon,
-    Content: ProvidersSection,
   },
   {
     id: "chat",
@@ -144,12 +135,13 @@ export function availableSettingsSections(
 }
 
 export function settingsSection(
-  id: SettingsSectionId,
+  id: SettingsSectionId | "providers",
   manifest: ReleaseManifest = RELEASE_MANIFEST,
 ): SettingsSection {
   const available = availableSettingsSections(manifest);
+  const resolvedId = id === "providers" ? "chat" : id;
   return (
-    available.find((section) => section.id === id) ??
+    available.find((section) => section.id === resolvedId) ??
     available[0] ??
     SETTINGS_SECTIONS[0]
   );

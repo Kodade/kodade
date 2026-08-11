@@ -48,15 +48,6 @@ export function SlidersIcon() {
   );
 }
 
-export function PluginIcon() {
-  return (
-    <Icon>
-      <path d="M3 6.5h10v6H3z" />
-      <path d="M5.5 6.5V3.5M10.5 6.5V3.5" />
-    </Icon>
-  );
-}
-
 export function HarnessGlyph() {
   return (
     <Icon>

@@ -1,6 +1,5 @@
-// Main-screen agent quick-launch: the same one-click "start a CLI in a new
-// terminal" that lives in Settings → providers, surfaced next to the
-// workspace search so starting an agent never requires the settings detour.
+// Main-screen agent quick-launch, surfaced next to workspace search so
+// starting an installed CLI never requires a settings detour.
 
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";

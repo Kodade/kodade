@@ -1,5 +1,5 @@
-// Full-page settings: section nav, Back/Esc, restore defaults, and the
-// provider launch flows ported from the old title-bar popover.
+// Full-page settings: section nav, Back/Esc, restore defaults, and KödChat's
+// provider availability and sign-in controls.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -18,7 +18,6 @@ import { DEFAULT_LOCAL_MODEL_PREFERENCES } from "../../local/models";
 import { PROVIDERS, supportsChat } from "../../providers/catalog";
 import { TerminalPane } from "../TerminalPane";
 import { ChatSection } from "./ChatSection";
-import { ProvidersSection } from "./ProvidersSection";
 import { SettingsEntry } from "./SettingsEntry";
 import { SettingsPage } from "./SettingsPage";
 
@@ -93,7 +92,6 @@ describe("settings page", () => {
 
     for (const label of [
       "general",
-      "providers",
       "ködchat",
       "ködharness",
       "ködmem",
@@ -104,6 +102,7 @@ describe("settings page", () => {
     ]) {
       expect(navLink(label)).not.toBeUndefined();
     }
+    expect(navLink("providers")).toBeUndefined();
     expect(navLink("general")?.getAttribute("aria-current")).toBe("page");
     expect(container?.textContent).toContain("appearance");
     expect(container?.textContent).toContain("theme");
@@ -119,6 +118,20 @@ describe("settings page", () => {
 
     expect(settingsViewStore.getState().section).toBe("general");
     expect(container?.textContent).toContain("Appearance and workspace chrome.");
+  });
+
+  it("redirects the retired providers section to KödChat", async () => {
+    settingsViewStore.setState({ section: "providers" as never });
+
+    await render(<SettingsPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(settingsViewStore.getState().section).toBe("chat");
+    expect(navLink("ködchat")?.getAttribute("aria-current")).toBe("page");
+    expect(navLink("providers")).toBeUndefined();
+    expect(container?.textContent).toContain("agents that can chat");
   });
 
   it("switches the content pane from the left nav", async () => {
@@ -356,7 +369,7 @@ describe("settings page", () => {
     await act(async () => back?.click());
     expect(settingsViewStore.getState().section).toBeNull();
 
-    await act(async () => settingsViewStore.getState().open("providers"));
+    await act(async () => settingsViewStore.getState().open("chat"));
     await act(async () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
     );
@@ -397,18 +410,6 @@ describe("settings page", () => {
     expect(container?.textContent).toContain("shortcut");
   });
 
-  it("keeps launchable agent status in the providers section", async () => {
-    await render(<ProvidersSection />);
-
-    expect(container?.textContent).toContain("agent CLIs");
-    expect(container?.textContent).toContain("Claude Code");
-    expect(
-      container?.querySelector(
-        'button[title="Start Claude Code in a new terminal"]',
-      ),
-    ).not.toBeNull();
-  });
-
   it("does not put provider status controls above the terminal", () => {
     const markup = renderToStaticMarkup(<TerminalPane />);
 
@@ -416,99 +417,19 @@ describe("settings page", () => {
     expect(markup).not.toContain("agent CLIs");
   });
 
-  it("launches an installed provider from settings", async () => {
-    const onLaunch = vi.fn();
-    await render(<ProvidersSection onLaunch={onLaunch} />);
-
-    const launch = container?.querySelector<HTMLButtonElement>(
-      'button[title="Start Claude Code in a new terminal"]',
-    );
-    expect(launch).not.toBeNull();
-    await act(async () => launch?.click());
-    expect(onLaunch).toHaveBeenCalledWith("claude");
-  });
-
-  it("keeps saved KödLocal backends gated while passing the implicit local backend per session", async () => {
-    const onLaunch = vi.fn();
-    appStore.setState({
-      localModelPreferences: {
-        ...DEFAULT_LOCAL_MODEL_PREFERENCES,
-        savedEndpoints: [
-          {
-            id: "studio",
-            label: "Studio GPU",
-            baseURL: "https://gpu.example.test/v1",
-          },
-        ],
-      },
-    });
-    providersStore.setState((state) => ({
-      statuses: Object.fromEntries(
-        state.providers.map((provider) => [
-          provider.id,
-          provider.id === "kodade-local"
-            ? { status: "installed" as const, version: "node 22.0" }
-            : { status: "missing" as const, version: null },
-        ]),
-      ),
-    }));
-    await render(<ProvidersSection onLaunch={onLaunch} />);
-
-    const picker = container?.querySelector<HTMLSelectElement>(
-      'select[aria-label="KödLocal backend for this session"]',
-    );
-    expect(Array.from(picker!.options).map((option) => option.text)).toEqual([
-      "This Mac",
-    ]);
-    expect(container?.textContent).toContain(
-      "Saved LAN/remote backends require KödLocal Pro.",
-    );
-
-    const launch = Array.from(container?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === "start KödLocal",
-    );
-    await act(async () => launch?.click());
-    expect(onLaunch).toHaveBeenCalledWith("kodade-local", {
-      localBackend: {
-        id: "local",
-        label: "This Mac",
-        baseURL: "http://127.0.0.1:4470",
-        local: true,
-      },
-    });
-  });
-
-  it("disables installed provider launches until a project is open", async () => {
-    appStore.setState({ activeProjectId: null });
-    await render(<ProvidersSection />);
-
-    const launch = container?.querySelector<HTMLButtonElement>(
-      'button[title="Open a project first"]',
-    );
-    expect(launch?.disabled).toBe(true);
-  });
-
-  it("renders provider launch failures inline", async () => {
-    providersStore.setState({ launchError: "Could not start Claude Code." });
-    await render(<ProvidersSection />);
-
-    expect(container?.querySelector('[role="alert"]')?.textContent).toContain(
-      "Could not start Claude Code.",
-    );
-  });
-
-  it("opens the harness from the providers section", async () => {
-    const onManageHarness = vi.fn();
-    await render(<ProvidersSection onManageHarness={onManageHarness} />);
-
-    const manage = Array.from(container?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === "manage harness…",
-    );
-    await act(async () => manage?.click());
-    expect(onManageHarness).toHaveBeenCalled();
-  });
-
   // --- KödChat section (issue #163) ---
+
+  it("refreshes agent CLI status from the unified KödChat section", async () => {
+    const onRefresh = vi.fn();
+    await render(<ChatSection onRefresh={onRefresh} />);
+
+    const refresh = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent?.trim() === "refresh agents");
+    expect(refresh).not.toBeUndefined();
+    await act(async () => refresh?.click());
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
 
   it("marks providers without a stream recipe as terminal only", async () => {
     await render(<ChatSection />);

@@ -25,9 +25,11 @@ export function ChatSection({
       .catch((error) => {
         console.error("kodade: KödChat login terminal failed", error);
       }),
+  onRefresh = () => providersStore.getState().detectAll(),
   chatThreadsStore = chatStore,
 }: {
   onLogin?: (launch: string, providerId: string) => void | Promise<void>;
+  onRefresh?: () => void | Promise<void>;
   chatThreadsStore?: StoreApi<ChatState>;
 } = {}) {
   const statuses = useStore(providersStore, (state) => state.statuses);
@@ -51,7 +53,20 @@ export function ChatSection({
 
   return (
     <div className="space-y-4 text-xs">
-      <SettingsCard title="agents that can chat">
+      <SettingsCard
+        title="agents that can chat"
+        action={
+          <button
+            type="button"
+            onClick={() => void onRefresh()}
+            disabled={detecting}
+            title="Re-check installed agent CLIs"
+            className="rounded px-2 py-1 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text disabled:opacity-50"
+          >
+            {detecting ? "checking…" : "refresh agents"}
+          </button>
+        }
+      >
         {AVAILABLE_PROVIDERS.map((provider) => {
           const capable = supportsChat(provider);
           const ollamaChat = isOllamaChat(provider);
