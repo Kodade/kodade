@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.6.0 - 2026-08-11
+
+- Consolidated the duplicate Providers and KödChat settings pages into one
+  KödChat section while redirecting retired Providers links safely.
 - Added KödMem projects-vault registration and portable logical project
   mappings so multiple local workspaces can share one stable project identity
   without using checkout paths as identity.
