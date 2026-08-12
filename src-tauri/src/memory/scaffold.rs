@@ -80,7 +80,7 @@ enum ArtifactPolicy {
     File { path: String, lines: Vec<String> },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProjectAuthorityMarker {
     schema: u8,
@@ -503,6 +503,54 @@ pub(super) fn validate_authority_marker(text: &str, expected_project_id: &str) -
         ));
     }
     Ok(true)
+}
+
+pub(super) fn with_authority_marker(text: &str, expected_project_id: &str) -> Result<String> {
+    validate_project_identity(text.as_bytes(), expected_project_id)?;
+    if validate_authority_marker(text, expected_project_id)? {
+        return Ok(text.into());
+    }
+    let logical = text.lines().collect::<Vec<_>>();
+    let frontmatter_end = logical
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (*line == "---").then_some(index))
+        .ok_or_else(|| MemoryError::InvalidInput("Project.md frontmatter is not closed".into()))?;
+    let physical = text.split_inclusive('\n').collect::<Vec<_>>();
+    let closing = physical.get(frontmatter_end).ok_or_else(|| {
+        MemoryError::InvalidInput("Project.md frontmatter span is unavailable".into())
+    })?;
+    let insertion = physical[..=frontmatter_end]
+        .iter()
+        .map(|line| line.len())
+        .sum::<usize>();
+    let line_ending = if closing.ends_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let marker = serde_json::to_string(&ProjectAuthorityMarker {
+        schema: 1,
+        project_id: expected_project_id.into(),
+        authority: "projects-vault".into(),
+    })?;
+    let mut output = String::with_capacity(text.len() + marker.len() + 32);
+    output.push_str(&text[..insertion]);
+    if !closing.ends_with('\n') {
+        output.push_str(line_ending);
+    }
+    output.push_str("<!-- kodmem-project ");
+    output.push_str(&marker);
+    output.push_str(" -->");
+    output.push_str(line_ending);
+    output.push_str(&text[insertion..]);
+    if !validate_authority_marker(&output, expected_project_id)? {
+        return Err(MemoryError::InvalidInput(
+            "Project.md authority marker could not be inserted safely".into(),
+        ));
+    }
+    Ok(output)
 }
 
 pub(super) fn authority_marker_line_index(lines: &[&str]) -> Result<Option<usize>> {

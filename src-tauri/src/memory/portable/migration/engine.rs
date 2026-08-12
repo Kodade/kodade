@@ -191,7 +191,7 @@ impl MemoryStore {
         let _ = collect_checkpoints(&plan.location)?;
         migration_failpoint("validation")?;
 
-        let mut cutover = parse_cutover_marker(&project_preimage, &plan.location.project_id)?
+        let mut cutover = parse_cutover_preimage(&project_preimage, &plan.location.project_id)?
             .unwrap_or_else(|| CutoverMarker {
                 schema: 1,
                 project_id: plan.location.project_id.clone(),
@@ -426,7 +426,8 @@ impl MemoryStore {
         super::super::validate_project_root(&location)?;
         if let Some(remaining) = cutover.as_ref() {
             if matching_receipt {
-                let prior_cutover = parse_cutover_marker(&project_preimage, &location.project_id)?;
+                let prior_cutover =
+                    parse_cutover_preimage(&project_preimage, &location.project_id)?;
                 let prior_ids = prior_cutover
                     .as_ref()
                     .into_iter()
@@ -573,10 +574,15 @@ impl MemoryStore {
             Some(text) => text,
             None => return Ok(()),
         };
-        if parse_pending_marker(&project_text, &location.project_id)?.is_some() {
+        let authoritative_project = super::super::super::scaffold::with_authority_marker(
+            &project_text,
+            &location.project_id,
+        )?;
+        if parse_pending_marker(&authoritative_project, &location.project_id)?.is_some() {
             return Ok(());
         }
-        let Some(cutover) = parse_cutover_marker(&project_text, &location.project_id)? else {
+        let Some(cutover) = parse_cutover_marker(&authoritative_project, &location.project_id)?
+        else {
             return Ok(());
         };
         for migration in cutover.migrations {
@@ -641,23 +647,18 @@ impl MemoryStore {
             )
         })?;
         validate_no_likely_credential("projects-vault Project.md", &project_note)?;
-        let pending = parse_pending_marker(&project_note, &location.project_id)?;
-        if pending.is_none() {
-            self.validate_project_knowledge_sources(&location)?;
-        }
-        if !super::super::super::scaffold::validate_authority_marker(
+        let authoritative_project = super::super::super::scaffold::with_authority_marker(
             &project_note,
             &location.project_id,
-        )? {
-            return Err(MemoryError::InvalidInput(
-                "Project.md needs the exact projects-vault authority marker before migration"
-                    .into(),
-            ));
+        )?;
+        let pending = parse_pending_marker(&authoritative_project, &location.project_id)?;
+        if pending.is_none() {
+            self.validate_project_knowledge_sources(&location)?;
         }
         let full_snapshot = self.local_legacy_snapshot(&location.project_id)?;
         let project_note_sha256 = sha256_bytes(project_note.as_bytes());
         let mut cutover = if pending.is_none() {
-            parse_cutover_marker(&project_note, &location.project_id)?
+            parse_cutover_marker(&authoritative_project, &location.project_id)?
         } else {
             None
         };
@@ -705,7 +706,7 @@ impl MemoryStore {
                         "migration Project.md backup preimage is not UTF-8".into(),
                     )
                 })?;
-                cutover = parse_cutover_marker(&project_preimage, &location.project_id)?;
+                cutover = parse_cutover_preimage(&project_preimage, &location.project_id)?;
             }
             let uncovered = uncovered_snapshot(full_snapshot.clone(), cutover.as_ref());
             let receipt_matches = backup.source_snapshots == uncovered.receipts;
@@ -815,7 +816,7 @@ impl MemoryStore {
                                 )
                             })?;
                     let mut expected =
-                        parse_cutover_marker(&project_preimage, &complete.location.project_id)?
+                        parse_cutover_preimage(&project_preimage, &complete.location.project_id)?
                             .unwrap_or_else(|| CutoverMarker {
                                 schema: 1,
                                 project_id: complete.location.project_id.clone(),

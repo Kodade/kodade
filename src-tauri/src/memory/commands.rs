@@ -36,46 +36,40 @@ pub fn memory_mcp_binary_path(app: AppHandle) -> Result<McpBinaryPath, String> {
         return Err("KODADE_MCP_PATH does not point to a KödMCP helper file".into());
     }
     let resource_dir = app.path().resource_dir().ok();
-    let public_bundled = resource_dir
-        .as_ref()
-        .map(|root| root.join("helpers").join(mcp_binary_name()));
-    if let Some(path) = public_bundled
-        .as_ref()
-        .filter(|candidate| candidate.is_file())
-    {
-        return Ok(existing_mcp_binary(path.clone()));
+    let executable = std::env::current_exe().ok();
+    if let Some(path) = resolve_mcp_binary_path(resource_dir.as_deref(), executable.as_deref()) {
+        return Ok(existing_mcp_binary(path));
     }
-    let development_bundled = resource_dir.as_ref().map(|root| {
+
+    Err("kodade-mcp was not found in the bundled resources; build the KödMCP helper for development".into())
+}
+
+fn resolve_mcp_binary_path(
+    resource_dir: Option<&Path>,
+    executable: Option<&Path>,
+) -> Option<PathBuf> {
+    // `Contents/MacOS` is stable across the public and development bundles.
+    // Resource paths differ by profile, so recording either one in a client
+    // config makes that connection fail after switching package flavors.
+    let sibling = executable
+        .and_then(Path::parent)
+        .map(|directory| directory.join(mcp_binary_name()));
+    let public_bundled = resource_dir.map(|root| root.join("helpers").join(mcp_binary_name()));
+    let development_bundled = resource_dir.map(|root| {
         root.join("kodade-local")
             .join("bin")
             .join(mcp_binary_name())
     });
-    if let Some(path) = development_bundled
-        .as_ref()
-        .filter(|candidate| candidate.is_file())
-    {
-        return Ok(existing_mcp_binary(path.clone()));
-    }
-
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("cannot locate the running Kodade executable: {error}"))?;
-    let executable_dir = executable
-        .parent()
-        .ok_or_else(|| "the running Kodade executable has no parent directory".to_string())?;
-    let sibling = executable_dir.join(mcp_binary_name());
-    if sibling.is_file() {
-        return Ok(existing_mcp_binary(sibling));
-    }
-
-    let debug = executable
-        .ancestors()
-        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "target"))
-        .map(|target| target.join("debug").join(mcp_binary_name()));
-    if let Some(debug) = debug.as_ref().filter(|candidate| candidate.is_file()) {
-        return Ok(existing_mcp_binary(debug.clone()));
-    }
-
-    Err("kodade-mcp was not found in the bundled resources; build the KödMCP helper for development".into())
+    let debug = executable.and_then(|executable| {
+        executable
+            .ancestors()
+            .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "target"))
+            .map(|target| target.join("debug").join(mcp_binary_name()))
+    });
+    [sibling, public_bundled, development_bundled, debug]
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.is_file())
 }
 
 #[tauri::command]
@@ -693,6 +687,31 @@ fn write_new_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_mcp_path_prefers_the_profile_neutral_executable_sibling() {
+        let fixture = tempfile::tempdir().expect("create packaged helper fixture");
+        let contents = fixture.path().join("kodade.app").join("Contents");
+        let executable = contents.join("MacOS").join("kodade");
+        let sibling = contents.join("MacOS").join(mcp_binary_name());
+        let resources = contents.join("Resources");
+        let public = resources.join("helpers").join(mcp_binary_name());
+        let development = resources
+            .join("kodade-local")
+            .join("bin")
+            .join(mcp_binary_name());
+        for path in [&executable, &sibling, &public, &development] {
+            std::fs::create_dir_all(path.parent().expect("fixture parent"))
+                .expect("create fixture parent");
+            std::fs::write(path, b"fixture").expect("write fixture file");
+        }
+
+        assert_eq!(
+            resolve_mcp_binary_path(Some(&resources), Some(&executable)),
+            Some(sibling),
+            "agent config must use one packaged path across public and development profiles"
+        );
+    }
 
     #[test]
     fn process_cache_recovers_a_database_corrupted_after_startup() {

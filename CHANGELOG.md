@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed agent onboarding to persist the profile-neutral packaged KödMCP
+  executable path so switching between development and public app bundles does
+  not strand Claude Code or Codex on a removed resource path.
+- Fixed legacy KödMem migration for existing rich `Project.md` files by adding
+  the authority marker inside the pending transaction and restoring the exact
+  unmarked preimage on rollback.
+
 ## 1.6.0 - 2026-08-11
 
 - Consolidated the duplicate Providers and KödChat settings pages into one

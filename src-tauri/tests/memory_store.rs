@@ -4510,6 +4510,66 @@ fn legacy_migration_preview_is_complete_and_does_not_write() {
 }
 
 #[test]
+fn legacy_migration_upgrades_a_rich_unmarked_project_and_rollback_restores_it_exactly() {
+    let fixture =
+        MappedProjectsVault::new("legacy-migration-rich-unmarked-project", "Portable project");
+    fixture
+        .store
+        .activate_working_memory(&fixture.workspace.id, WorkingMemoryMode::Commit, false)
+        .expect("activate legacy source");
+    std::fs::write(
+        fixture.checkout.join(".kodade/memory/STATE.md"),
+        "# Legacy state\n\nThe portable cutover is ready.\n",
+    )
+    .expect("write legacy state");
+    let rich_project = b"---\ntitle: Portable project\ntype: project\nproject_id: portable-project\n---\n\n# Detailed purpose\n\nKeep this custom project note.\n";
+    let project_path = fixture.project_root().join("Project.md");
+    std::fs::write(&project_path, rich_project).expect("write rich unmarked Project.md");
+    let scaffold = fixture
+        .store
+        .preview_project_scaffold(&fixture.workspace.id)
+        .expect("preview missing roles");
+    fixture
+        .store
+        .apply_project_scaffold(&fixture.workspace.id, &scaffold.fingerprint)
+        .expect("create missing roles");
+    assert_eq!(std::fs::read(&project_path).unwrap(), rich_project);
+
+    let preview = fixture
+        .store
+        .preview_legacy_migration(&fixture.workspace.id)
+        .expect("preview upgrades the existing project identity");
+    assert!(preview.can_apply);
+    assert_eq!(
+        std::fs::read(&project_path).unwrap(),
+        rich_project,
+        "preview must remain read-only"
+    );
+    let applied = fixture
+        .store
+        .apply_legacy_migration(&fixture.workspace.id, &preview.fingerprint)
+        .expect("apply migration and authority markers");
+    let upgraded = std::fs::read_to_string(&project_path).unwrap();
+    assert!(upgraded.contains("Keep this custom project note."));
+    assert_eq!(upgraded.matches("<!-- kodmem-project ").count(), 1);
+    assert_eq!(upgraded.matches("<!-- kodmem-cutover ").count(), 1);
+
+    fixture
+        .store
+        .rollback_legacy_migration(
+            &fixture.workspace.id,
+            &applied.migration_id,
+            &applied.manifest_sha256,
+        )
+        .expect("rollback unchanged migration outputs");
+    assert_eq!(
+        std::fs::read(&project_path).unwrap(),
+        rich_project,
+        "rollback must restore the exact unmarked preimage"
+    );
+}
+
+#[test]
 fn legacy_migration_preserves_repo_file_timestamps_in_provenance_and_index_metadata() {
     let fixture = MappedProjectsVault::new("legacy-migration-file-timestamps", "Portable project");
     fixture

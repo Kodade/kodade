@@ -91,6 +91,15 @@ pub(in crate::memory::portable) fn parse_cutover_marker(
     Ok(Some(marker))
 }
 
+pub(super) fn parse_cutover_preimage(
+    text: &str,
+    expected_project_id: &str,
+) -> Result<Option<CutoverMarker>> {
+    let authoritative =
+        super::super::super::scaffold::with_authority_marker(text, expected_project_id)?;
+    parse_cutover_marker(&authoritative, expected_project_id)
+}
+
 pub(super) fn parse_pending_marker(
     text: &str,
     expected_project_id: &str,
@@ -314,8 +323,9 @@ pub(super) fn with_cutover_marker(text: &str, marker: &CutoverMarker) -> Result<
 }
 
 pub(super) fn with_pending_marker(text: &str, marker: &PendingMarker) -> Result<String> {
+    let text = super::super::super::scaffold::with_authority_marker(text, &marker.project_id)?;
     replace_authority_operation_marker(
-        text,
+        &text,
         Some(format!(
             "{PENDING_PREFIX}{}{CUTOVER_SUFFIX}",
             serde_json::to_string(marker)?
@@ -327,6 +337,13 @@ pub(super) fn with_optional_cutover_marker(
     text: &str,
     marker: Option<&CutoverMarker>,
 ) -> Result<String> {
+    let owned;
+    let text = if let Some(marker) = marker {
+        owned = super::super::super::scaffold::with_authority_marker(text, &marker.project_id)?;
+        owned.as_str()
+    } else {
+        text
+    };
     let rendered = marker
         .map(|marker| {
             Ok::<String, MemoryError>(format!(
@@ -889,20 +906,14 @@ pub(super) fn validate_backup(
         &project_preimage,
         &location.project_id,
     )?;
-    if !super::super::super::scaffold::validate_authority_marker(
-        project_text,
-        &location.project_id,
-    )? {
-        return Err(MemoryError::InvalidInput(
-            "migration Project.md backup preimage lacks its authority marker".into(),
-        ));
-    }
-    if parse_pending_marker(project_text, &location.project_id)?.is_some() {
+    let authoritative_project =
+        super::super::super::scaffold::with_authority_marker(project_text, &location.project_id)?;
+    if parse_pending_marker(&authoritative_project, &location.project_id)?.is_some() {
         return Err(MemoryError::InvalidInput(
             "migration Project.md backup preimage cannot contain a pending receipt".into(),
         ));
     }
-    let _ = parse_cutover_marker(project_text, &location.project_id)?;
+    let _ = parse_cutover_marker(&authoritative_project, &location.project_id)?;
     let expected_manifest = sha256_bytes(&serde_json::to_vec(&(
         1_u8,
         &backup.project_id,
