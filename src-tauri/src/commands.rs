@@ -20,7 +20,9 @@ use tauri_plugin_dialog::DialogExt;
 use crate::agent::{AgentManager, AgentSpawn};
 use crate::config::{self, ConfigScan};
 use crate::configguard::{Access, ConfigGuard};
-use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopCommand, DesktopPlatform};
+#[cfg(any(target_os = "windows", test))]
+use crate::desktop::DesktopCommand;
+use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopPlatform};
 use crate::detect;
 use crate::fs::{self, DirEntry, FileRead, WatchHandle};
 use crate::git::{self, GitOutput};
