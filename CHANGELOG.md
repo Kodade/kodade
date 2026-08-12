@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.6.1 - 2026-08-12
+
 - Fixed agent onboarding to persist the profile-neutral packaged KödMCP
   executable path so switching between development and public app bundles does
   not strand Claude Code or Codex on a removed resource path.
