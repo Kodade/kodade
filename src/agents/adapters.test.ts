@@ -493,7 +493,13 @@ describe("argv comes from the catalog, not the adapters", () => {
     const adapter = adapterFor("codex")!;
     // Order is load-bearing: `codex exec resume --json` is a parse error.
     expect(
-      adapter.spawn({ prompt: "again", cwd: "/repo", resumeId: "thread-1", model: "gpt-5" }).args,
+      adapter.spawn({
+        prompt: "again",
+        cwd: "/repo",
+        resumeId: "thread-1",
+        model: "gpt-5",
+        speed: "default",
+      }).args,
     ).toEqual([
       "exec",
       "--json",
@@ -502,6 +508,30 @@ describe("argv comes from the catalog, not the adapters", () => {
       "workspace-write",
       "--model",
       "gpt-5",
+      "resume",
+      "thread-1",
+      "-",
+    ]);
+  });
+
+  it("codex fast mode adds both per-turn overrides before resume", () => {
+    const args = adapterFor("codex")!.spawn({
+      prompt: "again",
+      cwd: "/repo",
+      resumeId: "thread-1",
+      speed: "fast",
+    }).args;
+
+    expect(args).toEqual([
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "features.fast_mode=true",
+      "-c",
+      "service_tier=fast",
       "resume",
       "thread-1",
       "-",

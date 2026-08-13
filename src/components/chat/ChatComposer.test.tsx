@@ -36,6 +36,7 @@ function mount(overrides: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
         model={null}
         access="standard"
         thinking={null}
+        speed="default"
         attachments={[]}
         draft=""
         working={false}
@@ -43,6 +44,7 @@ function mount(overrides: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
         onModelChange={() => undefined}
         onAccessChange={() => undefined}
         onThinkingChange={() => undefined}
+        onSpeedChange={() => undefined}
         onRemoveAttachment={() => undefined}
         onDraftChange={() => undefined}
         onSend={() => undefined}
@@ -151,6 +153,43 @@ describe("the thinking-level pill", () => {
     // gpt-5.6-sol's registry entry goes through ultra; the provider-wide
     // default (shown for "Default model") stops at xhigh.
     expect(labels.some((entry) => entry?.includes("Ultra"))).toBe(true);
+  });
+});
+
+describe("the Codex speed pill", () => {
+  it("offers Default and Fast with the installed CLI's usage description", () => {
+    const onSpeedChange = vi.fn();
+    const { host, root } = mount({
+      providerId: "codex",
+      onSpeedChange,
+    });
+    mounted = root;
+
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Speed"]')!;
+    expect(trigger).not.toBeNull();
+    act(() => trigger.click());
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Default"),
+      expect.stringContaining("Fast"),
+    ]);
+    expect(options[1]?.textContent).toContain("1.5x speed, increased usage");
+    act(() => options[1]!.click());
+    expect(onSpeedChange).toHaveBeenCalledWith("fast");
+  });
+
+  it("is hidden for other providers and locked while Codex is working", () => {
+    const hidden = mount({ providerId: "claude" });
+    expect(hidden.host.querySelector('button[aria-label="Speed"]')).toBeNull();
+    act(() => hidden.root.unmount());
+
+    const locked = mount({ providerId: "codex", speed: "fast", working: true });
+    mounted = locked.root;
+    const trigger = locked.host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Speed"]',
+    )!;
+    expect(trigger.textContent).toContain("Fast");
+    expect(trigger.disabled).toBe(true);
   });
 });
 

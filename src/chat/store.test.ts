@@ -154,6 +154,35 @@ describe("a turn", () => {
     expect(store.getState().threads.t1.thinking).toBeNull();
   });
 
+  it("clears Codex fast mode when switching to an unsupported provider", async () => {
+    const { store } = setup();
+    await openThread(store, "codex");
+    store.getState().setSpeed("t1", "fast");
+    expect(store.getState().threads.t1.speed).toBe("fast");
+
+    store.getState().setProvider("t1", "claude");
+    expect(store.getState().threads.t1.speed).toBe("default");
+
+    store.getState().setSpeed("t1", "fast");
+    expect(store.getState().threads.t1.speed).toBe("default");
+  });
+
+  it("locks the Codex speed choice for the duration of a turn", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await openThread(store, "codex");
+    store.getState().setSpeed("t1", "fast");
+    await store.getState().send("t1", "go");
+
+    store.getState().setSpeed("t1", "default");
+    expect(store.getState().threads.t1.speed).toBe("fast");
+    expect(agent.starts[0].args).toContain("features.fast_mode=true");
+
+    agent.exit("t1#1", 0);
+    store.getState().setSpeed("t1", "default");
+    expect(store.getState().threads.t1.speed).toBe("default");
+  });
+
   it("renders the claude stream into user, thinking, tool and assistant entries", async () => {
     const { agent, store } = setup();
     await store.getState().start();
@@ -843,6 +872,30 @@ describe("transcript persistence", () => {
         JSON.stringify({ version: 1, id: "t9", projectId: "p1", entries: [] }),
       )!.thinking,
     ).toBeNull();
+  });
+
+  it("round-trips Codex fast mode and defaults older documents", async () => {
+    const { storage, store } = setup();
+    await openThread(store, "codex");
+    store.getState().setSpeed("t1", "fast");
+    await store.getState().flush("t1");
+
+    const doc = parsePersistedThread(storage.docs.get(chatDocName("t1"))!)!;
+    expect(doc.speed).toBe("fast");
+
+    const reopened = createChatStore({
+      agent: new MockAgentIpc(),
+      storage,
+      projectRoot: () => "/repo",
+    });
+    await reopened.getState().openThread("t1", "p1", "codex");
+    expect(reopened.getState().threads.t1.speed).toBe("fast");
+
+    expect(
+      parsePersistedThread(
+        JSON.stringify({ version: 1, id: "t9", projectId: "p1", entries: [] }),
+      )!.speed,
+    ).toBe("default");
   });
 
   it("survives a corrupt or foreign-version document", async () => {

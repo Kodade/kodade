@@ -1,5 +1,5 @@
 // The composer: prompt box, attachments, and the per-thread run controls —
-// provider, model, access level, and thinking level — styled like a chat app,
+// provider, model, access level, thinking level, and speed — styled like a chat app,
 // not a CLI (t3-style): one rounded input surface with a round send button,
 // and the chip menus in a row beneath it.
 //
@@ -7,9 +7,14 @@
 // surface uses, and the one thing users try first.
 
 import type { KeyboardEvent } from "react";
-import type { ChatAccessLevel, Provider } from "../../providers/catalog";
+import type {
+  ChatAccessLevel,
+  ChatSpeed,
+  Provider,
+} from "../../providers/catalog";
 import {
   ACCESS_LEVELS,
+  CHAT_SPEEDS,
   isOllamaChat,
   supportsChat,
   thinkingLevelsFor,
@@ -25,6 +30,7 @@ export function ChatComposer({
   model,
   access,
   thinking,
+  speed,
   attachments,
   draft,
   working,
@@ -35,6 +41,7 @@ export function ChatComposer({
   onModelChange,
   onAccessChange,
   onThinkingChange,
+  onSpeedChange,
   onRemoveAttachment,
   onDraftChange,
   onSend,
@@ -47,6 +54,7 @@ export function ChatComposer({
   model: string | null;
   access: ChatAccessLevel;
   thinking: string | null;
+  speed: ChatSpeed;
   attachments: string[];
   draft: string;
   working: boolean;
@@ -61,6 +69,7 @@ export function ChatComposer({
   onModelChange(model: string | null): void;
   onAccessChange(access: ChatAccessLevel): void;
   onThinkingChange(thinking: string | null): void;
+  onSpeedChange(speed: ChatSpeed): void;
   onRemoveAttachment(path: string): void;
   onDraftChange(draft: string): void;
   onSend(text: string): void;
@@ -80,6 +89,7 @@ export function ChatComposer({
   // Empty when this provider/model has no verified thinking flag — the pill
   // simply doesn't render then.
   const thinkingLevels = chatCapable ? thinkingLevelsFor(selected?.stream, model) : [];
+  const supportsSpeed = !!selected?.stream?.speedArgs;
   const providerReady =
     !ollamaChat || (ollama?.status === "ready" && models.length > 0);
   const canSend =
@@ -110,6 +120,8 @@ export function ChatComposer({
   // chip label; engine.buildAgentArgs drops a stale level the same way.
   const thinkingLabel =
     thinkingLevels.find((level) => level.id === thinking)?.label ?? "Thinking";
+  const speedLabel =
+    CHAT_SPEEDS.find((option) => option.id === speed)?.label ?? "Default";
 
   return (
     <div className="shrink-0 border-t border-border bg-bg px-3 py-3">
@@ -321,6 +333,22 @@ export function ChatComposer({
             menuWidthClass="min-w-[170px]"
           >
             <span>{thinkingLabel}</span>
+          </ComposerMenu>
+        )}
+        {supportsSpeed && (
+          <ComposerMenu
+            label="Speed"
+            disabled={working || disabled}
+            value={speed}
+            onSelect={(id) => onSpeedChange(id as ChatSpeed)}
+            options={CHAT_SPEEDS.map((option) => ({
+              id: option.id,
+              label: option.label,
+              description: option.description,
+            }))}
+            menuWidthClass="min-w-[220px]"
+          >
+            <span>{speedLabel}</span>
           </ComposerMenu>
         )}
       </div>

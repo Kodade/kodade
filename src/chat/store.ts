@@ -12,7 +12,9 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   AVAILABLE_PROVIDERS,
+  DEFAULT_CHAT_SPEED,
   type ChatAccessLevel,
+  type ChatSpeed,
   type Provider,
   type ProviderModel,
 } from "../providers/catalog";
@@ -116,6 +118,7 @@ export type ChatState = {
   setAccess(threadId: string, access: ChatAccessLevel): void;
   // The thread's thinking level (null = the CLI's default effort).
   setThinking(threadId: string, thinking: string | null): void;
+  setSpeed(threadId: string, speed: ChatSpeed): void;
   refreshOllama(): Promise<void>;
   refreshProviderModels(providerId: string, projectId?: string): Promise<void>;
   // Send one user message and run a turn. Resolves once the run has STARTED —
@@ -549,6 +552,9 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           model: remoteDynamicModels ? null : doc.model,
           access: doc.access,
           thinking: doc.thinking,
+          speed: supportsSpeed(doc.providerId, doc.speed)
+            ? doc.speed
+            : DEFAULT_CHAT_SPEED,
           entries: doc.entries,
         }));
         if (doc.providerId === "ollama") void get().refreshOllama();
@@ -573,6 +579,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
                 conversationId: thread.conversationId + 1,
                 model: null,
                 thinking: null,
+                speed: DEFAULT_CHAT_SPEED,
               },
         );
         if (providerId === "ollama") void get().refreshOllama();
@@ -611,6 +618,16 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         if (runs.has(threadId)) return;
         patch(threadId, (thread) =>
           thread.thinking === thinking ? thread : { ...thread, thinking },
+        );
+        persistDebounced(threadId);
+      },
+
+      setSpeed(threadId: string, speed: ChatSpeed) {
+        if (runs.has(threadId)) return;
+        patch(threadId, (thread) =>
+          supportsSpeed(thread.providerId, speed) && thread.speed !== speed
+            ? { ...thread, speed }
+            : thread,
         );
         persistDebounced(threadId);
       },
@@ -907,6 +924,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           model: thread.model,
           access: thread.access,
           thinking: thread.thinking,
+          speed: thread.speed,
         });
         const process = remoteTarget
           ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)
@@ -1047,6 +1065,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
 
     function providerFor(providerId: string): Provider | undefined {
       return providers.find((provider) => provider.id === providerId);
+    }
+
+    function supportsSpeed(providerId: string, speed: ChatSpeed): boolean {
+      return (
+        speed === DEFAULT_CHAT_SPEED ||
+        !!providerFor(providerId)?.stream?.speedArgs?.[speed]
+      );
     }
   });
 

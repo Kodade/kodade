@@ -22,6 +22,7 @@ import {
 // "acceptEdits" posture made every Bash call and out-of-project Read fail.
 // Each level maps to the CLI's own real flags in `accessArgs`.
 export type ChatAccessLevel = "plan" | "standard" | "full";
+export type ChatSpeed = "default" | "fast";
 
 // One thinking/reasoning-effort level a CLI accepts. `id` is the CLI's own
 // token; `label` is the composer's display text.
@@ -61,6 +62,9 @@ export type ProviderStream = {
   // Levels every model of this CLI accepts. A model entry may override with
   // its own list (see thinkingLevelsFor).
   thinkingLevels?: readonly ThinkingLevel[];
+  // Optional per-turn speed modes. Default is deliberately absent from the
+  // map so choosing it preserves the CLI's normal behavior without overrides.
+  speedArgs?: Partial<Record<ChatSpeed, readonly string[]>>;
   // Models the composer offers. Static entries are only for verified catalogs.
   models?: readonly ProviderModel[];
   // Dynamic model discovery for provider/plugin catalogs that can change
@@ -69,6 +73,24 @@ export type ProviderStream = {
 };
 
 export const DEFAULT_ACCESS_LEVEL: ChatAccessLevel = "standard";
+export const DEFAULT_CHAT_SPEED: ChatSpeed = "default";
+
+export const CHAT_SPEEDS: readonly {
+  id: ChatSpeed;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: "default",
+    label: "Default",
+    description: "Use Codex's normal service tier.",
+  },
+  {
+    id: "fast",
+    label: "Fast",
+    description: "1.5x speed, increased usage.",
+  },
+];
 
 // Composer labels for the access select, in display order.
 export const ACCESS_LEVELS: readonly {
@@ -297,6 +319,9 @@ export const PROVIDERS: Provider[] = [
       // `model_reasoning_effort` is the documented key. A bare value that
       // isn't TOML is used as a literal string per the same help text.
       thinkingArgs: ["-c", "model_reasoning_effort={level}"],
+      speedArgs: {
+        fast: ["-c", "features.fast_mode=true", "-c", "service_tier=fast"],
+      },
       // Every model in the registry accepts at least these four; models that
       // go higher say so on their own entry below.
       thinkingLevels: [

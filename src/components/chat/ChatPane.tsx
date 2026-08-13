@@ -234,6 +234,7 @@ export function ChatPane({
                 model={thread.model}
                 access={thread.access}
                 thinking={thread.thinking}
+                speed={thread.speed}
                 ollama={ollama}
                 providerModels={
                   activeProjectIsRemote || !activeProjectId
@@ -254,6 +255,9 @@ export function ChatPane({
                 }
                 onThinkingChange={(thinking) =>
                   chatThreadsStore.getState().setThinking(thread.id, thinking)
+                }
+                onSpeedChange={(speed) =>
+                  chatThreadsStore.getState().setSpeed(thread.id, speed)
                 }
                 onRemoveAttachment={(path) =>
                   setAttachments((current) => current.filter((entry) => entry !== path))

@@ -11,7 +11,12 @@
 import type { ToolCall } from "../local/toolcall";
 import type { ToolOutcome } from "../local/tools";
 import type { AgentPlanItem } from "../agents/contract";
-import { DEFAULT_ACCESS_LEVEL, type ChatAccessLevel } from "../providers/catalog";
+import {
+  DEFAULT_ACCESS_LEVEL,
+  DEFAULT_CHAT_SPEED,
+  type ChatAccessLevel,
+  type ChatSpeed,
+} from "../providers/catalog";
 
 // One rendered row of a transcript. A turn produces several: the user's
 // message, any thinking, tool cards, then the assistant's answer.
@@ -67,6 +72,8 @@ export type ChatThread = {
   access: ChatAccessLevel;
   // Thinking level id (catalog thinkingLevels); null runs the CLI's default.
   thinking: string | null;
+  // Per-thread service speed. Default preserves the provider CLI's behavior.
+  speed: ChatSpeed;
   status: ChatThreadStatus;
   // Set when the last run failed on authentication, so the pane can keep
   // offering the login terminal after the run settles.
@@ -89,6 +96,7 @@ export type PersistedChatThread = {
   model: string | null;
   access: ChatAccessLevel;
   thinking: string | null;
+  speed: ChatSpeed;
   entries: ChatEntry[];
   updatedAt: number;
 };
@@ -156,6 +164,7 @@ export function newThread(
     model: null,
     access: DEFAULT_ACCESS_LEVEL,
     thinking: null,
+    speed: DEFAULT_CHAT_SPEED,
     status: "idle",
     needsLogin: false,
     updatedAt: now,
@@ -174,6 +183,7 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
     model: thread.model,
     access: thread.access,
     thinking: thread.thinking,
+    speed: thread.speed,
     // Runtime-only streaming state never reaches disk.
     entries: thread.entries
       .slice(-MAX_THREAD_ENTRIES)
@@ -232,6 +242,8 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
         : DEFAULT_ACCESS_LEVEL,
     // Documents predating thinking levels run the CLI's default effort.
     thinking: typeof doc.thinking === "string" ? doc.thinking : null,
+    // Documents predating speed tiers retain normal provider behavior.
+    speed: doc.speed === "fast" ? "fast" : DEFAULT_CHAT_SPEED,
     entries: entries.slice(-MAX_THREAD_ENTRIES),
     updatedAt: typeof doc.updatedAt === "number" ? doc.updatedAt : 0,
   };

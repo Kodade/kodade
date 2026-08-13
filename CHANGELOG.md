@@ -6,6 +6,8 @@
   Ködade while preserving the stable lowercase `kodade.app` bundle path.
 - Added Grok 4.6 to the KödChat Grok Build model picker while retaining Grok
   4.5 for existing threads.
+- Added a per-thread Codex Default or Fast speed control to KödChat, with Fast
+  requesting the CLI's 1.5x speed tier and increased usage per turn.
 
 ## 1.6.1 - 2026-08-12
 

@@ -43,6 +43,8 @@ export function buildAgentArgs(
       ...stream.thinkingArgs.map((arg) => arg.replace(LEVEL_TOKEN, request.thinking!)),
     );
   }
+  const speedArgs = request.speed ? stream.speedArgs?.[request.speed] : undefined;
+  if (speedArgs) args.push(...speedArgs);
   if (request.resumeId && stream.resumeArgs) {
     args.push(
       ...stream.resumeArgs.map((arg) => arg.replace(SESSION_TOKEN, request.resumeId!)),

@@ -16,6 +16,7 @@ function thread(entries: ChatThread["entries"]): ChatThread {
     model: null,
     access: "standard",
     thinking: null,
+    speed: "default",
     status: "idle",
     needsLogin: false,
     updatedAt: 0,
@@ -150,6 +151,7 @@ describe("ChatTranscript", () => {
       model: null,
       access: "standard",
       thinking: null,
+      speed: "default",
       updatedAt: 0,
       entries: [{ kind: "tool", id: "1", call: { tool: "Read", args: { file_path: "src/a.ts" } }, outcome: { status: "executed", result: "ok" } }],
     }))!;

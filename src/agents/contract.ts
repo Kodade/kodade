@@ -9,7 +9,7 @@
 // map over one shared engine, with bin/args knowledge kept in
 // providers/catalog.ts rather than baked into an adapter.
 
-import type { ChatAccessLevel } from "../providers/catalog";
+import type { ChatAccessLevel, ChatSpeed } from "../providers/catalog";
 import type { ChatMessage, TokenUsage } from "../inference/backend";
 import type { ToolCall } from "../local/toolcall";
 import type { ToolOutcome } from "../local/tools";
@@ -57,6 +57,8 @@ export type AgentRunRequest = {
   // Thinking level id (catalog thinkingLevels); null/omitted runs the CLI's
   // default effort.
   thinking?: string | null;
+  // Per-thread speed choice. Unsupported providers ignore non-default values.
+  speed?: ChatSpeed | null;
 };
 
 // The argv handed to `agent_start`. Rust resolves `bin` through the login shell

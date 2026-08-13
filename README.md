@@ -35,7 +35,9 @@ Windows support is under active development; Linux is planned.
   project's available catalog reported by the installed CLI through
   `opencode models`, keeps a Default choice, and never ships a guessed model
   list. Remote OpenCode chats remain Default-only because model catalogs are
-  host-specific.
+  host-specific. Codex threads offer a per-thread Default or Fast speed choice;
+  Fast requests 1.5x speed with increased usage without changing Codex's saved
+  configuration.
 - **Ollama** is a local HTTP chat provider at `127.0.0.1:11434`: KödChat lists
   the models Ollama has installed and streams chat through its OpenAI-compatible
   endpoint. It is chat-only — it cannot read project files, call tools, or use
