@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Branded the macOS application, WebKit helpers, window, and document title as
+  Ködade while preserving the stable lowercase `kodade.app` bundle path.
+
 ## 1.6.1 - 2026-08-12
 
 - Fixed agent onboarding to persist the profile-neutral packaged KödMCP

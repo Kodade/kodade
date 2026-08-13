@@ -36,6 +36,13 @@ pub mod vox;
 #[cfg(feature = "voice")]
 use std::time::Instant;
 
+#[cfg(all(target_os = "macos", feature = "voice"))]
+fn set_macos_process_name() {
+    use objc2_foundation::{NSProcessInfo, NSString};
+
+    NSProcessInfo::processInfo().setProcessName(&NSString::from_str("Ködade"));
+}
+
 #[cfg(feature = "voice")]
 use agent::AgentManager;
 #[cfg(feature = "voice")]
@@ -50,6 +57,9 @@ use vox::VoxManager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(feature = "voice")]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    set_macos_process_name();
+
     // Startup budget: the app should be interactive in well under a second.
     // We keep the Rust core work at boot trivial (two in-memory managers; all
     // provider detection / fs work is lazy, driven by frontend commands), so
@@ -224,4 +234,20 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(all(test, target_os = "macos", feature = "voice"))]
+mod tests {
+    use objc2_foundation::NSProcessInfo;
+
+    #[test]
+    fn macos_process_name_uses_the_product_brand() {
+        let process_info = NSProcessInfo::processInfo();
+        let original = process_info.processName();
+
+        super::set_macos_process_name();
+        assert_eq!(process_info.processName().to_string(), "Ködade");
+
+        process_info.setProcessName(&original);
+    }
 }

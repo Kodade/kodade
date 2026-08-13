@@ -152,7 +152,7 @@ llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = fa
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "WKUserContentController", "WKUserScript"] }
 whisper-rs = { version = "0.16", optional = true, default-features = false, features = ["metal"] }
 # 0.1.151 vendors llama.cpp 9e3b928, after the cycle-detection/iterative GBNF fix for CVE-2026-2069.
