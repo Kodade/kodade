@@ -29,7 +29,10 @@ import { createChatStore } from "../chat/store";
 import { createOllamaChatRuntime } from "../chat/ollama";
 import { formatProjectMemory } from "../memory/provider-context";
 import { createProvidersStore } from "../providers/store";
-import { ensureBrowserAgentSetup } from "../browser/agent-setup";
+import {
+  ensureBrowserAgentSetup,
+  verifiedBrowserMcpBinaryPath,
+} from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
 import { createGithubStore } from "../github/store";
 import { createClaudeAdapter } from "../harness/adapters/claude";
@@ -684,12 +687,9 @@ async function installAutomaticBrowserAgentSetup(): Promise<void> {
     .filter(([, status]) => status.status === "installed")
     .map(([id]) => id);
   const binary = await tauriMemory.mcpBinaryPath();
-  if (!binary.exists || !binary.path) {
-    throw new Error("the bundled KödBrowser adapter was not found");
-  }
   const result = await ensureBrowserAgentSetup({
     config: tauriConfig,
-    binaryPath: binary.path,
+    binaryPath: verifiedBrowserMcpBinaryPath(binary),
     installedClis,
   });
   for (const error of result.errors) {

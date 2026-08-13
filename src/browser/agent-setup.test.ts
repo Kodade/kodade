@@ -6,6 +6,7 @@ import {
   ensureBrowserAgentSetup,
   ensureManagedBrowserRule,
   KODADE_BROWSER_RULE,
+  verifiedBrowserMcpBinaryPath,
 } from "./agent-setup";
 
 describe("browserMcpSpec", () => {
@@ -178,10 +179,15 @@ describe("ensureBrowserAgentSetup", () => {
 
   it("repairs the exact stale installed-app helper for every supported CLI", async () => {
     const config = new MockConfig();
+    const fixtureHome = "/fixture/home";
+    config.envResult.home = fixtureHome;
     const stale =
       "/Applications/kodade.app/Contents/Resources/kodade-local/bin/kodade-mcp";
-    const current = "/Applications/kodade.app/Contents/MacOS/kodade-mcp";
-    config.reads.set("/Users/keith/.codex/config.toml", {
+    const current = verifiedBrowserMcpBinaryPath({
+      path: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+      exists: true,
+    });
+    config.reads.set(`${fixtureHome}/.codex/config.toml`, {
       kind: "text",
       content: `# Keep this comment
 [mcp_servers.kodade-browser]
@@ -192,7 +198,7 @@ args = [ "browser" ]
 command = "gh-mcp"
 `,
     });
-    config.reads.set("/Users/keith/.claude.json", {
+    config.reads.set(`${fixtureHome}/.claude.json`, {
       kind: "text",
       content: JSON.stringify({
         theme: "dark",
@@ -202,14 +208,14 @@ command = "gh-mcp"
         },
       }, null, 2),
     });
-    config.reads.set("/Users/keith/.grok/config.toml", {
+    config.reads.set(`${fixtureHome}/.grok/config.toml`, {
       kind: "text",
       content: `[mcp_servers.kodade-browser]
 command = "${stale}"
 args = [ "browser" ]
 `,
     });
-    config.reads.set("/Users/keith/.config/opencode/opencode.json", {
+    config.reads.set(`${fixtureHome}/.config/opencode/opencode.json`, {
       kind: "text",
       content: JSON.stringify({
         theme: "kodade",
@@ -231,10 +237,10 @@ args = [ "browser" ]
     });
 
     expect(first).toEqual({ configured: ["codex", "claude", "grok", "opencode"], errors: [] });
-    const codex = config.reads.get("/Users/keith/.codex/config.toml");
-    const claude = config.reads.get("/Users/keith/.claude.json");
-    const grok = config.reads.get("/Users/keith/.grok/config.toml");
-    const opencode = config.reads.get("/Users/keith/.config/opencode/opencode.json");
+    const codex = config.reads.get(`${fixtureHome}/.codex/config.toml`);
+    const claude = config.reads.get(`${fixtureHome}/.claude.json`);
+    const grok = config.reads.get(`${fixtureHome}/.grok/config.toml`);
+    const opencode = config.reads.get(`${fixtureHome}/.config/opencode/opencode.json`);
     if (
       codex?.kind !== "text" ||
       claude?.kind !== "text" ||
@@ -280,6 +286,18 @@ args = [ "browser" ]
     });
     expect(second).toEqual({ configured: [], errors: [] });
     expect(config.writeCalls).toHaveLength(writes);
+  });
+
+  it("refuses to register a browser helper the native resolver did not find", () => {
+    expect(() => verifiedBrowserMcpBinaryPath({ path: null, exists: false })).toThrow(
+      "the bundled KödBrowser adapter was not found",
+    );
+    expect(() =>
+      verifiedBrowserMcpBinaryPath({
+        path: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+        exists: false,
+      }),
+    ).toThrow("the bundled KödBrowser adapter was not found");
   });
 
   it("reports a conflicting user-owned server without overwriting it", async () => {

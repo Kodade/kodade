@@ -2,7 +2,7 @@ import type { McpServerSpec } from "../harness/merge";
 import { createHarnessAdapter } from "../harness/adapters/shared";
 import type { HarnessAdapter, ArtifactLocation } from "../harness/contract";
 import type { ScanContext } from "../harness/model";
-import type { ConfigIpc } from "../ipc/contract";
+import type { ConfigIpc, MemoryMcpBinaryPath } from "../ipc/contract";
 
 const RULE_START = "<!-- kodade:browser:start -->";
 const RULE_END = "<!-- kodade:browser:end -->";
@@ -51,6 +51,16 @@ type BrowserAgentSetupResult = {
 };
 
 const SUPPORTED_CLIS = new Set(["claude", "codex", "grok", "opencode"]);
+
+// Rust resolves this descriptor through `Path::is_file`; keep that existence
+// proof attached to automatic browser setup instead of registering an unchecked
+// path string that can recreate the ENOENT failure this setup repairs.
+export function verifiedBrowserMcpBinaryPath(binary: MemoryMcpBinaryPath): string {
+  if (!binary.exists || !binary.path) {
+    throw new Error("the bundled KödBrowser adapter was not found");
+  }
+  return binary.path;
+}
 
 async function applyVerified(
   adapter: HarnessAdapter,
