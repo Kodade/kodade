@@ -49,6 +49,15 @@ describe("compiled public surface", () => {
     expect(supportsChat(ollama!)).toBe(true);
   });
 
+  it("keeps both supported Grok Build models in the public profile", () => {
+    expect(
+      AVAILABLE_PROVIDERS.find((provider) => provider.id === "grok")?.stream?.models,
+    ).toEqual([
+      { id: "grok-4.6", label: "Grok 4.6" },
+      { id: "grok-4.5", label: "Grok 4.5" },
+    ]);
+  });
+
   it("rejects every development IPC group before native execution", async () => {
     await expect(local.status()).rejects.toThrow("KödLocal is unavailable");
     await expect(vox.listInputDevices()).rejects.toThrow(

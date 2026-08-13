@@ -79,6 +79,19 @@ describe("ChatComposer layout", () => {
       expect(surface.contains(pill), `${label} must sit below the surface`).toBe(false);
     }
   });
+
+  it("offers Default, Grok 4.6, then the retained Grok 4.5 model", () => {
+    const { host, root } = mount({ providerId: "grok" });
+    mounted = root;
+
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Model"]')!;
+    act(() => trigger.click());
+    expect(
+      [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')].map(
+        (option) => option.textContent?.trim(),
+      ),
+    ).toEqual(["Default model", "Grok 4.6", "Grok 4.5"]);
+  });
 });
 
 describe("the thinking-level pill", () => {

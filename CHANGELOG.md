@@ -4,6 +4,8 @@
 
 - Branded the macOS application, WebKit helpers, window, and document title as
   Ködade while preserving the stable lowercase `kodade.app` bundle path.
+- Added Grok 4.6 to the KödChat Grok Build model picker while retaining Grok
+  4.5 for existing threads.
 
 ## 1.6.1 - 2026-08-12
 

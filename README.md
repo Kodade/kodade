@@ -28,7 +28,8 @@ Windows support is under active development; Linux is planned.
 - **KödChat** provides a chat-first interface for Claude Code, Codex, Grok
   Build, and OpenCode through their official CLIs, with compact work summaries,
   inline edited-file review, and a resizable terminal split owned by the
-  current thread. OpenCode uses its official JSON run mode: Plan maps to its
+  current thread. Grok Build offers both Grok 4.6 and Grok 4.5 through the
+  installed CLI. OpenCode uses its official JSON run mode: Plan maps to its
   `plan` agent, Standard to `build`, and Full uses OpenCode's `--auto` behavior
   without changing its configuration. Its model picker reads the current
   project's available catalog reported by the installed CLI through

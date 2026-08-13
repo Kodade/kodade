@@ -518,7 +518,7 @@ describe("argv comes from the catalog, not the adapters", () => {
     ]);
   });
 
-  it("grok keeps the stdin prompt file and resumes with the session id", () => {
+  it("grok launches either supported model and keeps resume after model args", () => {
     const adapter = adapterFor("grok")!;
     expect(adapter.spawn({ prompt: "hi", cwd: "/repo" })).toEqual({
       bin: "grok",
@@ -531,6 +531,22 @@ describe("argv comes from the catalog, not the adapters", () => {
         "acceptEdits",
       ],
       stdin: "hi",
+    });
+    expect(
+      adapter.spawn({ prompt: "next", cwd: "/repo", model: "grok-4.6" }),
+    ).toEqual({
+      bin: "grok",
+      args: [
+        "--prompt-file",
+        "/dev/stdin",
+        "--output-format",
+        "streaming-json",
+        "--permission-mode",
+        "acceptEdits",
+        "--model",
+        "grok-4.6",
+      ],
+      stdin: "next",
     });
     expect(
       adapter.spawn({ prompt: "again", cwd: "/repo", resumeId: "sess-1", model: "grok-4.5" })

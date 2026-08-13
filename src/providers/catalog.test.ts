@@ -45,4 +45,12 @@ describe("provider catalog", () => {
     expect(stream?.models).toBeUndefined();
     expect(stream?.modelDiscovery).toEqual({ args: ["models"], format: "lines" });
   });
+
+  it("offers Grok 4.6 before the retained Grok 4.5 model", () => {
+    const stream = PROVIDERS.find((provider) => provider.id === "grok")?.stream;
+    expect(stream?.models).toEqual([
+      { id: "grok-4.6", label: "Grok 4.6" },
+      { id: "grok-4.5", label: "Grok 4.5" },
+    ]);
+  });
 });

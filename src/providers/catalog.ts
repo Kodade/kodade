@@ -341,8 +341,11 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["--resume", "{session}"],
       modelArgs: ["--model", "{model}"],
-      // Grok Build exposes this chat model.
-      models: [{ id: "grok-4.5", label: "Grok 4.5" }],
+      // Grok Build 1.0.3 reports 4.6 as its default and retains 4.5.
+      models: [
+        { id: "grok-4.6", label: "Grok 4.6" },
+        { id: "grok-4.5", label: "Grok 4.5" },
+      ],
     },
     // Grok Build reads project AGENTS.md and retains GROK.md compatibility.
     // Its native skills root is `.grok/skills`; Claude-compatible roots and
