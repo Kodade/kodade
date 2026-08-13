@@ -176,6 +176,112 @@ describe("ensureBrowserAgentSetup", () => {
     });
   });
 
+  it("repairs the exact stale installed-app helper for every supported CLI", async () => {
+    const config = new MockConfig();
+    const stale =
+      "/Applications/kodade.app/Contents/Resources/kodade-local/bin/kodade-mcp";
+    const current = "/Applications/kodade.app/Contents/MacOS/kodade-mcp";
+    config.reads.set("/Users/keith/.codex/config.toml", {
+      kind: "text",
+      content: `# Keep this comment
+[mcp_servers.kodade-browser]
+command = "${stale}"
+args = [ "browser" ]
+
+[mcp_servers.github]
+command = "gh-mcp"
+`,
+    });
+    config.reads.set("/Users/keith/.claude.json", {
+      kind: "text",
+      content: JSON.stringify({
+        theme: "dark",
+        mcpServers: {
+          github: { command: "gh-mcp" },
+          "kodade-browser": { command: stale, args: ["browser"] },
+        },
+      }, null, 2),
+    });
+    config.reads.set("/Users/keith/.grok/config.toml", {
+      kind: "text",
+      content: `[mcp_servers.kodade-browser]
+command = "${stale}"
+args = [ "browser" ]
+`,
+    });
+    config.reads.set("/Users/keith/.config/opencode/opencode.json", {
+      kind: "text",
+      content: JSON.stringify({
+        theme: "kodade",
+        mcp: {
+          github: { type: "local", command: ["gh-mcp"], enabled: true },
+          "kodade-browser": {
+            type: "local",
+            command: [stale, "browser"],
+            enabled: true,
+          },
+        },
+      }, null, 2),
+    });
+
+    const first = await ensureBrowserAgentSetup({
+      config,
+      binaryPath: current,
+      installedClis: ["codex", "claude", "grok", "opencode"],
+    });
+
+    expect(first).toEqual({ configured: ["codex", "claude", "grok", "opencode"], errors: [] });
+    const codex = config.reads.get("/Users/keith/.codex/config.toml");
+    const claude = config.reads.get("/Users/keith/.claude.json");
+    const grok = config.reads.get("/Users/keith/.grok/config.toml");
+    const opencode = config.reads.get("/Users/keith/.config/opencode/opencode.json");
+    if (
+      codex?.kind !== "text" ||
+      claude?.kind !== "text" ||
+      grok?.kind !== "text" ||
+      opencode?.kind !== "text"
+    ) {
+      throw new Error("supported CLI configs were not written");
+    }
+    expect(codex.content).toContain("# Keep this comment");
+    expect(parseByFormat(codex.content, "toml")).toMatchObject({
+      mcp_servers: {
+        "kodade-browser": { command: current, args: ["browser"] },
+        github: { command: "gh-mcp" },
+      },
+    });
+    expect(parseByFormat(claude.content, "json")).toMatchObject({
+      theme: "dark",
+      mcpServers: {
+        "kodade-browser": { command: current, args: ["browser"] },
+        github: { command: "gh-mcp" },
+      },
+    });
+    expect(parseByFormat(grok.content, "toml")).toMatchObject({
+      mcp_servers: { "kodade-browser": { command: current, args: ["browser"] } },
+    });
+    expect(parseByFormat(opencode.content, "json")).toMatchObject({
+      theme: "kodade",
+      mcp: {
+        "kodade-browser": {
+          type: "local",
+          command: [current, "browser"],
+          enabled: true,
+        },
+        github: { type: "local", command: ["gh-mcp"], enabled: true },
+      },
+    });
+
+    const writes = config.writeCalls.length;
+    const second = await ensureBrowserAgentSetup({
+      config,
+      binaryPath: current,
+      installedClis: ["codex", "claude", "grok", "opencode"],
+    });
+    expect(second).toEqual({ configured: [], errors: [] });
+    expect(config.writeCalls).toHaveLength(writes);
+  });
+
   it("reports a conflicting user-owned server without overwriting it", async () => {
     const config = new MockConfig();
     const path = "/Users/keith/.codex/config.toml";

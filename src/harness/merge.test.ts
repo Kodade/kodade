@@ -117,6 +117,41 @@ args = [ "--workspace", "/old/root", "--client", "codex" ]
     });
   });
 
+  it("migrates the stale development-profile KödBrowser helper and preserves neighboring TOML", () => {
+    const before = `# Ködade-managed browser bridge
+[mcp_servers.kodade-browser]
+command = "/Applications/kodade.app/Contents/Resources/kodade-local/bin/kodade-mcp"
+args = [ "browser" ]
+
+# User-owned neighbor
+[mcp_servers.github]
+command = "gh-mcp"
+`;
+    const merge = mergeMcpServer(before, "toml", "mcp_servers", {
+      name: "kodade-browser",
+      config: {
+        command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+        args: ["browser"],
+      },
+    });
+
+    expect(merge.operation).toBe("update");
+    expect(merge.after).toContain("# Ködade-managed browser bridge");
+    expect(merge.after).toContain('# User-owned neighbor\n[mcp_servers.github]\ncommand = "gh-mcp"');
+    expect(merge.after.indexOf("[mcp_servers.kodade-browser]")).toBeLessThan(
+      merge.after.indexOf("[mcp_servers.github]"),
+    );
+    expect(parseByFormat(merge.after, "toml")).toEqual({
+      mcp_servers: {
+        "kodade-browser": {
+          command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+        github: { command: "gh-mcp" },
+      },
+    });
+  });
+
   it("a leading UTF-8 BOM (Windows editors) does not abort the merge", () => {
     const before = '﻿[mcp_servers.github]\ncommand = "gh-mcp"\n';
     const merge = mergeMcpServer(before, "toml", "mcp_servers", {
@@ -185,6 +220,85 @@ describe("mergeMcpServer — .mcp.json / jsonc (localized edit, comments survive
         "kodade-mem": {
           command: "/Applications/Kodade/kodade-mcp",
           args: ["--workspace", "/new/root", "--client", "claude", "--read-only"],
+        },
+      },
+    });
+  });
+
+  it.each(["json", "jsonc"] as const)(
+    "migrates a stale public-profile KödBrowser helper in %s without changing neighbors",
+    (format) => {
+      const comment = format === "jsonc" ? "  // User-owned neighbor stays in place\n" : "";
+      const before = `{
+${comment}  "mcpServers": {
+    "github": { "command": "gh-mcp" },
+    "kodade-browser": {
+      "command": "/Applications/kodade.app/Contents/Resources/helpers/kodade-mcp",
+      "args": ["browser"]
+    }
+  },
+  "theme": "dark"
+}`;
+      const merge = mergeMcpServer(before, format, "mcpServers", {
+        name: "kodade-browser",
+        config: {
+          command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      });
+
+      expect(merge.operation).toBe("update");
+      if (format === "jsonc") {
+        expect(merge.after).toContain("// User-owned neighbor stays in place");
+      }
+      expect(merge.after).toContain('"github": { "command": "gh-mcp" }');
+      expect(merge.after.indexOf('"github"')).toBeLessThan(
+        merge.after.indexOf('"kodade-browser"'),
+      );
+      expect(merge.after.indexOf('"kodade-browser"')).toBeLessThan(
+        merge.after.indexOf('"theme"'),
+      );
+      expect(parseByFormat(merge.after, format)).toEqual({
+        mcpServers: {
+          github: { command: "gh-mcp" },
+          "kodade-browser": {
+            command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+            args: ["browser"],
+          },
+        },
+        theme: "dark",
+      });
+    },
+  );
+
+  it("migrates the stale KödBrowser helper in an OpenCode command array", () => {
+    const before = JSON.stringify({
+      mcp: {
+        "kodade-browser": {
+          type: "local",
+          command: [
+            "/Applications/kodade.app/Contents/Resources/kodade-local/bin/kodade-mcp",
+            "browser",
+          ],
+          enabled: true,
+        },
+      },
+    });
+    const merge = mergeMcpServer(before, "json", "mcp", {
+      name: "kodade-browser",
+      config: {
+        type: "local",
+        command: ["/Applications/kodade.app/Contents/MacOS/kodade-mcp", "browser"],
+        enabled: true,
+      },
+    });
+
+    expect(parseByFormat(merge.after, "json")).toEqual({
+      mcp: {
+        "kodade-browser": {
+          type: "local",
+          command: ["/Applications/kodade.app/Contents/MacOS/kodade-mcp", "browser"],
+          enabled: true,
         },
       },
     });
@@ -303,6 +417,23 @@ describe("mergeMcpServer — refusals (the safety gate)", () => {
     const json = '{ "mcpServers": { "other": { "command": "kodade-mcp" } } }';
     expect(() =>
       mergeMcpServer(json, "json", "mcpServers", { name: "other", config: { command: "kodade-mcp" } }),
+    ).toThrow(/already exists/);
+  });
+
+  it("refuses an arbitrary KödBrowser command even when its arguments look managed", () => {
+    const before = JSON.stringify({
+      mcpServers: {
+        "kodade-browser": { command: "/usr/local/bin/custom-browser", args: ["browser"] },
+      },
+    });
+    expect(() =>
+      mergeMcpServer(before, "json", "mcpServers", {
+        name: "kodade-browser",
+        config: {
+          command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      }),
     ).toThrow(/already exists/);
   });
 

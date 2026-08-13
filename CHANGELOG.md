@@ -8,6 +8,8 @@
   4.5 for existing threads.
 - Added a per-thread Codex Default or Fast speed control to KödChat, with Fast
   requesting the CLI's 1.5x speed tier and increased usage per turn.
+- Fixed automatic KödBrowser setup to migrate known stale packaged helper paths
+  to the profile-neutral executable without replacing user-owned MCP servers.
 
 ## 1.6.1 - 2026-08-12
 

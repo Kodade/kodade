@@ -51,8 +51,9 @@ export type McpMerge = {
 
 // Build the merge for adding one server to a config file's current text. `before`
 // is "" (or whitespace) when the file doesn't exist yet. An existing server is
-// only updated when its command path matches the proposed one, which is the
-// ownership proof for Ködade-generated config. Other duplicates still refuse.
+// only updated when its command path matches the proposed one, or when an exact
+// KödBrowser config uses a known obsolete helper location in the same app bundle.
+// Other duplicates still refuse.
 export function mergeMcpServer(
   before: string,
   format: McpFormat,
@@ -531,15 +532,70 @@ function isKodadeOwnedServer(
       ? value.command[0]
       : null;
   };
+  const existingCommand = command(existing);
+  const proposedCommand = command(proposed);
   return (
     (name === "kodade-mem" ||
       name.startsWith("kodade-mem-") ||
       name === "kodade-browser" ||
       name === "kodade-local-delegate" ||
       name.startsWith("kodade-local-delegate-")) &&
-    command(existing) !== null &&
-    command(existing) === command(proposed)
+    existingCommand !== null &&
+    (existingCommand === proposedCommand ||
+      (name === "kodade-browser" && isLegacyBrowserHelperMigration(existing, proposed)))
   );
+}
+
+const LEGACY_MACOS_BROWSER_HELPER_SUFFIXES = [
+  "/Contents/Resources/helpers/kodade-mcp",
+  "/Contents/Resources/kodade-local/bin/kodade-mcp",
+] as const;
+const STABLE_MACOS_BROWSER_HELPER_SUFFIX = "/Contents/MacOS/kodade-mcp";
+
+// A path change is ownership evidence only for the exact shapes Ködade writes
+// and only within the same lowercase kodade.app bundle. This heals profile
+// switches without turning a same-name user server into a replaceable entry.
+function isLegacyBrowserHelperMigration(
+  existing: unknown,
+  proposed: Record<string, unknown>,
+): boolean {
+  const existingPath = browserHelperPath(existing);
+  const proposedPath = browserHelperPath(proposed);
+  if (!existingPath || !proposedPath) return false;
+  const stableRoot = browserBundleRoot(proposedPath, STABLE_MACOS_BROWSER_HELPER_SUFFIX);
+  if (!stableRoot) return false;
+  return LEGACY_MACOS_BROWSER_HELPER_SUFFIXES.some(
+    (suffix) => browserBundleRoot(existingPath, suffix) === stableRoot,
+  );
+}
+
+function browserHelperPath(value: unknown): string | null {
+  if (!isObject(value)) return null;
+  if (
+    typeof value.command === "string" &&
+    deepEqual(Object.keys(value).sort(), ["args", "command"]) &&
+    deepEqual(value.args, ["browser"])
+  ) {
+    return value.command;
+  }
+  if (
+    Array.isArray(value.command) &&
+    deepEqual(Object.keys(value).sort(), ["command", "enabled", "type"]) &&
+    value.type === "local" &&
+    value.enabled === true &&
+    value.command.length === 2 &&
+    typeof value.command[0] === "string" &&
+    value.command[1] === "browser"
+  ) {
+    return value.command[0];
+  }
+  return null;
+}
+
+function browserBundleRoot(path: string, suffix: string): string | null {
+  if (!path.endsWith(suffix)) return null;
+  const root = path.slice(0, -suffix.length);
+  return root.endsWith("/kodade.app") ? root : null;
 }
 
 // Structural equality over JSON-ish values (objects, arrays, primitives). Used to
