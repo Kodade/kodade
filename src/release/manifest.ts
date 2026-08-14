@@ -18,7 +18,10 @@ export function releaseManifestFor(profile: ReleaseProfile): ReleaseManifest {
       local: enabled,
       voice: enabled,
       ssh: enabled,
-      work: enabled,
+      // KödWork graduated into the supported product in v1.7.0. Keep it in
+      // this manifest so older persisted layouts still fail closed on builds
+      // that explicitly disable it, without tying it to unrelated dev tools.
+      work: true,
     }),
   });
 }

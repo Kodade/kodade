@@ -92,8 +92,8 @@ export type KodworkDeps = {
   // Resolved at task-creation and spawn time — projects are renameable.
   projectRoot(projectId: string): string | null;
   adapters?: (providerId: string) => AgentStreamAdapter | null;
-  // KödWork is a development feature. When disabled the store refuses to
-  // register or run anything, matching the compiled-out public surface.
+  // Respect the compiled release profile. When disabled the store refuses to
+  // register or run anything, matching the unavailable surface.
   enabled?: () => boolean;
   newId?: () => string;
   now?: () => number;

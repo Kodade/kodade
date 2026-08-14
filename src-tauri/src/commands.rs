@@ -47,9 +47,25 @@ pub(crate) fn require_development_feature(name: &str) -> Result<(), String> {
     development_feature_access(cfg!(feature = "development-features") || cfg!(test), name)
 }
 
+fn kodwork_feature_access(kodwork: bool, development: bool, test: bool) -> bool {
+    kodwork || development || test
+}
+
+fn kodwork_feature_enabled() -> bool {
+    kodwork_feature_access(
+        cfg!(feature = "kodwork"),
+        cfg!(feature = "development-features"),
+        cfg!(test),
+    )
+}
+
+fn require_kodwork_feature() -> Result<(), String> {
+    development_feature_access(kodwork_feature_enabled(), "KödWork")
+}
+
 #[cfg(test)]
 mod release_feature_tests {
-    use super::development_feature_access;
+    use super::{development_feature_access, kodwork_feature_access, kodwork_feature_enabled};
 
     #[test]
     fn public_native_feature_commands_fail_closed() {
@@ -57,6 +73,14 @@ mod release_feature_tests {
             development_feature_access(false, "KödSSH"),
             Err("KödSSH is unavailable in the public release".to_string())
         );
+    }
+
+    #[test]
+    fn supported_kodwork_native_commands_are_enabled() {
+        assert!(kodwork_feature_access(true, false, false));
+        assert!(kodwork_feature_access(false, true, false));
+        assert!(!kodwork_feature_access(false, false, false));
+        assert!(kodwork_feature_enabled());
     }
 }
 
@@ -926,7 +950,7 @@ pub fn agent_end(manager: State<'_, AgentManager>, id: String) -> Result<(), Str
     manager.end_input(&id)
 }
 
-// --- KödWork output ledger (development feature) ---
+// --- KödWork output ledger ---
 
 #[tauri::command]
 pub fn kodwork_ledger_begin(
@@ -935,7 +959,7 @@ pub fn kodwork_ledger_begin(
     task_id: String,
     root: String,
 ) -> Result<(), String> {
-    require_development_feature("KödWork")?;
+    require_kodwork_feature()?;
     manager.begin(&storage_dir(&app)?, &task_id, &root)
 }
 
@@ -944,7 +968,7 @@ pub fn kodwork_ledger_finish(
     manager: State<'_, KodworkLedgerManager>,
     task_id: String,
 ) -> Result<KodworkNativeReview, String> {
-    require_development_feature("KödWork")?;
+    require_kodwork_feature()?;
     manager.finish(&task_id)
 }
 
@@ -953,7 +977,7 @@ pub fn kodwork_ledger_accept(
     manager: State<'_, KodworkLedgerManager>,
     task_id: String,
 ) -> Result<(), String> {
-    require_development_feature("KödWork")?;
+    require_kodwork_feature()?;
     manager.accept(&task_id)
 }
 
@@ -963,7 +987,7 @@ pub fn kodwork_ledger_restore(
     manager: State<'_, KodworkLedgerManager>,
     task_id: String,
 ) -> Result<(), String> {
-    require_development_feature("KödWork")?;
+    require_kodwork_feature()?;
     manager.restore(&storage_dir(&app)?, &task_id)
 }
 

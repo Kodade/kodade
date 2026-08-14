@@ -16,6 +16,8 @@ This file states the public product boundary.
 - Native terminals, projects, files, and editor
 - KödMem, KödMCP, KödHarness, and KödSkills, including projects-vault-backed
   durable memory, portable logical project identity, and agent onboarding
+- KödWork background tasks with durable progress, scoped permissions,
+  reviewable file output, native attention, skill templates, and recurrence
 - Embedded browser and GitHub desktop panes
 
 ## In development
@@ -24,7 +26,6 @@ This file states the public product boundary.
 - KödLocal local-model workflows
 - KödWhisper local voice workflows
 - KödSSH and Remote projects
-- KödWork background-agent workflows
 
 Development features are compiled out of public release builds until they are
 ready to support. Their presence in source is not a support promise.

@@ -82,9 +82,9 @@ export function decodeTab(value: string): Tab | null {
     return parsed ? { kind: "remote-preview", ...parsed } : null;
   }
   if (value.startsWith(KODWORK_TAB_PREFIX)) {
-    // KödWork is a development feature: a public build drops the persisted
-    // encoding rather than reopening a compiled-out surface. A bare prefix
-    // (no task id) is corrupt and dropped too.
+    // Respect the compiled release manifest so a profile that omits KödWork
+    // drops persisted state instead of reopening an unavailable surface. A
+    // bare prefix (no task id) is corrupt and dropped too.
     if (!developmentFeatureEnabled("work")) return null;
     const taskId = value.slice(KODWORK_TAB_PREFIX.length);
     return taskId ? { kind: "kodwork", taskId } : null;

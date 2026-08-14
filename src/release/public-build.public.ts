@@ -7,25 +7,28 @@ import { decodeTab } from "../store/tabs";
 import { RELEASE_MANIFEST } from "./manifest";
 
 describe("compiled public surface", () => {
-  it("uses the closed public manifest", () => {
+  it("uses the supported public manifest", () => {
     expect(RELEASE_MANIFEST.profile).toBe("public");
     expect(Object.values(RELEASE_MANIFEST.features)).toEqual([
       false,
       false,
       false,
-      false,
+      true,
     ]);
   });
 
-  it("disables terminal voice, local delegation, remote state, and KödWork", () => {
+  it("keeps KödWork while disabling terminal voice, local delegation, and remote state", () => {
     expect(RELEASE_MANIFEST.features.voice).toBe(false);
     expect(RELEASE_MANIFEST.features.local).toBe(false);
     expect(RELEASE_MANIFEST.features.ssh).toBe(false);
-    expect(RELEASE_MANIFEST.features.work).toBe(false);
+    expect(RELEASE_MANIFEST.features.work).toBe(true);
   });
 
-  it("drops persisted KödWork tab encodings so an old layout cannot reopen the dark surface", () => {
-    expect(decodeTab("kodwork:some-task")).toBeNull();
+  it("restores persisted KödWork task tabs", () => {
+    expect(decodeTab("kodwork:some-task")).toEqual({
+      kind: "kodwork",
+      taskId: "some-task",
+    });
   });
 
   it("omits development settings, providers, and shortcuts", () => {
@@ -65,7 +68,7 @@ describe("compiled public surface", () => {
     ]);
   });
 
-  it("rejects every development IPC group before native execution", async () => {
+  it("rejects every remaining development IPC group before native execution", async () => {
     await expect(local.status()).rejects.toThrow("KödLocal is unavailable");
     await expect(vox.listInputDevices()).rejects.toThrow(
       "KödWhisper is unavailable",

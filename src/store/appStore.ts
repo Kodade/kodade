@@ -641,9 +641,9 @@ export const chatStore = createChatStore({
   },
 });
 
-// KödWork tasks (#43, dev-gated behind the "work" feature). Task documents
-// live in their own per-task files; the projects store owns each task's
-// identity as a session of kind "work".
+// KödWork tasks (#43, controlled by the compiled "work" release feature).
+// Task documents live in their own per-task files; the projects store owns
+// each task's identity as a session of kind "work".
 //
 // The activity hooks are the same privacy boundary KödChat's are: ids, the
 // provider id, and a fixed short reason — never outcome or progress text. The

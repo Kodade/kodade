@@ -4,7 +4,7 @@
 
 ## 1.7.0 - 2026-08-14
 
-- Added the development-gated KödWork surface for background CLI tasks with
+- Added the KödWork surface for background CLI tasks with
   durable progress, scoped tool approvals, reviewable and restorable file
   output, native attention, KödSkills templates, and in-app recurrence.
 - Branded the macOS application, WebKit helpers, window, and document title as
@@ -24,9 +24,8 @@
 
 ### Platform status
 
-- macOS Apple Silicon: Developer ID-signed local DMG passed version, arm64,
-  disk-integrity, and nested-signature checks; notarization and installed-app
-  acceptance are pending.
+- macOS Apple Silicon: stable DMG; owner accepted, Developer ID signed, Apple
+  notarized, stapled, and Gatekeeper verified.
 - Windows x64: not packaged or tested for this candidate.
 
 ## 1.6.1 - 2026-08-12

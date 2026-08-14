@@ -28,4 +28,16 @@ describe("development feature IPC guard", () => {
     await expect(guarded.status()).resolves.toBe("ready");
     expect(implementation.status).toHaveBeenCalledOnce();
   });
+
+  it("passes supported KödWork calls through in public builds", async () => {
+    const implementation = { begin: vi.fn(async () => "started") };
+    const guarded = guardDevelopmentIpc(
+      "work",
+      implementation,
+      releaseManifestFor("public"),
+    );
+
+    await expect(guarded.begin()).resolves.toBe("started");
+    expect(implementation.begin).toHaveBeenCalledOnce();
+  });
 });

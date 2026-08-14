@@ -20,8 +20,14 @@ export function verifyPublicConfig(path = publicConfigPath) {
   if (config.build?.beforeBuildCommand !== "pnpm build:public && pnpm stage:public-resources") {
     throw new Error("public Tauri flavor must run the public frontend and resource stages");
   }
-  if (!Array.isArray(config.build?.features) || config.build.features.length !== 0) {
-    throw new Error("public Tauri flavor must omit the development-features Cargo feature");
+  if (
+    !Array.isArray(config.build?.features) ||
+    config.build.features.length !== 1 ||
+    config.build.features[0] !== "kodwork"
+  ) {
+    throw new Error(
+      "public Tauri flavor must enable only the supported kodwork Cargo feature",
+    );
   }
   const serialized = JSON.stringify(resources);
   for (const name of forbidden) {

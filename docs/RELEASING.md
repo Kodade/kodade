@@ -39,7 +39,7 @@ pnpm tauri build
 ```
 
 This is a full-feature development/QA package. It deliberately includes
-development features and must not be published as the first public
+unsupported development features and must not be published as a public
 release.
 
 Output lands in:
@@ -125,10 +125,10 @@ build script also places `/usr/bin` first so Tauri calls Apple's recursive
 `xattr`, not the incompatible command installed by Python Framework builds.
 
 This now: builds the public feature manifest → stages only public resources →
-signs (hardened runtime) → notarizes → staples. KödLocal, KödWhisper, and
-KödSSH remain in source but are unavailable in the app. The public staging
-script packages the supported KödMem helper, KödSkills, and the project and
-bundled-asset notices plus the generated dependency license bundle:
+signs (hardened runtime) → notarizes → staples. KödWork is supported; KödLocal,
+KödWhisper, and KödSSH remain in source but are unavailable in the app. The
+public staging script packages the supported KödMem helper, KödSkills, and the
+project and bundled-asset notices plus the generated dependency license bundle:
 
 ```text
 kodade-mcp                 → Contents/Resources/helpers/kodade-mcp

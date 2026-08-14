@@ -21,6 +21,9 @@ voice = ["dep:whisper-rs"]
 # Public builds omit this feature. Development builds enable it through the
 # Tauri config so unfinished product surfaces fail closed at native IPC too.
 development-features = []
+# KödWork is independently available in supported public builds. Development
+# builds also enable it through `development-features`.
+kodwork = []
 # Native GGUF inference is opt-in so ordinary Ködade app builds never compile llama.cpp.
 modeld = ["dep:encoding_rs", "dep:llama-cpp-2", "dep:llama-cpp-sys-2"]
 # Windows release builds opt into Vulkan explicitly. Keeping it out of `modeld`

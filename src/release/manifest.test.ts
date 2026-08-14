@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { releaseManifestFor } from "./manifest";
 
 describe("release manifest", () => {
-  it("fails closed for every development-only feature in public builds", () => {
+  it("keeps only supported features in public builds", () => {
     expect(releaseManifestFor("public").features).toEqual({
       local: false,
       voice: false,
       ssh: false,
-      work: false,
+      work: true,
     });
   });
 

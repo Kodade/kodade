@@ -11,7 +11,7 @@
     "package.json": "e17b141ad5f71d3b8f26e40929a000cb578af3e03f6c6eb82e5aaa77a2159aed",
     "pnpm-lock.yaml": "dbadcf9e92d22c16f3b5be6d624a47349a8c500c1f341f91763559c7f8f696ff",
     "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
-    "src-tauri/Cargo.toml": "b3beed3398b82c52361d078032aee9c4b6cab52caec029f1e003c4b213a592e4",
+    "src-tauri/Cargo.toml": "430de48a2f9116cd50654641f399d6ceaebe79bba529365effdfd1946af39189",
     "src-tauri/Cargo.lock": "58302010e80cdc2611d29393a66b4be4cebb8f5e48667f79b9659e9d174ae066",
     "licenses/dependencies/about.toml": "d56f30f1f89a1aba49dbf1b24d7868d40812a00d8ee92ca0d5c7c8e5ced969ff",
     "licenses/dependencies/javascript-overrides.json": "7be480d97680a94cefc52731b9b3ef522c1d17e9fa733eae081b2561d6f00605",
