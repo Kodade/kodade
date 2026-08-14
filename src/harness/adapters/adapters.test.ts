@@ -8,10 +8,7 @@ import type { ConfigScan, FileRead } from "../../ipc/contract";
 import type { ConfigDirEntry } from "../../ipc/contract";
 import type { HarnessArtifact, ScanContext } from "../model";
 import { scanInventory } from "../scan";
-import { createClaudeAdapter } from "./claude";
-import { createCodexAdapter } from "./codex";
-import { createGrokAdapter } from "./grok";
-import { createOpencodeAdapter } from "./opencode";
+import { createHarnessAdapter } from "./shared";
 
 const MAC: ScanContext = {
   home: "/Users/keith",
@@ -41,7 +38,7 @@ const WINDOWS_NON_ASCII: ScanContext = {
 
 describe("claude adapter detect()", () => {
   it("resolves mac paths for the project scope", async () => {
-    const adapter = createClaudeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("claude", new MockConfig());
     const locations = await adapter.detect("project", MAC);
     const byKind = Object.fromEntries(locations.map((l) => [`${l.kind}:${l.path}`, l]));
 
@@ -59,7 +56,7 @@ describe("claude adapter detect()", () => {
   });
 
   it("resolves windows paths with backslash separators", async () => {
-    const adapter = createClaudeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("claude", new MockConfig());
     const project = await adapter.detect("project", WINDOWS);
     expect(project.map((l) => l.path)).toEqual([
       "C:\\Users\\Keith\\proj\\CLAUDE.md",
@@ -80,7 +77,7 @@ describe("claude adapter detect()", () => {
 
 describe("codex adapter detect()", () => {
   it("resolves AGENTS.md instructions and the global config.toml mcp location", async () => {
-    const adapter = createCodexAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("codex", new MockConfig());
     const project = await adapter.detect("project", MAC);
     expect(project.map((l) => `${l.kind}:${l.path}`)).toEqual([
       "instruction:/Users/keith/proj/AGENTS.md",
@@ -100,7 +97,7 @@ describe("codex adapter detect()", () => {
     // Unlike opencode, Codex CLI is documented as using %USERPROFILE%\.codex
     // (home-relative) on Windows too, so this adapter's templates carry no
     // `windows` override — confirm that holds and %APPDATA% is never consulted.
-    const adapter = createCodexAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("codex", new MockConfig());
     const global = await adapter.detect("global", WINDOWS);
     expect(global.map((l) => l.path)).toEqual([
       "C:\\Users\\Keith\\.codex\\AGENTS.md",
@@ -113,7 +110,7 @@ describe("codex adapter detect()", () => {
 
 describe("grok adapter detect()", () => {
   it("resolves shared project instructions and Grok Build compatible skill roots (mac)", async () => {
-    const adapter = createGrokAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("grok", new MockConfig());
     const project = await adapter.detect("project", MAC);
     expect(project.map((l) => `${l.kind}:${l.path}`)).toEqual([
       "instruction:/Users/keith/proj/AGENTS.md",
@@ -133,7 +130,7 @@ describe("grok adapter detect()", () => {
   });
 
   it("resolves windows paths with backslash separators", async () => {
-    const adapter = createGrokAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("grok", new MockConfig());
     const global = await adapter.detect("global", WINDOWS);
     expect(global.map((l) => l.path)).toEqual([
       "C:\\Users\\Keith\\.grok\\GROK.md",
@@ -147,7 +144,7 @@ describe("grok adapter detect()", () => {
   it("scans a present GROK.md into an instruction artifact", async () => {
     const config = new MockConfig();
     config.reads.set("/Users/keith/proj/GROK.md", { kind: "text", content: "hi\n" });
-    const adapter = createGrokAdapter(config);
+    const adapter = createHarnessAdapter("grok", config);
     const inventory = await scanInventory([adapter], "project", MAC, () => 1);
     expect(inventory.artifacts).toEqual([
       expect.objectContaining({ cli: "grok", kind: "instruction", name: "GROK.md" }),
@@ -157,7 +154,7 @@ describe("grok adapter detect()", () => {
 
 describe("opencode adapter detect()", () => {
   it("resolves AGENTS.md + opencode.json mcp locations (mac)", async () => {
-    const adapter = createOpencodeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("opencode", new MockConfig());
     const project = await adapter.detect("project", MAC);
     expect(project.map((l) => `${l.kind}:${l.path}`)).toEqual([
       "instruction:/Users/keith/proj/AGENTS.md",
@@ -182,7 +179,7 @@ describe("opencode adapter detect()", () => {
     // `xdgConfig` (`XDG_CONFIG_HOME || os.homedir()/.config`) — no win32
     // branch — so on Windows it lands at `%USERPROFILE%\.config\opencode`,
     // home-relative like every other CLI. %APPDATA% is never consulted.
-    const adapter = createOpencodeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("opencode", new MockConfig());
     const global = await adapter.detect("global", WINDOWS);
     expect(global.map((l) => l.path)).toEqual([
       "C:\\Users\\Keith\\.config\\opencode\\AGENTS.md",
@@ -194,7 +191,7 @@ describe("opencode adapter detect()", () => {
   });
 
   it("resolves the Windows global config for a non-ASCII username (M10g)", async () => {
-    const adapter = createOpencodeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("opencode", new MockConfig());
     const global = await adapter.detect("global", WINDOWS_NON_ASCII);
     expect(global.map((l) => l.path)).toEqual([
       "C:\\Users\\Keïth\\.config\\opencode\\AGENTS.md",
@@ -206,7 +203,7 @@ describe("opencode adapter detect()", () => {
   });
 
   it("project scope stays project-relative on Windows", async () => {
-    const adapter = createOpencodeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("opencode", new MockConfig());
     const project = await adapter.detect("project", WINDOWS);
     expect(project.map((l) => l.path)).toEqual([
       "C:\\Users\\Keith\\proj\\AGENTS.md",
@@ -223,7 +220,7 @@ describe("opencode adapter detect()", () => {
       "/Users/keith/proj/opencode.json",
       { kind: "text", content: JSON.stringify({ mcp: { bridgememory: { command: "kodade-mcp" } } }) },
     );
-    const adapter = createOpencodeAdapter(config);
+    const adapter = createHarnessAdapter("opencode", config);
     const inventory = await scanInventory([adapter], "project", MAC, () => 1);
     expect(inventory.artifacts).toEqual([
       expect.objectContaining({ cli: "opencode", kind: "mcp-server", name: "bridgememory" }),
@@ -233,8 +230,8 @@ describe("opencode adapter detect()", () => {
   it("a shared project AGENTS.md is read by both codex and opencode", async () => {
     const config = new MockConfig();
     config.reads.set("/Users/keith/proj/AGENTS.md", { kind: "text", content: "shared\n" });
-    const codex = createCodexAdapter(config);
-    const opencode = createOpencodeAdapter(config);
+    const codex = createHarnessAdapter("codex", config);
+    const opencode = createHarnessAdapter("opencode", config);
     const inventory = await scanInventory([codex, opencode], "project", MAC, () => 1);
     expect(inventory.artifacts.map((a) => `${a.cli}:${a.path}`)).toEqual([
       "codex:/Users/keith/proj/AGENTS.md",
@@ -293,7 +290,7 @@ describe("adapter scan() over a fixture ConfigIpc", () => {
     });
 
     const inventory = await scanInventory(
-      [createClaudeAdapter(config)],
+      [createHarnessAdapter("claude", config)],
       "project",
       MAC,
       () => 1,
@@ -363,7 +360,7 @@ describe("adapter scan() over a fixture ConfigIpc", () => {
       error: "permission denied",
     });
 
-    const claude = createClaudeAdapter(config);
+    const claude = createHarnessAdapter("claude", config);
     const inventory = await scanInventory([claude], "project", MAC, () => 999);
 
     expect(inventory.scannedAt).toBe(999);
@@ -392,7 +389,7 @@ describe("adapter scan() over a fixture ConfigIpc", () => {
 
   it("treats missing files and dirs as empty without erroring", async () => {
     const config = new MockConfig(); // everything missing by default
-    const claude = createClaudeAdapter(config);
+    const claude = createHarnessAdapter("claude", config);
     const inventory = await scanInventory([claude], "project", MAC, () => 0);
     expect(inventory.artifacts).toEqual([]);
     expect(inventory.errors).toEqual([]);
@@ -440,7 +437,7 @@ describe("adapter mutation (M10d skills enable/disable)", () => {
       root: SKILLS,
       entries: [dirEntry("code-review")],
     });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const artifact = skillArtifact();
 
     const change = await adapter.plan({
@@ -484,7 +481,7 @@ describe("adapter mutation (M10d skills enable/disable)", () => {
       ],
     });
     config.reads.set(path, { kind: "text", content: "# solo skill\n" });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const artifact = skillArtifact({
       id: "claude:project:skill:solo",
       name: "solo",
@@ -527,7 +524,7 @@ describe("adapter mutation (M10d skills enable/disable)", () => {
         },
       ],
     });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const artifact = skillArtifact({
       id: "claude:project:skill:x-post",
       name: "x-post",
@@ -555,7 +552,7 @@ describe("adapter mutation (M10d skills enable/disable)", () => {
     const config = new MockConfig();
     // The scan reports an empty skills dir, so the renamed entry is never found.
     config.scans.set(SKILLS, { status: "listing", root: SKILLS, entries: [] });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const artifact = skillArtifact();
 
     const change = await adapter.plan({
@@ -570,7 +567,7 @@ describe("adapter mutation (M10d skills enable/disable)", () => {
   });
 
   it("plan refuses toggling a non-skill kind, and structured actions need a payload", async () => {
-    const adapter = createClaudeAdapter(new MockConfig());
+    const adapter = createHarnessAdapter("claude", new MockConfig());
     const instruction = skillArtifact({ kind: "instruction", name: "CLAUDE.md" });
     await expect(
       adapter.plan({ artifactId: instruction.id, action: "disable", projectRoot: ROOT, artifact: instruction }),
@@ -596,7 +593,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
     const config = new MockConfig();
     const before = '{\n  "mcpServers": {\n    "github": { "command": "gh-mcp" }\n  }\n}\n';
     config.reads.set(MCP, { kind: "text", content: before });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
 
     const change = await adapter.plan({
       artifactId: "claude:add-mcp:bridgememory",
@@ -633,7 +630,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
 
   it("creates a new config file and removes its exact bytes on rollback", async () => {
     const config = new MockConfig(); // MCP absent → new file
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
 
     const change = await adapter.plan({
       artifactId: "claude:add-mcp:bridgememory",
@@ -663,7 +660,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
     const config = new MockConfig();
     const managed = '{ "mcpServers": { "kodade-mem": { "command": "kodade-mcp" } } }\n';
     config.reads.set(MCP, { kind: "text", content: managed });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
 
     const change = await adapter.plan({
       artifactId: "claude:remove-created-config",
@@ -685,7 +682,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
   it("plan surfaces a corrupt-config abort before any write", async () => {
     const config = new MockConfig();
     config.reads.set(MCP, { kind: "text", content: '{ "mcpServers": { "x": } }' });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     await expect(
       adapter.plan({
         artifactId: "claude:add-mcp:new",
@@ -705,7 +702,7 @@ describe("adapter mutation (M10e MCP safe merge)", () => {
   it("verify fails when the written bytes don't match, so the store can restore", async () => {
     const config = new MockConfig();
     config.reads.set(MCP, { kind: "text", content: '{ "mcpServers": {} }' });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const change = await adapter.plan({
       artifactId: "claude:add-mcp:svc",
       action: "add-mcp-server",
@@ -747,7 +744,7 @@ describe("adapter mutation (M10e instruction editing)", () => {
   it("plan → apply → verify writes the new text with an optimistic hash", async () => {
     const config = new MockConfig();
     config.reads.set(CLAUDE, { kind: "text", content: "old\n" });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const artifact = instructionArtifact();
 
     const change = await adapter.plan({
@@ -770,7 +767,7 @@ describe("adapter mutation (M10e instruction editing)", () => {
   it("refuses a no-op edit", async () => {
     const config = new MockConfig();
     config.reads.set(CLAUDE, { kind: "text", content: "same\n" });
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     await expect(
       adapter.plan({
         artifactId: "claude:project:instruction:CLAUDE.md",
@@ -792,7 +789,7 @@ describe("adapter mutation (M15 KödSkills directories)", () => {
 
   it("plan → apply → verify → restore round-trips install and uninstall", async () => {
     const config = new MockConfig();
-    const adapter = createClaudeAdapter(config);
+    const adapter = createHarnessAdapter("claude", config);
     const install = await adapter.plan({
       artifactId: "claude:global:skill:code-review",
       action: "install-skill",

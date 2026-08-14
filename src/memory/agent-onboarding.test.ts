@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createClaudeAdapter } from "../harness/adapters/claude";
-import { createCodexAdapter } from "../harness/adapters/codex";
+import { createHarnessAdapter } from "../harness/adapters/shared";
 import { MockConfig } from "../ipc/mock";
 import { parseByFormat } from "../harness/merge";
 import { createHarnessStore } from "../store/harness";
@@ -68,7 +67,7 @@ async function applyPlan(
   const plan = await buildAgentOnboardingPlan(config, input, action);
   const store = createHarnessStore({
     config,
-    adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+    adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
     hasFeature: () => true,
   });
   await store.getState().prepareBatch(
@@ -240,7 +239,7 @@ describe("buildAgentOnboardingPlan", () => {
     const plan = await buildAgentOnboardingPlan(config, INPUT, "connect");
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
     let healthChecks = 0;
@@ -357,7 +356,7 @@ describe("buildAgentOnboardingPlan", () => {
     config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "# Changed elsewhere\n" });
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
 
@@ -391,7 +390,7 @@ describe("buildAgentOnboardingPlan", () => {
     else config.reads.set(`${ROOT}/AGENTS.md`, { kind: "text", content: "" });
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
 

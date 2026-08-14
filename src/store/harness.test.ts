@@ -3,8 +3,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { MockConfig } from "../ipc/mock";
-import { createClaudeAdapter } from "../harness/adapters/claude";
-import { createCodexAdapter } from "../harness/adapters/codex";
+import { createHarnessAdapter } from "../harness/adapters/shared";
 import type { KodSkillsPackBundle, ProjectSkillSourceBundle } from "../ipc/contract";
 import type {
   ArtifactLocation,
@@ -136,7 +135,7 @@ describe("createHarnessStore", () => {
     config.reads.set("/Users/keith/proj/CLAUDE.md", { kind: "text", content: "hello\n" });
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config)],
       now: () => 1234,
     });
 
@@ -159,7 +158,7 @@ describe("createHarnessStore", () => {
       root: "/Users/keith/proj/.claude/skills",
       error: "permission denied",
     });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
 
     await store.getState().rescan("project", CTX);
     const state = store.getState();
@@ -248,7 +247,7 @@ describe("createHarnessStore", () => {
       config.reads.set("/Users/keith/proj/CLAUDE.md", { kind: "text", content: "hi\n" });
       const store = createHarnessStore({
         config,
-        adapters: [createClaudeAdapter(config)],
+        adapters: [createHarnessAdapter("claude", config)],
         now: () => 42,
       });
 
@@ -264,7 +263,7 @@ describe("createHarnessStore", () => {
     it("surfaces a config.env() rejection as scanError, never a throw", async () => {
       const config = new MockConfig();
       config.env = () => Promise.reject(new Error("env lookup failed"));
-      const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+      const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
 
       await store.getState().rescanScope("project", "/Users/keith/proj");
 
@@ -276,7 +275,7 @@ describe("createHarnessStore", () => {
       const config = new MockConfig();
       config.envResult = { home: "/Users/keith", platform: "mac", appDataRoaming: null, appDataLocal: null };
       config.reads.set("/Users/keith/.claude/CLAUDE.md", { kind: "text", content: "global\n" });
-      const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+      const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
 
       await store.getState().rescanScope("global", "/Users/keith/proj");
 
@@ -633,7 +632,7 @@ describe("harness store KödSkills batches (M15)", () => {
     let pro = true;
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => pro,
     });
     await store.getState().loadKodSkills("/root");
@@ -781,7 +780,7 @@ describe("harness store project skill import", () => {
     };
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
 
@@ -810,7 +809,7 @@ describe("harness store project skill import", () => {
     let pro = true;
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => pro,
     });
     await store.getState().loadProjectSkill(projectSkillBundle(), "/root");
@@ -830,7 +829,7 @@ describe("prepareAddMcpServer + listMcpTargets (M10e)", () => {
 
   it("lists the detected MCP config file as a target", async () => {
     const config = new MockConfig();
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     const targets = await store.getState().listMcpTargets("project", ROOT);
     expect(targets).toEqual([
       { cli: "claude", path: `${ROOT}/.mcp.json`, format: "json", keyPath: "mcpServers" },
@@ -843,7 +842,7 @@ describe("prepareAddMcpServer + listMcpTargets (M10e)", () => {
       kind: "text",
       content: '{\n  "mcpServers": {\n    "github": { "command": "gh-mcp" }\n  }\n}\n',
     });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
 
     const target = { cli: "claude" as const, path: `${ROOT}/.mcp.json`, format: "json" as const, keyPath: "mcpServers" };
     await store.getState().prepareAddMcpServer(target, { name: "bridgememory", config: { command: "kodade-mcp" } }, ROOT);
@@ -861,7 +860,7 @@ describe("prepareAddMcpServer + listMcpTargets (M10e)", () => {
       kind: "text",
       content: '{ "mcpServers": { "github": { "command": "gh-mcp" } } }',
     });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     const target = { cli: "claude" as const, path: `${ROOT}/.mcp.json`, format: "json" as const, keyPath: "mcpServers" };
     await store.getState().prepareAddMcpServer(target, { name: "github", config: { command: "x" } }, ROOT);
     expect(store.getState().pendingChange).toBeNull();
@@ -874,7 +873,7 @@ describe("prepareAddMcpServer + listMcpTargets (M10e)", () => {
       kind: "text",
       content: '{ "mcpServers": {} }',
     });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     const target = { cli: "claude" as const, path: `${ROOT}/.mcp.json`, format: "json" as const, keyPath: "mcpServers" };
 
     // Prime lastScan so the post-apply rescan has a scope/root to reuse.
@@ -898,7 +897,7 @@ describe("prepareEdit (M10e instruction editing)", () => {
   it("stages an instruction edit as a pendingChange", async () => {
     const config = new MockConfig();
     config.reads.set(CLAUDE, { kind: "text", content: "old\n" });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await store.getState().rescanScope("project", ROOT);
 
     const artifact = store.getState().inventory?.artifacts.find((a) => a.kind === "instruction");

@@ -3,8 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appStore, filesStore } from "../store/appStore";
 import { createHarnessStore } from "../store/harness";
-import { createClaudeAdapter } from "../harness/adapters/claude";
-import { createCodexAdapter } from "../harness/adapters/codex";
+import { createHarnessAdapter } from "../harness/adapters/shared";
 import { MockConfig, MockPlatform } from "../ipc/mock";
 import type { ConfigScan, KodSkillsPackBundle } from "../ipc/contract";
 import type { HarnessAdapter, LocationScan } from "../harness/contract";
@@ -546,7 +545,7 @@ describe("HarnessPane", () => {
     const free = createEntitlements({ "harness.pro": false });
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config)],
       hasFeature: free.hasFeature,
     });
     await act(async () =>
@@ -643,7 +642,7 @@ describe("HarnessPane", () => {
     config.kodSkillsBundle = kodSkillsBundle();
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
     await act(async () => root?.render(<TestHarnessPane scope="global" store={store} />));
@@ -678,7 +677,7 @@ describe("HarnessPane", () => {
     };
     const store = createHarnessStore({
       config,
-      adapters: [createClaudeAdapter(config), createCodexAdapter(config)],
+      adapters: [createHarnessAdapter("claude", config), createHarnessAdapter("codex", config)],
       hasFeature: () => true,
     });
     await act(async () =>
@@ -719,7 +718,7 @@ describe("HarnessPane", () => {
   it("Pro: toggling a skill opens the confirm dialog, and applying flips the row", async () => {
     const config = new MockConfig();
     config.scans.set(SKILLS, skillsScan());
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await act(async () => root?.render(<TestHarnessPane scope="project" store={store} />));
     await flushRescan();
 
@@ -750,7 +749,7 @@ describe("HarnessPane", () => {
   it("Pro: cancelling the dialog writes nothing", async () => {
     const config = new MockConfig();
     config.scans.set(SKILLS, skillsScan());
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await act(async () => root?.render(<TestHarnessPane scope="project" store={store} />));
     await flushRescan();
 
@@ -770,7 +769,7 @@ describe("HarnessPane", () => {
     const config = new MockConfig();
     config.scans.set(SKILLS, skillsScan());
     config.failRenameWith = "permission denied";
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await act(async () => root?.render(<TestHarnessPane scope="project" store={store} />));
     await flushRescan();
 
@@ -788,7 +787,7 @@ describe("HarnessPane", () => {
   it("free tier: a skill row shows no toggle", async () => {
     const config = new MockConfig();
     config.scans.set(SKILLS, skillsScan());
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     const free = createEntitlements({ "harness.pro": false });
     await act(async () =>
       root?.render(<TestHarnessPane scope="project" store={store} entitlements={free} />),
@@ -817,7 +816,7 @@ describe("HarnessPane", () => {
       kind: "text",
       content: '{\n  "mcpServers": {\n    "github": { "command": "gh-mcp" }\n  }\n}\n',
     });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await act(async () => root?.render(<TestHarnessPane scope="project" store={store} />));
     await flushRescan();
 
@@ -882,7 +881,7 @@ describe("HarnessPane", () => {
   it("Pro: instruction rows expose an edit affordance that opens the inline editor", async () => {
     const config = new MockConfig();
     config.reads.set("/repo/CLAUDE.md", { kind: "text", content: "# project rules\n" });
-    const store = createHarnessStore({ config, adapters: [createClaudeAdapter(config)] });
+    const store = createHarnessStore({ config, adapters: [createHarnessAdapter("claude", config)] });
     await act(async () => root?.render(<TestHarnessPane scope="project" store={store} />));
     await flushRescan();
 

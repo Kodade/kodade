@@ -13,7 +13,6 @@
 
 import type { Provider, ProviderStream } from "../providers/catalog";
 import type {
-  AgentPlanItem,
   AgentRunRequest,
   AgentSpawn,
   AgentStreamAdapter,
@@ -26,18 +25,13 @@ import {
   endOfRunEvents,
   parseJsonLine,
 } from "./engine";
-
-type Json = Record<string, unknown>;
-
-function asRecord(value: unknown): Json | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
+import {
+  asRecord,
+  asString,
+  planEvent,
+  tokenUsageFromRecord,
+  type Json,
+} from "./normalize";
 
 class GrokParser implements AgentStreamParser {
   private done = false;
@@ -89,7 +83,7 @@ class GrokParser implements AgentStreamParser {
         const events = this.flushAll();
         const sessionId = asString(value.sessionId);
         if (sessionId) events.push({ type: "session", sessionId });
-        const usage = usageOf(asRecord(value.usage));
+        const usage = tokenUsageFromRecord(value.usage);
         events.push({
           type: "done",
           ...(asString(value.stopReason)
@@ -147,7 +141,8 @@ class GrokParser implements AgentStreamParser {
     this.startedTools.add(callId);
     const events: AgentStreamEvent[] = [];
     // todo_write is Grok Build's plan surface; render it as a plan block too.
-    const plan = todoPlan(tool, args);
+    const plan =
+      tool === "todo_write" ? planEvent(args.todos, ["content"]) : null;
     if (plan) events.push(plan);
     events.push({ type: "tool-call-started", callId, call: { tool, args } });
     return events;
@@ -192,43 +187,6 @@ function outcomeOf(
   return failed
     ? { status: "error", result: detail || `exited with status ${exitCode ?? "unknown"}` }
     : { status: "executed", result: detail };
-}
-
-// Map a todo_write call's `todos` onto the neutral plan shape. Merge updates
-// may carry only {id, status}; entries without text can't render and are
-// skipped rather than guessed at.
-function todoPlan(tool: string, input: Json): AgentStreamEvent | null {
-  if (tool !== "todo_write" || !Array.isArray(input.todos)) return null;
-  const items = input.todos
-    .map((entry) => {
-      const todo = asRecord(entry);
-      const text = asString(todo?.content) ?? "";
-      if (!text) return null;
-      const status = asString(todo?.status);
-      return {
-        text,
-        status:
-          status === "completed"
-            ? ("completed" as const)
-            : status === "in_progress"
-              ? ("in-progress" as const)
-              : ("pending" as const),
-      };
-    })
-    .filter((item): item is AgentPlanItem => !!item);
-  return items.length > 0 ? { type: "plan", items } : null;
-}
-
-function usageOf(usage: Json | null) {
-  if (!usage) return null;
-  const promptTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const completionTokens =
-    typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-  };
 }
 
 export function createGrokAdapter(

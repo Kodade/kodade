@@ -35,11 +35,8 @@ import {
 } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
 import { createGithubStore } from "../github/store";
-import { createClaudeAdapter } from "../harness/adapters/claude";
-import { createCodexAdapter } from "../harness/adapters/codex";
-import { createGrokAdapter } from "../harness/adapters/grok";
-import { createOpencodeAdapter } from "../harness/adapters/opencode";
-import { createKodadeLocalAdapter } from "../harness/adapters/kodade-local";
+import { createHarnessAdapter } from "../harness/adapters/shared";
+import { createReadOnlyHarnessAdapter } from "../harness/adapters/read";
 import { SessionRegistry } from "../terminal/registry";
 import { createXtermFactory } from "../terminal/xterm-factory";
 import { applyCssVars, toXtermTheme } from "../themes/applier";
@@ -405,12 +402,11 @@ export const workingTreeSummaryStore = createWorkingTreeSummaryStore(tauriGit);
 export const harnessStore = createHarnessStore({
   config: tauriConfig,
   adapters: [
-    createClaudeAdapter(tauriConfig),
-    createCodexAdapter(tauriConfig),
-    createGrokAdapter(tauriConfig),
-    createOpencodeAdapter(tauriConfig),
+    ...["claude", "codex", "grok", "opencode"].map((cli) =>
+      createHarnessAdapter(cli, tauriConfig),
+    ),
     ...(RELEASE_MANIFEST.features.local
-      ? [createKodadeLocalAdapter(tauriConfig)]
+      ? [createReadOnlyHarnessAdapter("kodade-local", tauriConfig)]
       : []),
   ],
 });

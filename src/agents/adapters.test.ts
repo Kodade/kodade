@@ -207,6 +207,29 @@ describe("codex dialect", () => {
     });
   });
 
+  it("maps a todo list onto a plan block", () => {
+    const planned = drain("codex", [
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_plan",
+          type: "todo_list",
+          items: [
+            { text: "Inspect the parser", status: "in_progress" },
+            { content: "Verify the change", completed: true },
+          ],
+        },
+      }),
+    ]);
+    expect(planned.find((event) => event.type === "plan")).toEqual({
+      type: "plan",
+      items: [
+        { text: "Inspect the parser", status: "in-progress" },
+        { text: "Verify the change", status: "completed" },
+      ],
+    });
+  });
+
   it("turns turn.failed into a failure plus a done", () => {
     const failed = drain("codex", [
       JSON.stringify({ type: "turn.failed", error: { message: "stream disconnected" } }),
@@ -408,6 +431,37 @@ describe("opencode dialect", () => {
     expect(events.at(-1)).toEqual({
       type: "done",
       usage: { promptTokens: 15, completionTokens: 6, totalTokens: 24 },
+    });
+  });
+
+  it("maps a todo tool call onto a plan block", () => {
+    const planned = drain("opencode", [
+      JSON.stringify({
+        type: "tool_use",
+        sessionID: "ses_plan",
+        part: {
+          id: "part_plan",
+          callID: "call_plan",
+          tool: "todowrite",
+          state: {
+            status: "completed",
+            input: {
+              todos: [
+                { content: "Inspect the parser", status: "in-progress" },
+                { text: "Verify the change", status: "completed" },
+              ],
+            },
+            output: "updated",
+          },
+        },
+      }),
+    ]);
+    expect(planned.find((event) => event.type === "plan")).toEqual({
+      type: "plan",
+      items: [
+        { text: "Inspect the parser", status: "in-progress" },
+        { text: "Verify the change", status: "completed" },
+      ],
     });
   });
 

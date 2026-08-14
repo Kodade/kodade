@@ -12,7 +12,6 @@
 
 import type { Provider, ProviderStream } from "../providers/catalog";
 import type {
-  AgentPlanItem,
   AgentRunRequest,
   AgentSpawn,
   AgentStreamAdapter,
@@ -26,18 +25,13 @@ import {
   failureEvent,
   parseJsonLine,
 } from "./engine";
-
-type Json = Record<string, unknown>;
-
-function asRecord(value: unknown): Json | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
+import {
+  asRecord,
+  asString,
+  planEvent,
+  tokenUsageFromRecord,
+  type Json,
+} from "./normalize";
 
 // Item types that represent work with a result, i.e. a tool card.
 const TOOL_ITEMS = new Set([
@@ -80,7 +74,7 @@ class CodexParser implements AgentStreamParser {
         // The turn produced an answer, so anything it reported along the way
         // was a warning, not a failure.
         this.pendingErrors = [];
-        const usage = usageOf(asRecord(value.usage));
+        const usage = tokenUsageFromRecord(value.usage);
         return [{ type: "done", ...(usage ? { usage } : {}) }];
       }
       case "turn.failed": {
@@ -136,8 +130,9 @@ class CodexParser implements AgentStreamParser {
     }
 
     if (kind === "todo_list") {
-      const items = planItems(item);
-      return items.length > 0 ? [{ type: "plan", items }] : [];
+      const entries = Array.isArray(item.items) ? item.items : item.todos;
+      const plan = planEvent(entries, ["text", "content"]);
+      return plan ? [plan] : [];
     }
 
     if (kind === "error") {
@@ -207,43 +202,6 @@ function outcomeOf(item: Json): { status: "executed" | "error"; result: string }
   return failed
     ? { status: "error", result: detail || `exited with status ${exitCode ?? "unknown"}` }
     : { status: "executed", result: detail };
-}
-
-function planItems(item: Json): AgentPlanItem[] {
-  const entries = Array.isArray(item.items)
-    ? item.items
-    : Array.isArray(item.todos)
-      ? item.todos
-      : [];
-  return entries
-    .map((entry) => {
-      const todo = asRecord(entry);
-      const text = asString(todo?.text) ?? asString(todo?.content) ?? "";
-      if (!text) return null;
-      const status = asString(todo?.status);
-      const completed = todo?.completed === true || status === "completed";
-      return {
-        text,
-        status: completed
-          ? ("completed" as const)
-          : status === "in_progress" || status === "in-progress"
-            ? ("in-progress" as const)
-            : ("pending" as const),
-      };
-    })
-    .filter((entry): entry is AgentPlanItem => !!entry);
-}
-
-function usageOf(usage: Json | null) {
-  if (!usage) return null;
-  const promptTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const completionTokens =
-    typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-  };
 }
 
 export function createCodexAdapter(

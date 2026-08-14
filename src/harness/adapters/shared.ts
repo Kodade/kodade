@@ -1,7 +1,6 @@
-// The generic adapter engine. Detection and read-scanning are entirely
-// data-driven from the catalog's HarnessLocations plus the pure scan.ts
-// functions, so adding a CLI is a catalog edit plus a one-line adapter file
-// (claude.ts / codex.ts). Mutation methods throw until M10d/M10e implement them.
+// The generic adapter engine. Detection, scanning, and mutation are driven by
+// the catalog's HarnessLocations plus the pure scan/merge modules, so adding a
+// CLI is a catalog change rather than another pass-through adapter module.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -88,7 +87,7 @@ async function readText(
 
 // Build an adapter for one CLI over the injected ConfigIpc. detect() reads the
 // CLI's catalog templates; scan() dispatches each location to the matching pure
-// scanner. Both are the M10a read half.
+// scanner; mutations use the shared reversible plan/apply/verify flow below.
 export function createHarnessAdapter(
   cli: string,
   config: ConfigIpc,

@@ -26,18 +26,13 @@ import {
   failureEvent,
   parseJsonLine,
 } from "./engine";
-
-type Json = Record<string, unknown>;
-
-function asRecord(value: unknown): Json | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
+import {
+  asRecord,
+  asString,
+  planEvent,
+  tokenUsageFromRecord,
+  type Json,
+} from "./normalize";
 
 class ClaudeParser implements AgentStreamParser {
   private messageId = "";
@@ -147,7 +142,10 @@ class ClaudeParser implements AgentStreamParser {
         const input = asRecord(block.input) ?? {};
         // TodoWrite is Claude Code's plan surface; render it as a plan block
         // rather than as one more opaque tool card.
-        const plan = todoPlan(tool, input);
+        const plan =
+          tool === "TodoWrite"
+            ? planEvent(input.todos, ["content", "activeForm"])
+            : null;
         if (plan) events.push(plan);
         events.push({ type: "tool-call-started", callId, call: { tool, args: input } });
       }
@@ -190,49 +188,14 @@ class ClaudeParser implements AgentStreamParser {
         asString(value.result) ?? asString(value.subtype) ?? "the agent reported an error";
       events.push(failureEvent(message));
     }
+    const usage = tokenUsageFromRecord(value.usage);
     events.push({
       type: "done",
       ...(asString(value.stop_reason) ? { finishReason: asString(value.stop_reason)! } : {}),
-      ...(usageOf(value) ? { usage: usageOf(value)! } : {}),
+      ...(usage ? { usage } : {}),
     });
     return events;
   }
-}
-
-function usageOf(value: Json) {
-  const usage = asRecord(value.usage);
-  if (!usage) return null;
-  const promptTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const completionTokens =
-    typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-  };
-}
-
-// Map a TodoWrite call's `todos` array onto the neutral plan shape.
-function todoPlan(tool: string, input: Json): AgentStreamEvent | null {
-  if (tool !== "TodoWrite" || !Array.isArray(input.todos)) return null;
-  const items = input.todos
-    .map((entry) => {
-      const todo = asRecord(entry);
-      const text = asString(todo?.content) ?? asString(todo?.activeForm) ?? "";
-      if (!text) return null;
-      const status = asString(todo?.status);
-      return {
-        text,
-        status:
-          status === "completed"
-            ? ("completed" as const)
-            : status === "in_progress"
-              ? ("in-progress" as const)
-              : ("pending" as const),
-      };
-    })
-    .filter((item): item is { text: string; status: "pending" | "in-progress" | "completed" } => !!item);
-  return items.length > 0 ? { type: "plan", items } : null;
 }
 
 export function createClaudeAdapter(
