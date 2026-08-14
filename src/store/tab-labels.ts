@@ -10,6 +10,8 @@ import { nativeBasename, nativeDirname } from "../platform/native-path";
 // display label rather than a disambiguated basename. KödPR's review tab (M12c)
 // is one per project, so a single constant is all it needs.
 export const REVIEW_TAB_LABEL = "review";
+// KödWork task tabs fall back to this when the task's title isn't loaded yet.
+export const KODWORK_TAB_LABEL = "KödWork";
 
 function basename(path: string): string {
   return nativeBasename(path);

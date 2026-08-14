@@ -2837,3 +2837,116 @@ describe("chat threads are sessions without a PTY (KödChat, #163)", () => {
     expect(polled).not.toContain(threadId);
   });
 });
+
+describe("KödWork tasks are sessions without a PTY (#43)", () => {
+  it("creates a work session without a terminal and without stealing the selection", async () => {
+    const { store, opens } = makeStore(new MockStorage(), undefined, true, {
+      autoStartTerminal: false,
+    });
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const threadId = store.getState().addChatThread(projectId, "claude")!;
+
+    const taskId = store.getState().addWorkSession(projectId);
+    expect(taskId).not.toBeNull();
+    const task = store.getState().sessions.find((s) => s.id === taskId)!;
+    expect(task.kind).toBe("work");
+    expect(task.name).toBe("work 1");
+    // No registry host, and the chat keeps the pane — the task is background.
+    expect(opens).toHaveLength(0);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(threadId);
+  });
+
+  it("persists and revives the work kind without opening a host", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage, undefined, true, { autoStartTerminal: false });
+    await first.store.getState().addProject("/repos/alpha");
+    const projectId = first.store.getState().projects[0].id;
+    first.store.getState().addWorkSession(projectId);
+    await first.store.getState().flushPersistence();
+
+    const doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.sessions![projectId].some((s) => s.kind === "work")).toBe(true);
+
+    const second = makeStore(storage, undefined, true, { autoStartTerminal: false });
+    await second.store.getState().hydrate();
+    await second.store.getState().setActiveProject(projectId);
+    const revived = second.store
+      .getState()
+      .sessions.filter((s) => s.projectId === projectId && s.kind === "work");
+    expect(revived).toHaveLength(1);
+    expect(second.opens).toHaveLength(0);
+  });
+
+  it("hydrates old documents untouched: absent and unknown kinds restore terminals", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [{ id: "project", name: "alpha", path: "/repos/alpha" }],
+      activeProjectId: "project",
+      sessions: {
+        project: [
+          { id: "legacy", name: "zsh 1" },
+          { id: "odd", name: "zsh 2", kind: "widget" },
+        ],
+      },
+    });
+    const { store, opens } = makeStore(storage);
+
+    await store.getState().hydrate();
+    const kinds = store.getState().sessions.map((s) => s.kind);
+    expect(kinds).toEqual([undefined, undefined]);
+    // Both revive as real terminals, exactly as before the field existed.
+    expect(opens.map((entry) => entry.id)).toEqual(["legacy", "odd"]);
+  });
+
+  it("closing a work session skips the registry and reports the removal", async () => {
+    const removed: string[] = [];
+    const { store, closes } = makeStore(new MockStorage(), undefined, true, {
+      autoStartTerminal: false,
+      // onSessionRemoved is how the app drops the task's kodwork document.
+      onSessionRemoved: (session) => void removed.push(session.id),
+    });
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const taskId = store.getState().addWorkSession(projectId)!;
+
+    await store.getState().closeSession(taskId);
+    expect(closes).not.toContain(taskId);
+    expect(removed).toContain(taskId);
+    expect(store.getState().sessions.some((s) => s.id === taskId)).toBe(false);
+  });
+
+  it("refuses a work session on a pinned remote project", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      remoteTargets: [{ host: "studio", path: "/srv/kodade" }],
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+    const projectId = remoteProjectId({ host: "studio", path: "/srv/kodade" });
+    expect(store.getState().addWorkSession(projectId)).toBeNull();
+  });
+
+  it("the foreground poller skips work sessions entirely", async () => {
+    const foreground = {
+      foreground: vi.fn(async (_id: string) => "claude" as string | null),
+    };
+    const { store } = makeStore(new MockStorage(), undefined, true, {
+      foreground,
+      isHidden: () => false,
+    });
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const terminalId = store.getState().activeSessionByProject[projectId];
+    const taskId = store.getState().addWorkSession(projectId)!;
+
+    await store.getState().pollForeground();
+    const polled = foreground.foreground.mock.calls.map((call) => call[0]);
+    expect(polled).toContain(terminalId);
+    expect(polled).not.toContain(taskId);
+  });
+});

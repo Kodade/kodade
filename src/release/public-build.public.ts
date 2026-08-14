@@ -3,6 +3,7 @@ import { availableSettingsSections } from "../components/settings/registry";
 import { externalUrls, local, ssh, vox } from "../ipc/transport";
 import { AVAILABLE_PROVIDERS, supportsChat } from "../providers/catalog";
 import { BINDINGS } from "../shortcuts/bindings";
+import { decodeTab } from "../store/tabs";
 import { RELEASE_MANIFEST } from "./manifest";
 
 describe("compiled public surface", () => {
@@ -12,13 +13,19 @@ describe("compiled public surface", () => {
       false,
       false,
       false,
+      false,
     ]);
   });
 
-  it("disables terminal voice, local delegation, and remote state", () => {
+  it("disables terminal voice, local delegation, remote state, and KödWork", () => {
     expect(RELEASE_MANIFEST.features.voice).toBe(false);
     expect(RELEASE_MANIFEST.features.local).toBe(false);
     expect(RELEASE_MANIFEST.features.ssh).toBe(false);
+    expect(RELEASE_MANIFEST.features.work).toBe(false);
+  });
+
+  it("drops persisted KödWork tab encodings so an old layout cannot reopen the dark surface", () => {
+    expect(decodeTab("kodwork:some-task")).toBeNull();
   });
 
   it("omits development settings, providers, and shortcuts", () => {

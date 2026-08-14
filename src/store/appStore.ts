@@ -26,6 +26,7 @@ import { createActivityModule } from "../activity/activity";
 import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
+import { createKodworkStore } from "../kodwork/store";
 import { createOllamaChatRuntime } from "../chat/ollama";
 import { formatProjectMemory } from "../memory/provider-context";
 import { createProvidersStore } from "../providers/store";
@@ -146,11 +147,15 @@ export const appStore = createProjectsStore({
       sessionId: session.id,
     });
   },
-  // A closed KödChat thread takes its transcript document with it. Declared
-  // below; read at call time, so the declaration order is fine.
+  // A closed KödChat thread takes its transcript document with it, and a
+  // closed KödWork session takes its task document. Declared below; read at
+  // call time, so the declaration order is fine.
   onSessionRemoved: (session) => {
-    if (session.kind !== "chat") return;
-    void chatStore.getState().removeThread(session.id);
+    if (session.kind === "chat") {
+      void chatStore.getState().removeThread(session.id);
+    } else if (session.kind === "work") {
+      void kodworkStore.getState().removeTask(session.id);
+    }
   },
   // Foreground-process auto-naming: the store polls this for visible sessions.
   foreground: tauriForeground,
@@ -629,6 +634,56 @@ export const chatStore = createChatStore({
   },
 });
 
+// KödWork tasks (#43, dev-gated behind the "work" feature). Task documents
+// live in their own per-task files; the projects store owns each task's
+// identity as a session of kind "work".
+//
+// The activity hooks are the same privacy boundary KödChat's are: ids, the
+// provider id, and a fixed short reason — never outcome or progress text. The
+// `working` hook mirrors a terminal-foreground fact so the Activity module
+// groups tasks needs-user/working/settled itself.
+export const kodworkStore = createKodworkStore({
+  agent: tauriAgent,
+  storage: tauriStorage,
+  memory: tauriMemory,
+  projectRoot: (projectId) =>
+    appStore.getState().projects.find((project) => project.id === projectId)
+      ?.path ?? null,
+  enabled: () => RELEASE_MANIFEST.features.work,
+  activity: {
+    streamed: (projectId, taskId) =>
+      activityAdapters.terminalOutput(projectId, taskId),
+    working: (projectId, taskId, process) =>
+      activityAdapters.workspace({
+        type: "terminal-foreground",
+        projectId,
+        sessionId: taskId,
+        process,
+      }),
+    attention: (projectId, taskId, reason) =>
+      activityModule.observe(
+        reason === null
+          ? {
+              type: "attention-reported",
+              projectId,
+              sessionId: taskId,
+              attention: "none",
+              provenance: "provider",
+              at: Date.now(),
+            }
+          : {
+              type: "attention-reported",
+              projectId,
+              sessionId: taskId,
+              attention: "needs-user",
+              provenance: "provider",
+              reason,
+              at: Date.now(),
+            },
+      ),
+  },
+});
+
 // Provider detection/launch. Launch delegates to the projects store, which owns
 // sessions — that's the one-way seam the providers store depends on.
 export const providersStore = createProvidersStore({
@@ -734,6 +789,17 @@ export async function initApp(): Promise<void> {
   // binary happens to be on PATH. This is safe in public builds and gives the
   // Settings/composer an actionable local start/install state.
   void chatStore.getState().refreshOllama();
+  // KödWork listens for its run events for the app's lifetime too, so a task
+  // keeps progressing while the user works elsewhere. Dev-gated: the public
+  // build never subscribes.
+  if (RELEASE_MANIFEST.features.work) {
+    void kodworkStore
+      .getState()
+      .start()
+      .catch((error) => {
+        console.error("kodade: unable to listen for KödWork run events", error);
+      });
+  }
   if (isTauriRuntime()) {
     void tauriBrowser
       .onAgentActivate((event) => {

@@ -1,3 +1,5 @@
+import { developmentFeatureEnabled } from "../release/manifest";
+
 export type Tab =
   | { kind: "file"; path: string }
   | { kind: "github" }
@@ -6,7 +8,9 @@ export type Tab =
   // KödSSH (M11d, Pro): the browsable tree for one pinned remote target.
   | { kind: "remote-files"; host: string; path: string }
   // KödSSH (M11d, Pro): a read-only preview of one file on a remote target.
-  | { kind: "remote-preview"; host: string; path: string };
+  | { kind: "remote-preview"; host: string; path: string }
+  // KödWork (#43): one task's detail/progress view.
+  | { kind: "kodwork"; taskId: string };
 
 // Persisted tab encoding stays a string[]: legacy file paths remain unchanged,
 // while non-file tabs use reserved kind prefixes. This keeps old documents a
@@ -24,6 +28,9 @@ export const REVIEW_TAB_PREFIX = "review:";
 // output), so the join is unambiguous to split back apart.
 export const REMOTE_FILES_TAB_PREFIX = "remote-files:";
 export const REMOTE_PREVIEW_TAB_PREFIX = "remote-preview:";
+// KödWork (#43): one task-detail tab per task, body = the task id (a UUID —
+// never user text). Reserved even in public builds, where decode drops it.
+export const KODWORK_TAB_PREFIX = "kodwork:";
 
 export function encodeTab(tab: Tab): string {
   if (tab.kind === "file") return tab.path;
@@ -31,6 +38,7 @@ export function encodeTab(tab: Tab): string {
   if (tab.kind === "review") return REVIEW_TAB_PREFIX;
   if (tab.kind === "remote-files") return `${REMOTE_FILES_TAB_PREFIX}${tab.host}\0${tab.path}`;
   if (tab.kind === "remote-preview") return `${REMOTE_PREVIEW_TAB_PREFIX}${tab.host}\0${tab.path}`;
+  if (tab.kind === "kodwork") return `${KODWORK_TAB_PREFIX}${tab.taskId}`;
   return GITHUB_TAB_ENCODING;
 }
 
@@ -72,6 +80,14 @@ export function decodeTab(value: string): Tab | null {
   if (value.startsWith(REMOTE_PREVIEW_TAB_PREFIX)) {
     const parsed = splitRemoteBody(value.slice(REMOTE_PREVIEW_TAB_PREFIX.length));
     return parsed ? { kind: "remote-preview", ...parsed } : null;
+  }
+  if (value.startsWith(KODWORK_TAB_PREFIX)) {
+    // KödWork is a development feature: a public build drops the persisted
+    // encoding rather than reopening a compiled-out surface. A bare prefix
+    // (no task id) is corrupt and dropped too.
+    if (!developmentFeatureEnabled("work")) return null;
+    const taskId = value.slice(KODWORK_TAB_PREFIX.length);
+    return taskId ? { kind: "kodwork", taskId } : null;
   }
   return { kind: "file", path: value };
 }

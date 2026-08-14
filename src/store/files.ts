@@ -205,6 +205,8 @@ export type FilesState = {
   // Open the singleton review tab for the active project, or activate it when it
   // already exists (KödPR, M12). One review tab per project.
   openReviewTab(): void;
+  // Open (or activate) one KödWork task's detail tab (#43). One tab per task.
+  openKodworkTab(taskId: string): void;
   // Open (or activate) the browsable tree tab for one pinned remote target
   // (KödSSH, M11d, Pro). One tab per host:path, mirroring the memory tab's
   // per-workspace singleton behavior.
@@ -1206,6 +1208,18 @@ export function createFilesStore(deps: FilesDeps) {
           syncTabs();
         }
         set({ activeTab: review });
+      },
+
+      openKodworkTab(taskId: string) {
+        const root = get().rootPath;
+        if (!root || !taskId) return;
+        const kodwork: Tab = { kind: "kodwork", taskId };
+        const tabs = tabsByRoot.get(root) ?? [];
+        if (!tabs.some((tab) => tabsEqual(tab, kodwork))) {
+          tabsByRoot.set(root, [...tabs, kodwork]);
+          syncTabs();
+        }
+        set({ activeTab: kodwork });
       },
 
       openRemoteFilesTab(host: string, path: string) {

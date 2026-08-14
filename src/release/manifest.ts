@@ -3,7 +3,7 @@
 // with persisted state, a shortcut, or an entitlement.
 
 export type ReleaseProfile = "public" | "development";
-export type DevelopmentFeature = "local" | "voice" | "ssh";
+export type DevelopmentFeature = "local" | "voice" | "ssh" | "work";
 
 export type ReleaseManifest = {
   readonly profile: ReleaseProfile;
@@ -18,6 +18,7 @@ export function releaseManifestFor(profile: ReleaseProfile): ReleaseManifest {
       local: enabled,
       voice: enabled,
       ssh: enabled,
+      work: enabled,
     }),
   });
 }

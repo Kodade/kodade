@@ -18,6 +18,7 @@ import { BrowserPane } from "./BrowserPane";
 import { ReviewPane } from "./ReviewPane";
 import { RemoteFilesPane } from "./RemoteFilesPane";
 import { RemotePreviewPane } from "./RemotePreviewPane";
+import { KodworkPane } from "./kodwork/KodworkPane";
 import { nativeBasename } from "../platform/native-path";
 
 // Editable CodeMirror over the files store's open text file (M4b). The store
@@ -273,6 +274,11 @@ export function EditorPane() {
       {activeTab?.kind === "remote-preview" && (
         <div className="relative min-h-0 flex-1">
           <RemotePreviewPane host={activeTab.host} path={activeTab.path} />
+        </div>
+      )}
+      {activeTab?.kind === "kodwork" && (
+        <div className="relative min-h-0 flex-1">
+          <KodworkPane taskId={activeTab.taskId} />
         </div>
       )}
     </section>

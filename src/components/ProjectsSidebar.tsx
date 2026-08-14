@@ -4,6 +4,7 @@ import { Pane } from "./Pane";
 import { appStore, themeStore } from "../store/appStore";
 import {
   isChatSession,
+  isWorkSession,
   type Project,
   type SessionMeta,
 } from "../store/projects";
@@ -22,6 +23,7 @@ import { ProjectTile } from "./ProjectTile";
 import { RemoteHostsSection } from "./RemoteHostsSection";
 import { SettingsEntry } from "./settings/SettingsEntry";
 import { ChatThreadsSection } from "./chat/ChatThreadsSection";
+import { KodworkSection } from "./kodwork/KodworkSection";
 import { AVAILABLE_PROVIDERS } from "../providers/catalog";
 import { RELEASE_MANIFEST } from "../release/manifest";
 import type {
@@ -141,12 +143,13 @@ export function projectWorkspaceView(
   const projectedById = new Map(
     view.groups.flatMap((group) => group.sessions).map((session) => [session.sessionId, session]),
   );
-  // Workspace cards are for PTY sessions only. A KödChat thread is a session
-  // too, but it belongs to the KödChat section — without this it would also
-  // appear here as an empty "Workspace N" card with no terminal behind it.
+  // Workspace cards are for PTY sessions only. KödChat threads and KödWork
+  // tasks are sessions too, but they belong to their own sections — without
+  // this they would also appear here as empty "Workspace N" cards.
   const ptySessions = sessions.filter(
     (session) =>
       !isChatSession(session) &&
+      !isWorkSession(session) &&
       !session.projectId.startsWith(REMOTE_PROJECT_PREFIX),
   );
   const roots = ptySessions.filter(
@@ -374,10 +377,14 @@ export function ProjectsSidebar() {
           activeProjectId={activeProjectId}
           actions={actions}
           showTerminalShelf={false}
-          // KödChat is the sidebar's only local project list.
+          // KödChat is the sidebar's primary local project list; KödWork's
+          // task inbox renders beneath it (dev builds only).
           lead={<ChatThreadsSection />}
           supplemental={
-            RELEASE_MANIFEST.features.ssh ? <SidebarRemoteSection /> : null
+            <>
+              {RELEASE_MANIFEST.features.work && <KodworkSection />}
+              {RELEASE_MANIFEST.features.ssh ? <SidebarRemoteSection /> : null}
+            </>
           }
           // Settings lives at the bottom-left of the sidebar, not the title bar.
           footer={<SettingsEntry />}

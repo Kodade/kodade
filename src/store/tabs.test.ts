@@ -9,6 +9,7 @@ describe("tab encoding", () => {
     { kind: "browser", url: "" },
     { kind: "review" },
     { kind: "remote-preview", host: "buildbox", path: "/home/keith/code/myproj/src/app.ts" },
+    { kind: "kodwork", taskId: "3f6c1a2e-task" },
   ])("round-trips $kind tabs", (tab) => {
     expect(decodeTab(encodeTab(tab))).toEqual(tab);
   });
@@ -66,6 +67,19 @@ describe("tab encoding", () => {
   it("drops retired persisted memory tabs now that KödMem lives in settings", () => {
     expect(decodeTab("memory:ws_abc123")).toBeNull();
     expect(decodeTab("memory:")).toBeNull();
+  });
+
+  it("uses the reserved KödWork task encoding and drops a bare prefix", () => {
+    expect(encodeTab({ kind: "kodwork", taskId: "task-1" })).toBe("kodwork:task-1");
+    // No task id is a corrupt/hand-edited encoding — drop it rather than guess.
+    expect(decodeTab("kodwork:")).toBeNull();
+  });
+
+  it("keeps one KödWork tab per task", () => {
+    expect(decodeTabs(["kodwork:task-1", "kodwork:task-1", "kodwork:task-2"])).toEqual([
+      { kind: "kodwork", taskId: "task-1" },
+      { kind: "kodwork", taskId: "task-2" },
+    ]);
   });
 
   it("migrates legacy persisted file-path arrays without changing their encoding", () => {

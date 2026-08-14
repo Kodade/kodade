@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { useStore } from "zustand";
-import { filesStore } from "../store/appStore";
+import { filesStore, kodworkStore } from "../store/appStore";
 import { isMarkdownFile } from "../store/files";
 import { viewerKind } from "../editor/language";
-import { REVIEW_TAB_LABEL, tabLabels } from "../store/tab-labels";
+import { KODWORK_TAB_LABEL, REVIEW_TAB_LABEL, tabLabels } from "../store/tab-labels";
 import { FileIcon, iconCategoryFor } from "../icons/file-icons";
 import { encodeTab, tabsEqual, type Tab as TabModel } from "../store/tabs";
 import { remoteTargetKey } from "../ssh/model";
@@ -19,6 +19,9 @@ export function TabStrip() {
   const dirtyPaths = useStore(filesStore, (s) => s.dirtyPaths);
   const editorStatus = useStore(filesStore, (s) => s.editorStatus);
   const tabModes = useStore(filesStore, (s) => s.tabModes);
+  // KödWork tab labels come from the task's distilled title (never the outcome
+  // text itself), falling back to the fixed label until the task loads.
+  const kodworkTasks = useStore(kodworkStore, (s) => s.tasks);
 
   // Disambiguating labels: two files with the same basename get a parent suffix.
   const filePaths = useMemo(
@@ -71,6 +74,9 @@ export function TabStrip() {
                               } (${tab.host})`
                             : tab.kind === "remote-preview"
                               ? remoteFileLabel(tab.path)
+                              : tab.kind === "kodwork"
+                                ? (kodworkTasks[tab.taskId]?.title ??
+                                  KODWORK_TAB_LABEL)
                             : "github"
               }
               active={isActive}
@@ -91,6 +97,16 @@ export function TabStrip() {
         </button>
       )}
     </div>
+  );
+}
+
+// A checklist glyph: KödWork's plan-driven progress surface.
+export function KodworkIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="h-4 w-4">
+      <path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11 6.5h9.5M11 12.5h9.5M11 18.5h9.5" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -160,6 +176,8 @@ function Tab({
                     ? `${tab.host}:${tab.path}`
                     : tab.kind === "remote-preview"
                       ? `${tab.host}:${tab.path} (read-only)`
+                      : tab.kind === "kodwork"
+                        ? "KödWork task"
                     : "github issues and pull requests"
       }
       onClick={() => filesStore.getState().activateTab(tab)}
@@ -183,6 +201,7 @@ function Tab({
       {tab.kind === "github" && <GithubIcon />}
       {tab.kind === "browser" && <BrowserIcon />}
       {tab.kind === "review" && <ReviewIcon />}
+      {tab.kind === "kodwork" && <KodworkIcon />}
       {(tab.kind === "remote-files" || tab.kind === "remote-preview") && <RemoteFileIcon />}
       {tab.kind === "file" && (
         <FileIcon

@@ -44,8 +44,8 @@ export type Project = {
 };
 // What a session actually is. Absent means "pty" so every persisted document
 // written before KödChat migrates untouched — the discriminant is additive,
-// never a required field.
-export type SessionKind = "pty" | "chat";
+// never a required field. "work" (KödWork, #43) follows the same rule.
+export type SessionKind = "pty" | "chat" | "work";
 
 export type SessionMeta = {
   id: string;
@@ -87,6 +87,18 @@ export function sessionDisplayName(s: SessionMeta): string {
 // this — a chat session has no terminal to write to, resize, or foreground.
 export function isChatSession(s: SessionMeta): boolean {
   return s.kind === "chat";
+}
+
+// True for a KödWork task (#43). Like a chat thread it owns no PTY; its task
+// document lives in the kodwork store keyed by this session's id.
+export function isWorkSession(s: SessionMeta): boolean {
+  return s.kind === "work";
+}
+
+// Sessions with no PTY behind them: chat threads and KödWork tasks. Every
+// registry open/close/poll path must skip these.
+function ownsNoPty(s: SessionMeta): boolean {
+  return isChatSession(s) || isWorkSession(s);
 }
 
 // Persisted pane sizes for the 4-pane layout, as react-resizable-panels
@@ -158,8 +170,8 @@ export type PersistedSession = {
   workspaceId?: string;
   nameLocked?: boolean;
   remote?: boolean;
-  // KödChat: only ever "chat". Absent restores a terminal session, which is
-  // exactly what every pre-KödChat document should do.
+  // KödChat "chat" or KödWork "work". Absent restores a terminal session,
+  // which is exactly what every pre-KödChat document should do.
   kind?: SessionKind;
 };
 
@@ -301,6 +313,9 @@ export type ProjectsState = {
   addTerminal(projectId: string, workspaceId: string, base?: string): string | null;
   // KödChat: a session with kind "chat" and no PTY (issue #163).
   addChatThread(projectId: string, base: string): string | null;
+  // KödWork (#43): a session with kind "work" and no PTY. Local projects only;
+  // never changes the active selection.
+  addWorkSession(projectId: string): string | null;
   launchInSession(command: string, base: string): Promise<void>;
   closeSession(id: string): Promise<void>;
   closeWorkspace(id: string): Promise<void>;
@@ -540,8 +555,8 @@ function parseSessions(v: unknown): PersistedSession[] | null {
     // Docs written before the marker existed carry only the `ssh ` name
     // prefix (the M11b creation convention) — stamp those on read (#121).
     if (c.remote === true || isRemoteSessionName(c.name)) entry.remote = true;
-    // Only the one known value is trusted; anything else restores a terminal.
-    if (c.kind === "chat") entry.kind = "chat";
+    // Only known non-pty values are trusted; anything else restores a terminal.
+    if (c.kind === "chat" || c.kind === "work") entry.kind = c.kind;
     out.push(entry);
   }
   if (out.length === 0) return null;
@@ -562,7 +577,7 @@ function toPersistedSession(s: SessionMeta): PersistedSession {
   if (s.workspaceId) out.workspaceId = s.workspaceId;
   if (s.nameLocked) out.nameLocked = true;
   if (s.remote) out.remote = true;
-  if (s.kind === "chat") out.kind = "chat";
+  if (s.kind === "chat" || s.kind === "work") out.kind = s.kind;
   return out;
 }
 
@@ -771,7 +786,9 @@ export function createProjectsStore(deps: StoreDeps) {
         name: meta.name,
         ...(meta.nameLocked ? { nameLocked: true } : {}),
         ...(meta.remote ? { remote: true } : {}),
-        ...(meta.kind === "chat" ? { kind: "chat" as const } : {}),
+        ...(meta.kind === "chat" || meta.kind === "work"
+          ? { kind: meta.kind }
+          : {}),
       }));
       const selected =
         [...revived].reverse().find((session) => isChatSession(session)) ?? revived.at(-1)!;
@@ -792,9 +809,9 @@ export function createProjectsStore(deps: StoreDeps) {
       }
       emitSelectedSessionActivity(project.id);
       for (const session of revived) {
-        // Chat threads have no shell to reattach; their transcript is loaded
-        // lazily from its own document when the pane opens the thread.
-        if (isChatSession(session)) continue;
+        // Chat threads and KödWork tasks have no shell to reattach; their
+        // documents load lazily when their pane/tab opens.
+        if (ownsNoPty(session)) continue;
         const ready = deps.registry.open(session.id, cwd);
         if (ready) void ready.catch(() => undefined);
         deps.onSessionStarted?.(project, session, null);
@@ -819,8 +836,10 @@ export function createProjectsStore(deps: StoreDeps) {
       // session was remote, fall through to a fresh, plainly named shell.
       const revivable = pending?.filter((session) =>
         deps.autoStartTerminal === false
-          ? session.kind === "chat"
-          : !session.remote || session.kind === "chat",
+          ? session.kind === "chat" || session.kind === "work"
+          : !session.remote ||
+            session.kind === "chat" ||
+            session.kind === "work",
       );
       if (revivable && revivable.length > 0 && (project || remoteTarget)) {
         reviveSessions(
@@ -1314,10 +1333,16 @@ export function createProjectsStore(deps: StoreDeps) {
         if (!project && !remoteTarget) return null;
         if (remoteTarget && !canUseRemote()) return null;
         const chat = options?.kind === "chat";
+        // KödWork tasks are local-only in this milestone: an agent working a
+        // pinned remote folder is a later surface, so refuse rather than
+        // silently spawning against the wrong filesystem.
+        const work = options?.kind === "work";
+        if (work && remoteTarget) return null;
         if (
           deps.autoStartTerminal === false &&
           project &&
           !chat &&
+          !work &&
           (!workspaceId ||
             !sessions.some(
               (session) =>
@@ -1356,13 +1381,20 @@ export function createProjectsStore(deps: StoreDeps) {
             ? { remote: true }
             : {}),
           ...(chat ? { kind: "chat" as const } : {}),
+          ...(work ? { kind: "work" as const } : {}),
         };
+        // A KödWork task runs in the background: creating one must not steal
+        // the chat pane's selection the way a new chat/terminal does.
         set((s) => ({
           sessions: [...s.sessions, session],
-          activeSessionByProject: {
-            ...s.activeSessionByProject,
-            [projectId]: session.id,
-          },
+          ...(work
+            ? {}
+            : {
+                activeSessionByProject: {
+                  ...s.activeSessionByProject,
+                  [projectId]: session.id,
+                },
+              }),
         }));
         deps.onActivity?.({
           type: "session-created",
@@ -1370,10 +1402,10 @@ export function createProjectsStore(deps: StoreDeps) {
           sessionId: session.id,
           name: session.name,
         });
-        emitSelectedSessionActivity(projectId);
-        // A KödChat thread owns no PTY: opening one would spawn a shell nobody
-        // can see and leave it running for the life of the thread.
-        if (!chat) {
+        if (!work) emitSelectedSessionActivity(projectId);
+        // A KödChat thread or KödWork task owns no PTY: opening one would spawn
+        // a shell nobody can see and leave it running for the session's life.
+        if (!chat && !work) {
           const ready = deps.registry.open(session.id, project?.path ?? "");
           if (ready) void ready.catch(() => undefined);
           deps.onSessionStarted?.(
@@ -1412,6 +1444,12 @@ export function createProjectsStore(deps: StoreDeps) {
       // the PTY; the chat store owns the transcript keyed by the returned id.
       addChatThread(projectId: string, base: string): string | null {
         return get().addSession(projectId, base, undefined, { kind: "chat" });
+      },
+
+      // Start a KödWork task session (#43). No PTY, no selection change — the
+      // kodwork store owns the task document keyed by the returned id.
+      addWorkSession(projectId: string): string | null {
+        return get().addSession(projectId, "work", undefined, { kind: "work" });
       },
 
       // Add another terminal inside an existing workspace. It gets its own PTY
@@ -1538,11 +1576,11 @@ export function createProjectsStore(deps: StoreDeps) {
         if (fallbackSelected && get().activeProjectId === session.projectId) {
           emitSelectedSessionActivity(session.projectId);
         }
-        // A chat thread never opened a registry host, and closing one that was
-        // never opened would be the only path that could create it.
-        if (!isChatSession(session)) await deps.registry.close(id);
+        // Chat threads and KödWork tasks never opened a registry host, and
+        // closing one that was never opened would be the only path to create it.
+        if (!ownsNoPty(session)) await deps.registry.close(id);
         deps.onSessionRemoved?.(session);
-        if (!isChatSession(session) && !session.exited) {
+        if (!ownsNoPty(session) && !session.exited) {
           const project = get().projects.find(
             (candidate) => candidate.id === session.projectId,
           );
@@ -1779,7 +1817,7 @@ export function createProjectsStore(deps: StoreDeps) {
             projectId,
             sessionId: session.id,
           });
-          if (!isChatSession(session)) {
+          if (!ownsNoPty(session)) {
             void deps.registry.close(session.id);
           }
           deps.onSessionRemoved?.(session);
@@ -1914,8 +1952,8 @@ export function createProjectsStore(deps: StoreDeps) {
             (s.projectId === activeProjectId ||
               expandedProjects[s.projectId]) &&
             !s.exited &&
-            // A chat thread has no PTY, so there is no foreground to read.
-            !isChatSession(s),
+            // Chat threads and KödWork tasks have no PTY to read a foreground from.
+            !ownsNoPty(s),
         );
 
         // Resolve all visible sessions' foregrounds concurrently, then apply.

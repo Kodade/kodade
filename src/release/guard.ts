@@ -9,6 +9,7 @@ const FEATURE_NAMES: Record<DevelopmentFeature, string> = {
   local: "KödLocal",
   voice: "KödWhisper",
   ssh: "KödSSH",
+  work: "KödWork",
 };
 
 export function unavailableFeatureError(feature: DevelopmentFeature): Error {
