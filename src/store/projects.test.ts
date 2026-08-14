@@ -2878,6 +2878,33 @@ describe("KödWork tasks are sessions without a PTY (#43)", () => {
     expect(second.opens).toHaveLength(0);
   });
 
+  it("revives work sessions for inactive projects so schedules can run", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [
+        { id: "active", name: "active", path: "/repos/active" },
+        { id: "background", name: "background", path: "/repos/background" },
+      ],
+      activeProjectId: "active",
+      sessions: {
+        active: [{ id: "chat-1", name: "claude 1", kind: "chat" }],
+        background: [{ id: "work-1", name: "work 1", kind: "work" }],
+      },
+    } satisfies PersistedDoc);
+    const { store, opens } = makeStore(storage, undefined, true, {
+      autoStartTerminal: false,
+    });
+
+    await store.getState().hydrate();
+
+    expect(store.getState().activeProjectId).toBe("active");
+    expect(store.getState().sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "work-1", projectId: "background", kind: "work" }),
+    ]));
+    expect(opens).toHaveLength(0);
+  });
+
   it("hydrates old documents untouched: absent and unknown kinds restore terminals", async () => {
     const storage = new MockStorage();
     storage.doc = JSON.stringify({

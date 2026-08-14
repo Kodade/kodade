@@ -46,6 +46,8 @@ import {
   type LocalIpc,
   type LocalModelPathInfo,
   type KodSkillsPackBundle,
+  type KodworkIpc,
+  type KodworkNativeReview,
   type OutputEvent,
   type PlatformIpc,
   type ProviderIpc,
@@ -159,6 +161,7 @@ export const tauriStorage: StorageIpc = {
 export const tauriAgent: AgentIpc = {
   start: (args: AgentStartArgs) => invoke<void>(CMD.agentStart, { ...args }),
   send: (args: AgentSendArgs) => invoke<void>(CMD.agentSend, { ...args }),
+  end: (args: AgentCancelArgs) => invoke<void>(CMD.agentEnd, { ...args }),
   cancel: (args: AgentCancelArgs) => invoke<void>(CMD.agentCancel, { ...args }),
   async onEvent(handler: (e: AgentEvent) => void): Promise<Unlisten> {
     return listen<AgentEvent>(EVENT.agentEvent, (evt) => handler(evt.payload));
@@ -219,6 +222,17 @@ export const tauriFiles: FilesIpc = {
     invoke<void>(CMD.rename, { root, from, to }),
   trash: (root: string, path: string) => invoke<void>(CMD.trash, { root, path }),
   reveal: (root: string, path: string) => invoke<void>(CMD.reveal, { root, path }),
+};
+
+export const tauriKodwork: KodworkIpc = {
+  begin: (taskId, root) =>
+    invoke<void>(CMD.kodworkLedgerBegin, { taskId, root }),
+  finish: (taskId) =>
+    invoke<KodworkNativeReview>(CMD.kodworkLedgerFinish, { taskId }),
+  accept: (taskId) =>
+    invoke<void>(CMD.kodworkLedgerAccept, { taskId }),
+  restore: (taskId) =>
+    invoke<void>(CMD.kodworkLedgerRestore, { taskId }),
 };
 
 export const tauriConfig: ConfigIpc = {

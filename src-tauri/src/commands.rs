@@ -27,6 +27,7 @@ use crate::detect;
 use crate::fs::{self, DirEntry, FileRead, WatchHandle};
 use crate::git::{self, GitOutput};
 use crate::github::{self, GhOutput};
+use crate::kodwork::{KodworkLedgerManager, KodworkNativeReview};
 use crate::modeld::{model_path_bytes, ModelFormat};
 use crate::pathguard;
 use crate::pty::PtyManager;
@@ -918,6 +919,52 @@ pub fn agent_send(
     data: String,
 ) -> Result<(), String> {
     manager.send(&id, &data)
+}
+
+#[tauri::command]
+pub fn agent_end(manager: State<'_, AgentManager>, id: String) -> Result<(), String> {
+    manager.end_input(&id)
+}
+
+// --- KödWork output ledger (development feature) ---
+
+#[tauri::command]
+pub fn kodwork_ledger_begin(
+    app: AppHandle,
+    manager: State<'_, KodworkLedgerManager>,
+    task_id: String,
+    root: String,
+) -> Result<(), String> {
+    require_development_feature("KödWork")?;
+    manager.begin(&storage_dir(&app)?, &task_id, &root)
+}
+
+#[tauri::command]
+pub fn kodwork_ledger_finish(
+    manager: State<'_, KodworkLedgerManager>,
+    task_id: String,
+) -> Result<KodworkNativeReview, String> {
+    require_development_feature("KödWork")?;
+    manager.finish(&task_id)
+}
+
+#[tauri::command]
+pub fn kodwork_ledger_accept(
+    manager: State<'_, KodworkLedgerManager>,
+    task_id: String,
+) -> Result<(), String> {
+    require_development_feature("KödWork")?;
+    manager.accept(&task_id)
+}
+
+#[tauri::command]
+pub fn kodwork_ledger_restore(
+    app: AppHandle,
+    manager: State<'_, KodworkLedgerManager>,
+    task_id: String,
+) -> Result<(), String> {
+    require_development_feature("KödWork")?;
+    manager.restore(&storage_dir(&app)?, &task_id)
 }
 
 // Kill a run's process group. Its exit event still arrives.

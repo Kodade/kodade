@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the development-gated KödWork surface for background CLI tasks with
+  durable progress, scoped tool approvals, reviewable and restorable file
+  output, native attention, KödSkills templates, and in-app recurrence.
 - Branded the macOS application, WebKit helpers, window, and document title as
   Ködade while preserving the stable lowercase `kodade.app` bundle path.
 - Added Grok 4.6 to the KödChat Grok Build model picker while retaining Grok

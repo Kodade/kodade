@@ -8,6 +8,7 @@ import {
   type ProviderStream,
 } from "../providers/catalog";
 import type { AgentRunRequest, AgentSpawn, AgentStreamEvent } from "./contract";
+import { encodeClaudeUserMessage } from "./claude-input";
 
 // Substituted into a provider's `stream` argv templates at spawn time.
 const SESSION_TOKEN = "{session}";
@@ -50,6 +51,7 @@ export function buildAgentArgs(
       ...stream.resumeArgs.map((arg) => arg.replace(SESSION_TOKEN, request.resumeId!)),
     );
   }
+  if (request.interactive && stream.input) args.push(...stream.input.args);
   return args;
 }
 
@@ -61,10 +63,13 @@ export function buildAgentSpawn(
   stream: ProviderStream,
   request: AgentRunRequest,
 ): AgentSpawn {
+  const interactive = request.interactive === true && stream.input !== undefined;
   return {
     bin: provider.bin,
     args: buildAgentArgs(stream, request),
-    stdin: request.prompt,
+    ...(interactive
+      ? { initialInput: encodeClaudeUserMessage(request.prompt) }
+      : { stdin: request.prompt }),
   };
 }
 

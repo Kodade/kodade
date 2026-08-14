@@ -85,7 +85,7 @@ const CLAUDE_PLAN_LINE = JSON.stringify({
 });
 
 describe("a task run", () => {
-  it("spawns headlessly in the task folder with the access args and the outcome on stdin", async () => {
+  it("spawns headlessly in the task folder with stream input for a capable provider", async () => {
     const { agent, store } = setup();
     await store.getState().start();
     await draftTask(store);
@@ -97,8 +97,10 @@ describe("a task run", () => {
       id: "t1#1",
       cwd: "/repo",
       bin: "claude",
-      stdin: "tidy the docs folder",
     });
+    expect(agent.starts[0]).not.toHaveProperty("stdin");
+    expect(agent.starts[0].args).toContain("stream-json");
+    expect(agent.sends[0]?.data).toContain("tidy the docs folder");
     expect(agent.starts[0].args).toContain("--dangerously-skip-permissions");
     expect(store.getState().tasks.t1.state).toBe("running");
     expect(store.getState().tasks.t1.title).toBe(titleFromOutcome("tidy the docs folder"));
@@ -144,6 +146,24 @@ describe("a task run", () => {
     // Settled: the live status line is cleared.
     expect(task.statusText).toBeNull();
     expect(task.settledAt).not.toBeNull();
+  });
+
+  it("accumulates token usage across resumed turns", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN);
+    agent.exit("t1#1", 0);
+    await store.getState().resumeTask("t1", "polish it");
+    agent.emitLines("t1#2", CLAUDE_TOOL_TURN);
+    agent.exit("t1#2", 0);
+
+    expect(store.getState().tasks.t1.usage).toEqual({
+      promptTokens: 36,
+      completionTokens: 304,
+      totalTokens: 340,
+    });
   });
 
   it("refuses an empty outcome and a second concurrent run", async () => {
@@ -312,7 +332,7 @@ describe("resume", () => {
     expect(agent.starts[1].args.join(" ")).toContain(
       "--resume 11111111-2222-3333-4444-555555555555",
     );
-    expect(agent.starts[1].stdin).toBe("also update the README");
+    expect(agent.sends[1]?.data).toContain("also update the README");
     // The plan from the first run survives a resume.
     expect(store.getState().tasks.t1.plan).toHaveLength(2);
     expect(store.getState().tasks.t1.state).toBe("running");
@@ -327,7 +347,63 @@ describe("resume", () => {
 
     await store.getState().resumeTask("t1");
     expect(agent.starts[1].args).not.toContain("--resume");
-    expect(agent.starts[1].stdin).toBe("tidy the docs folder");
+    expect(agent.sends[1]?.data).toContain("tidy the docs folder");
+  });
+});
+
+describe("skill templates and in-app scheduling", () => {
+  it("prefills an editable outcome from an installed skill template", async () => {
+    const { store } = setup({
+      templates: {
+        list: async () => [{
+          id: "code-review",
+          name: "code-review",
+          description: "Review a branch diff.",
+        }],
+      },
+    });
+    await draftTask(store, "");
+    await store.getState().loadTemplates("t1");
+    store.getState().applyTemplate("t1", "code-review");
+
+    expect(store.getState().tasks.t1.outcome).toBe(
+      "Run the `code-review` skill against `/repo`.\n\nOutcome:\n",
+    );
+  });
+
+  it("fires a due recurrence as an ordinary reviewable work session", async () => {
+    let session = 0;
+    const { agent, store } = setup({
+      createScheduledSession: () => `scheduled-${++session}`,
+    });
+    await store.getState().start();
+    await draftTask(store);
+    store.getState().setRecurrence("t1", { kind: "interval", minutes: 5 });
+    await store.getState().tickSchedules(301_000);
+
+    expect(store.getState().tasks["scheduled-1"]).toMatchObject({
+      outcome: "tidy the docs folder",
+      state: "running",
+      scheduledFromTaskId: "t1",
+    });
+    expect(agent.starts[0]).toMatchObject({ id: "scheduled-1#1", cwd: "/repo" });
+    expect(store.getState().tasks.t1.scheduleReceipts.at(-1)).toMatchObject({
+      status: "started",
+      sessionId: "scheduled-1",
+    });
+  });
+
+  it("records every skipped slot honestly when startup resumes", async () => {
+    const { store } = setup();
+    await draftTask(store);
+    store.getState().setRecurrence("t1", { kind: "interval", minutes: 5 });
+    await store.getState().reconcileSchedules(901_000);
+
+    expect(store.getState().tasks.t1.scheduleReceipts).toHaveLength(3);
+    expect(store.getState().tasks.t1.scheduleReceipts.every(
+      (receipt) => receipt.message === "missed — Ködade was not running",
+    )).toBe(true);
+    expect(store.getState().tasks.t1.recurrence?.nextRunAt).toBe(1_201_000);
   });
 });
 
@@ -388,7 +464,11 @@ describe("task persistence", () => {
       enabled: () => true,
     });
     await reopened.getState().openTask("t1", "p1");
-    expect(reopened.getState().tasks.t1.state).toBe("needs-user");
+    expect(reopened.getState().tasks.t1).toMatchObject({
+      state: "needs-user",
+      review: { status: "idle" },
+      error: expect.stringContaining("Resume to recover"),
+    });
   });
 
   it("survives a corrupt or foreign-version document", async () => {

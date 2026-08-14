@@ -8,23 +8,23 @@
     "pnpm": "11.17.0"
   },
   "inputs": {
-    "package.json": "101da5e4b42010aacdb19ff8edc357810a8d47e185d3618a1d74ad6ee2ebce15",
-    "pnpm-lock.yaml": "928ec199aa74ba90558b0774b12d84cda80811b7961786f8c0e6606d9046b127",
+    "package.json": "8dd426ad16cf256bf9dbefb70eb9be1343724734c25e126abf6d266704b96d86",
+    "pnpm-lock.yaml": "dbadcf9e92d22c16f3b5be6d624a47349a8c500c1f341f91763559c7f8f696ff",
     "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
-    "src-tauri/Cargo.toml": "fab25e08c57930c55f15a115583025c7c3ea8f2681838ca959b1ac390b7ea982",
-    "src-tauri/Cargo.lock": "774e65895ccee542bff62d5b08fa26f91a3535c4a2d86063b1cded2af348e987",
+    "src-tauri/Cargo.toml": "beedc8f59c23d5a760eeaa79a1a08b97ffe6901e2edbd5c0e3257c42d7b83592",
+    "src-tauri/Cargo.lock": "8e8df433013a87edbc78fbae8171079f65e1a1e2205e00c2064588d4f9125bd2",
     "licenses/dependencies/about.toml": "d56f30f1f89a1aba49dbf1b24d7868d40812a00d8ee92ca0d5c7c8e5ced969ff",
     "licenses/dependencies/javascript-overrides.json": "7be480d97680a94cefc52731b9b3ef522c1d17e9fa733eae081b2561d6f00605",
     "scripts/generate-dependency-licenses.mjs": "ac96b351dd5ce8052d177f95b9f67f6767a54b8efb64c3927c4dea2ca597984b"
   },
   "overrideFilesSha256": "bb68d280252e1b7b9858479bf123307754e58453a7e0196d121414431c19954f",
   "counts": {
-    "javascriptPackages": 78,
-    "rustCrates": 349,
-    "rustLicenseDocuments": 107
+    "javascriptPackages": 79,
+    "rustCrates": 357,
+    "rustLicenseDocuments": 110
   },
   "outputs": {
-    "JAVASCRIPT_LICENSES.html": "dae29638ca0bc7282808431df037ce086c67f9a4a5295297b32003c12aa3ec2c",
-    "RUST_LICENSES.html": "44fae88e80ef0179f29f28f6a4ac40ebace1d1ad2ee0f15f8171e79794097203"
+    "JAVASCRIPT_LICENSES.html": "111b881384b9bffa1735739a547ecbddd46320140c9fbaf394c17c0b6a496018",
+    "RUST_LICENSES.html": "8c73caef63cb186128351f4e8147088fdcbe94d04559012162f7c87fdaf8c343"
   }
 }

@@ -13,6 +13,7 @@ import type { ChatAccessLevel, ChatSpeed } from "../providers/catalog";
 import type { ChatMessage, TokenUsage } from "../inference/backend";
 import type { ToolCall } from "../local/toolcall";
 import type { ToolOutcome } from "../local/tools";
+import type { ClaudePermissionRequest } from "./claude-input";
 
 // One step of an agent's plan/todo list, when the dialect exposes one.
 export type AgentPlanItem = {
@@ -38,6 +39,8 @@ export type AgentStreamEvent =
   | { type: "plan"; items: AgentPlanItem[] }
   | { type: "tool-call-started"; callId: string; call: ToolCall }
   | { type: "tool-call-completed"; callId: string; outcome: ToolOutcome }
+  | { type: "permission-request"; request: ClaudePermissionRequest }
+  | { type: "tool-denied"; tool: string; detail: string | null }
   // The CLI could not authenticate. The pane offers a login terminal rather
   // than a retry — Kodade never proxies a provider's credentials.
   | { type: "auth-error"; message: string }
@@ -59,6 +62,7 @@ export type AgentRunRequest = {
   thinking?: string | null;
   // Per-thread speed choice. Unsupported providers ignore non-default values.
   speed?: ChatSpeed | null;
+  interactive?: boolean;
 };
 
 // The argv handed to `agent_start`. Rust resolves `bin` through the login shell
@@ -67,6 +71,9 @@ export type AgentSpawn = {
   bin: string;
   args: string[];
   stdin?: string;
+  // First framed message for a stream-input run. The process is started with
+  // stdin open, then the caller sends this through AgentIpc.send.
+  initialInput?: string;
 };
 
 // A stateful parser for ONE run. Dialects that stream partial content need to

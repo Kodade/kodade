@@ -7,6 +7,7 @@ import {
   tauriConfig,
   tauriExternalUrls,
   tauriFiles,
+  tauriKodwork,
   tauriForeground,
   tauriGit,
   tauriGithub,
@@ -34,6 +35,7 @@ export const platform = tauriPlatform;
 export const provider = tauriProvider;
 export const foreground = tauriForeground;
 export const files = tauriFiles;
+export const kodwork = guardDevelopmentIpc("work", tauriKodwork);
 export const config = tauriConfig;
 export const externalUrls: ExternalUrlIpc = {
   openUrl: (url) => tauriExternalUrls.openUrl(url),

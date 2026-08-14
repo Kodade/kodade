@@ -10,6 +10,7 @@ import {
   files as tauriFiles,
   foreground as tauriForeground,
   git as tauriGit,
+  kodwork as tauriKodwork,
   github as tauriGithub,
   local as tauriLocal,
   ipc as tauriIpc,
@@ -27,6 +28,10 @@ import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
 import { createKodworkStore } from "../kodwork/store";
+import { createKodworkLedger } from "../kodwork/ledger";
+import { createKodworkPresence } from "../kodwork/presence";
+import { tauriKodworkPresencePlatform } from "../kodwork/tauri-presence";
+import { templatesFromKodSkills } from "../kodwork/templates";
 import { createOllamaChatRuntime } from "../chat/ollama";
 import { formatProjectMemory } from "../memory/provider-context";
 import { createProvidersStore } from "../providers/store";
@@ -44,13 +49,14 @@ import { applyCssVars, toXtermTheme } from "../themes/applier";
 import { installShortcuts } from "../shortcuts/dispatcher";
 import { setComboOverrides } from "../shortcuts/bindings";
 import { createFilesStore } from "./files";
-import { createHarnessStore } from "./harness";
+import { buildScanContext, createHarnessStore } from "./harness";
+import { inspectKodSkills } from "../harness/kodskills";
 import { createReviewStore } from "./review";
 import { createWorkingTreeSummaryStore } from "../chat/working-tree";
 import { createSshStore } from "./ssh";
 import { createRemoteFilesStore } from "./remoteFiles";
 import { routeFileDrop } from "./drop-routing";
-import { createProjectsStore, isChatSession } from "./projects";
+import { createProjectsStore, isChatSession, isWorkSession } from "./projects";
 import { remoteTargetForProjectId } from "../ssh/model";
 import { createThemeStore } from "./theme";
 import { EDITOR_BROWSER_ID } from "../browser/constants";
@@ -388,6 +394,7 @@ export const filesStore = createFilesStore({
   },
   onFileOpened: (root, path) => captureFileActivity(root, path, "fileOpened"),
   onFileSaved: (root, path) => captureFileActivity(root, path, "fileSaved"),
+  onFileMutated: (path) => kodworkStore.getState().noteHumanChange(path),
   // KödSSH (M11d): drop a closed remote tab's cached content so a later
   // reopen re-fetches/re-lists rather than showing stale state.
   onRemotePreviewClosed: (host, path) =>
@@ -646,6 +653,20 @@ export const kodworkStore = createKodworkStore({
   agent: tauriAgent,
   storage: tauriStorage,
   memory: tauriMemory,
+  ledger: createKodworkLedger({ ipc: tauriKodwork, git: tauriGit }),
+  templates: {
+    async list(projectRoot, providerId) {
+      const context = await buildScanContext(tauriConfig, projectRoot);
+      const model = await inspectKodSkills(
+        tauriConfig,
+        context,
+        licenseHasFeature(FEATURES.harnessPro),
+      );
+      return templatesFromKodSkills(model, providerId);
+    },
+  },
+  createScheduledSession: (projectId) =>
+    appStore.getState().addWorkSession(projectId),
   projectRoot: (projectId) =>
     appStore.getState().projects.find((project) => project.id === projectId)
       ?.path ?? null,
@@ -684,6 +705,18 @@ export const kodworkStore = createKodworkStore({
   },
 });
 
+const kodworkPresence = createKodworkPresence({
+  platform: tauriKodworkPresencePlatform,
+  enabled: () => RELEASE_MANIFEST.features.work && isTauriRuntime(),
+  openTask: (taskId) => {
+    const task = kodworkStore.getState().tasks[taskId];
+    if (!task) return;
+    void appStore.getState().setActiveProject(task.projectId).then(async () => {
+      await kodworkStore.getState().openTask(task.id, task.projectId);
+      filesStore.getState().openKodworkTab(task.id);
+    });
+  },
+});
 // Provider detection/launch. Launch delegates to the projects store, which owns
 // sessions — that's the one-way seam the providers store depends on.
 export const providersStore = createProvidersStore({
@@ -731,6 +764,7 @@ darkQuery?.addEventListener("change", () => {
 // One-time bootstrap: shell name, persisted projects, drag-and-drop listener.
 // Guarded so StrictMode's double effect can't run it twice.
 let initStarted = false;
+let kodworkScheduleTimer: ReturnType<typeof setInterval> | null = null;
 
 async function installAutomaticBrowserAgentSetup(): Promise<void> {
   await providersStore.getState().detectAll();
@@ -799,6 +833,19 @@ export async function initApp(): Promise<void> {
       .catch((error) => {
         console.error("kodade: unable to listen for KödWork run events", error);
       });
+    if (isTauriRuntime()) {
+      void kodworkPresence.start().catch((error) => {
+        console.error("kodade: unable to listen for KödWork notifications", error);
+      });
+      kodworkStore.subscribe((state) => {
+        void kodworkPresence.observe(state.tasks).catch((error) => {
+          console.error("kodade: unable to update KödWork presence", error);
+        });
+      });
+      void kodworkPresence.observe(kodworkStore.getState().tasks).catch((error) => {
+        console.error("kodade: unable to initialize KödWork presence", error);
+      });
+    }
   }
   if (isTauriRuntime()) {
     void tauriBrowser
@@ -893,6 +940,22 @@ export async function initApp(): Promise<void> {
     if (activeProject) {
       await synchronizeProjectFiles(activeProject.path, activeProject.id);
       await activityPersistence.ensureInitialProjectOpened(activeProject);
+    }
+    if (RELEASE_MANIFEST.features.work) {
+      const workSessions = active.sessions.filter(isWorkSession);
+      await Promise.all(
+        workSessions.map((session) =>
+          kodworkStore.getState().openTask(session.id, session.projectId),
+        ),
+      );
+      await kodworkStore.getState().reconcileSchedules();
+      if (kodworkScheduleTimer === null) {
+        kodworkScheduleTimer = setInterval(() => {
+          void kodworkStore.getState().tickSchedules().catch((error) => {
+            console.error("kodade: KödWork scheduler failed", error);
+          });
+        }, 30_000);
+      }
     }
   } catch (err) {
     // hydrate() shields itself, but drag-drop below must register regardless.

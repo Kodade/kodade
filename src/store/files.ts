@@ -44,6 +44,8 @@ export type FilesDeps = {
   // adapter converts them to workspace-relative paths before persistence.
   onFileOpened?: (root: string, path: string) => void;
   onFileSaved?: (root: string, path: string) => void;
+  // Human-authored mutations are marked in any concurrent KödWork ledger.
+  onFileMutated?: (path: string) => void;
 };
 
 // Editor state machine (M4b). Lives here next to the file tree so the whole
@@ -782,6 +784,7 @@ export function createFilesStore(deps: FilesDeps) {
         set({ editorStatus: "saving", saveError: null });
         try {
           await deps.files.writeFile(path, savedBuffer);
+          deps.onFileMutated?.(path);
           deps.onActivity?.({ type: "file-saved", root });
           // The file may have been renamed mid-write (savingPath rewritten) or a
           // different file selected. Reconcile against the current save path.
@@ -1009,8 +1012,11 @@ export function createFilesStore(deps: FilesDeps) {
             if (edit.entryKind === "dir")
               await deps.files.createDir(root, newPath);
             else await deps.files.createFile(root, newPath);
+            deps.onFileMutated?.(newPath);
           } else if (isRename && edit.target) {
             await deps.files.rename(root, edit.target, newPath);
+            deps.onFileMutated?.(edit.target);
+            deps.onFileMutated?.(newPath);
           }
         } catch (err) {
           // A stale commit (superseded by a newer edit) must not overwrite it.
@@ -1060,6 +1066,7 @@ export function createFilesStore(deps: FilesDeps) {
         if (openAffected && open) pendingOps.add(open);
         try {
           await deps.files.trash(root, entry.path);
+          deps.onFileMutated?.(entry.path);
         } catch (err) {
           set({ opError: err instanceof Error ? err.message : String(err) });
           return;

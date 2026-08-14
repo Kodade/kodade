@@ -33,6 +33,7 @@ import {
   tokenUsageFromRecord,
   type Json,
 } from "./normalize";
+import type { ClaudePermissionRequest } from "./claude-input";
 
 class ClaudeParser implements AgentStreamParser {
   private messageId = "";
@@ -55,9 +56,36 @@ class ClaudeParser implements AgentStreamParser {
         return this.user(value);
       case "result":
         return this.result(value);
+      case "control_request":
+        return this.controlRequest(value);
       default:
         return [];
     }
+  }
+
+  private controlRequest(value: Json): AgentStreamEvent[] {
+    const request = asRecord(value.request);
+    const requestId = asString(value.request_id);
+    if (!request || request.subtype !== "can_use_tool" || !requestId) return [];
+    const tool = asString(request.tool_name);
+    const input = asRecord(request.input);
+    if (!tool || !input) return [];
+    const permission: ClaudePermissionRequest = {
+      requestId,
+      tool,
+      input,
+      toolUseId: asString(request.tool_use_id),
+      title: asString(request.title),
+      description: asString(request.description),
+      blockedPath: asString(request.blocked_path),
+      suggestions: Array.isArray(request.permission_suggestions)
+        ? request.permission_suggestions.flatMap((entry) => {
+            const value = asRecord(entry);
+            return value ? [value] : [];
+          })
+        : [],
+    };
+    return [{ type: "permission-request", request: permission }];
   }
 
   end(code: number | null, stderr: string): AgentStreamEvent[] {
@@ -183,6 +211,18 @@ class ClaudeParser implements AgentStreamParser {
     const events: AgentStreamEvent[] = [];
     const sessionId = asString(value.session_id);
     if (sessionId) events.push({ type: "session", sessionId });
+    if (Array.isArray(value.permission_denials)) {
+      for (const raw of value.permission_denials) {
+        const denial = asRecord(raw);
+        if (!denial) continue;
+        const tool = asString(denial.tool_name) ?? asString(denial.name) ?? "Tool";
+        const input = asRecord(denial.tool_input) ?? asRecord(denial.input);
+        const detail = input
+          ? asString(input.command) ?? asString(input.path) ?? null
+          : null;
+        events.push({ type: "tool-denied", tool, detail });
+      }
+    }
     if (value.is_error === true) {
       const message =
         asString(value.result) ?? asString(value.subtype) ?? "the agent reported an error";

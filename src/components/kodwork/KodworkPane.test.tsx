@@ -19,6 +19,7 @@ function progressStore() {
   };
   return createStore(() => ({
     tasks: { [task.id]: task },
+    pendingRestore: null,
     loaded: { [task.id]: true },
     start: vi.fn(),
     openTask: vi.fn(),
@@ -29,6 +30,20 @@ function progressStore() {
     startTask: vi.fn(),
     resumeTask: vi.fn(),
     cancelTask: vi.fn(),
+    setReviewFeedback: vi.fn(),
+    acceptReview: vi.fn(),
+    rejectReview: vi.fn(),
+    prepareRestore: vi.fn(),
+    confirmRestore: vi.fn(),
+    cancelRestore: vi.fn(),
+    noteHumanChange: vi.fn(),
+    respondPermission: vi.fn(),
+    steerTask: vi.fn(),
+    loadTemplates: vi.fn(),
+    applyTemplate: vi.fn(),
+    setRecurrence: vi.fn(),
+    reconcileSchedules: vi.fn(),
+    tickSchedules: vi.fn(),
     removeTask: vi.fn(),
     flush: vi.fn(),
   })) as unknown as StoreApi<KodworkState>;
@@ -63,5 +78,68 @@ describe("KodworkPane", () => {
     mounted = createRoot(host);
     act(() => mounted?.render(<KodworkPane taskId="gone" workStore={store} />));
     expect(host.textContent).toContain("no longer open");
+  });
+
+  it("exposes the draft outcome to KödWhisper and shows scheduling cost before enable", () => {
+    const store = progressStore();
+    const task = store.getState().tasks["task-1"]!;
+    store.setState({
+      tasks: { "task-1": { ...task, state: "draft" } },
+      templates: [],
+      templatesLoading: false,
+      templatesError: null,
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() => mounted?.render(<KodworkPane taskId="task-1" workStore={store} />));
+
+    expect(host.querySelector('[data-voice-target="kodwork-outcome"]')).not.toBeNull();
+    const schedule = host.querySelector<HTMLSelectElement>('[aria-label="Task schedule"] select');
+    act(() => {
+      schedule!.value = "daily";
+      schedule!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.textContent).toContain("Projected:");
+    expect(host.textContent).toContain("900 tokens / 30 days");
+  });
+
+  it("renders changed output with risk, feedback, and explicit review actions", () => {
+    const store = progressStore();
+    const current = store.getState().tasks["task-1"]!;
+    store.setState({
+      tasks: {
+        "task-1": {
+          ...current,
+          state: "needs-user",
+          review: {
+            kind: "folder",
+            status: "pending",
+            feedback: "",
+            fingerprint: "abc",
+            files: [{
+              path: "/repo/report.md",
+              relativePath: "report.md",
+              change: "modified",
+              binary: false,
+              humanTouched: true,
+              before: "old",
+              after: "new",
+              bucket: "risky",
+              reasons: ["source change"],
+            }],
+          },
+        },
+      },
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() => mounted?.render(<KodworkPane taskId="task-1" workStore={store} />));
+    expect(host.textContent).toContain("Output review");
+    expect(host.textContent).toContain("Changed by you during this task");
+    expect(host.textContent).toContain("Reject & continue");
+    expect(host.textContent).toContain("Restore output");
+    expect(host.querySelector<HTMLButtonElement>('button[title="Continue this task"]')?.disabled).toBe(true);
   });
 });

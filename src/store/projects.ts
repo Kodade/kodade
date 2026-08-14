@@ -823,7 +823,7 @@ export function createProjectsStore(deps: StoreDeps) {
     // or explicitly opens that thread's terminal; navigation never starts a
     // background shell on its own.
     const ensureSession = (projectId: string): boolean => {
-      if (get().sessions.some((s) => s.projectId === projectId)) return false;
+      const hasExisting = get().sessions.some((s) => s.projectId === projectId);
       const pending = pendingSessions.get(projectId);
       pendingSessions.delete(projectId);
       const project = get().projects.find((p) => p.id === projectId);
@@ -853,6 +853,7 @@ export function createProjectsStore(deps: StoreDeps) {
         );
         return true;
       }
+      if (hasExisting) return false;
       // Selecting a remote project is navigation, not permission to open an
       // SSH connection. Its first terminal/chat is created by an explicit
       // action in the Remote tree.
@@ -1182,7 +1183,12 @@ export function createProjectsStore(deps: StoreDeps) {
                 const saved =
                   parseSessions(doc.sessions[p.id]) ??
                   (twin ? parseSessions(doc.sessions[twin.id]) : null);
-                if (saved) pendingSessions.set(p.id, saved);
+                if (saved) {
+                  const work = saved.filter((session) => session.kind === "work");
+                  if (work.length > 0) reviveSessions(p, work);
+                  const deferred = saved.filter((session) => session.kind !== "work");
+                  if (deferred.length > 0) pendingSessions.set(p.id, deferred);
+                }
               }
               for (const target of get().remoteTargets) {
                 const projectId = remoteProjectId(target);

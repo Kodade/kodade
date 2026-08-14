@@ -12,6 +12,8 @@ import {
   type ConfigInstallFile,
   type ConfigScan,
   type KodSkillsPackBundle,
+  type KodworkIpc,
+  type KodworkNativeReview,
   type ProjectSkillSourceBundle,
   type DirEntry,
   type FileDropEvent,
@@ -349,6 +351,7 @@ export class MockStorage implements StorageIpc {
 export class MockAgentIpc implements AgentIpc {
   starts: AgentStartArgs[] = [];
   sends: AgentSendArgs[] = [];
+  ends: AgentCancelArgs[] = [];
   cancels: AgentCancelArgs[] = [];
   // When set, start() rejects with this error (CLI missing, duplicate id...).
   failStartWith: unknown = null;
@@ -363,6 +366,10 @@ export class MockAgentIpc implements AgentIpc {
   }
   send(args: AgentSendArgs): Promise<void> {
     this.sends.push(args);
+    return Promise.resolve();
+  }
+  end(args: AgentCancelArgs): Promise<void> {
+    this.ends.push(args);
     return Promise.resolve();
   }
   cancel(args: AgentCancelArgs): Promise<void> {
@@ -388,6 +395,40 @@ export class MockAgentIpc implements AgentIpc {
   }
   exit(id: string, code: number | null = 0, stderr = ""): void {
     for (const handler of this.exitHandlers) handler({ id, code, stderr });
+  }
+}
+
+export class MockKodworkIpc implements KodworkIpc {
+  begins: { taskId: string; root: string }[] = [];
+  finishes: string[] = [];
+  accepts: string[] = [];
+  restores: string[] = [];
+  reviews = new Map<string, KodworkNativeReview>();
+  restoreError: string | null = null;
+
+  begin(taskId: string, root: string): Promise<void> {
+    this.begins.push({ taskId, root });
+    return Promise.resolve();
+  }
+  finish(taskId: string): Promise<KodworkNativeReview> {
+    this.finishes.push(taskId);
+    return Promise.resolve(
+      this.reviews.get(taskId) ?? {
+        kind: "folder",
+        files: [],
+        fingerprint: "empty",
+      },
+    );
+  }
+  accept(taskId: string): Promise<void> {
+    this.accepts.push(taskId);
+    return Promise.resolve();
+  }
+  restore(taskId: string): Promise<void> {
+    this.restores.push(taskId);
+    return this.restoreError
+      ? Promise.reject(new Error(this.restoreError))
+      : Promise.resolve();
   }
 }
 

@@ -17,27 +17,56 @@ import { adapterFor } from "../agents/registry";
 import type { AgentIpc, MemoryIpc, StorageIpc, Unlisten } from "../ipc/contract";
 import type { TokenUsage } from "../inference/backend";
 import { developmentFeatureEnabled } from "../release/manifest";
+import { containsLikelySecret } from "../local/checkpointGuard";
 import type { ChatAccessLevel } from "../providers/catalog";
+import { nativeEquals, nativeIsDescendant } from "../platform/native-path";
+import {
+  encodeClaudePermissionResponse,
+  encodeClaudeUserMessage,
+} from "../agents/claude-input";
 import {
   MAX_PLAN_ITEMS,
   MAX_TOOL_LINES,
+  advanceRecurrence,
   clampStatus,
   clampSummary,
   kodworkDocName,
   newTask,
+  nextRecurrenceAt,
+  recurrenceFromInput,
   parsePersistedTask,
   titleFromOutcome,
   toPersistedTask,
   toolDetail,
   DEFAULT_TASK_TITLE,
+  type KodworkRecurrenceInput,
+  type KodworkScheduleReceipt,
   type KodworkTask,
 } from "./model";
+import { templatePrompt, type KodworkTemplate } from "./templates";
+import {
+  EMPTY_KODWORK_REVIEW,
+  type KodworkLedger,
+  type KodworkRestorePlan,
+} from "./ledger";
 
 // New tasks default to Claude Code; the composer can pick any streaming CLI.
 export const DEFAULT_KODWORK_PROVIDER = "claude";
 
 // What a run without an explicit instruction resumes with.
 const RESUME_PROMPT = "Continue working toward the outcome.";
+const DOOM_LOOP_REJECTIONS = 3;
+const PERMISSION_TIMEOUT_MS = 60_000;
+
+function addUsage(left: TokenUsage | null, right: TokenUsage | null): TokenUsage | null {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
 
 // The one narrow KödMem seam the store needs: resolve the task folder to a
 // workspace and write the completion checkpoint.
@@ -69,6 +98,11 @@ export type KodworkDeps = {
   newId?: () => string;
   now?: () => number;
   activity?: KodworkActivityHooks;
+  ledger?: KodworkLedger;
+  templates?: {
+    list(projectRoot: string, providerId: string): Promise<KodworkTemplate[]>;
+  };
+  createScheduledSession?(projectId: string): string | null;
   // Debounce for task-document writes; a streaming run reports many events.
   persistDebounceMs?: number;
   setTimeout?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -77,6 +111,10 @@ export type KodworkDeps = {
 
 export type KodworkState = {
   tasks: Record<string, KodworkTask>;
+  templates: KodworkTemplate[];
+  templatesLoading: boolean;
+  templatesError: string | null;
+  pendingRestore: KodworkRestorePlan | null;
   // Tasks whose document has been read (or created), so opening twice doesn't
   // re-read the disk.
   loaded: Record<string, boolean>;
@@ -91,6 +129,11 @@ export type KodworkState = {
   setFolder(taskId: string, folder: string): void;
   setProvider(taskId: string, providerId: string): void;
   setAccess(taskId: string, access: ChatAccessLevel): void;
+  loadTemplates(taskId: string): Promise<void>;
+  applyTemplate(taskId: string, templateId: string): void;
+  setRecurrence(taskId: string, recurrence: KodworkRecurrenceInput | null): void;
+  reconcileSchedules(at?: number): Promise<void>;
+  tickSchedules(at?: number): Promise<void>;
   // Run the task fresh. Resolves once the run has STARTED — progress arrives
   // through the event stream.
   startTask(taskId: string): Promise<void>;
@@ -98,6 +141,15 @@ export type KodworkState = {
   // to a fresh start when no resume id was captured.
   resumeTask(taskId: string, instruction?: string): Promise<void>;
   cancelTask(taskId: string): Promise<void>;
+  setReviewFeedback(taskId: string, feedback: string): void;
+  acceptReview(taskId: string): Promise<void>;
+  rejectReview(taskId: string): Promise<void>;
+  prepareRestore(taskId: string): Promise<void>;
+  confirmRestore(taskId: string): Promise<void>;
+  cancelRestore(taskId: string): void;
+  noteHumanChange(path: string): void;
+  respondPermission(taskId: string, decision: "once" | "always" | "deny"): Promise<void>;
+  steerTask(taskId: string, message: string): Promise<void>;
   // Drop a task and its document (its session was closed).
   removeTask(taskId: string): Promise<void>;
   // Flush any pending debounced document write.
@@ -134,10 +186,13 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     failed: boolean;
     usage: TokenUsage | null;
     turn: number;
+    interactive: boolean;
+    permissionTimer: ReturnType<typeof setTimeout> | null;
   };
   const runs = new Map<string, Run>();
   const runByRunId = new Map<string, string>(); // runId → taskId
   const turns = new Map<string, number>();
+  const humanChanges = new Map<string, Set<string>>();
 
   // Per-task debounced write handles, plus a chain so two writes for one task
   // can never land out of order.
@@ -259,12 +314,32 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
             error: event.message,
           }));
           return;
+        case "permission-request": {
+          if (run.permissionTimer) clearTimer(run.permissionTimer);
+          run.permissionTimer = setTimer(() => {
+            void get().respondPermission(taskId, "deny");
+          }, PERMISSION_TIMEOUT_MS);
+          patch(taskId, (current) => ({
+            ...current,
+            state: "needs-user",
+            permissionRequest: event.request,
+          }));
+          deps.activity?.attention?.(task.projectId, taskId, "approve a tool request");
+          return;
+        }
+        case "tool-denied":
+          patch(taskId, (current) => ({
+            ...current,
+            deniedTools: [...current.deniedTools, { tool: event.tool, detail: event.detail }].slice(-50),
+          }));
+          return;
         case "error":
           run.failed = true;
           patch(taskId, (current) => ({ ...current, error: event.message }));
           return;
         case "done":
           run.usage = event.usage ?? null;
+          if (run.interactive) void deps.agent.end?.({ id: run.runId });
           settle(taskId, run);
           return;
       }
@@ -275,6 +350,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     const settle = (taskId: string, run: Run) => {
       if (runs.get(taskId)?.runId !== run.runId) return;
       runs.delete(taskId);
+      if (run.permissionTimer) clearTimer(run.permissionTimer);
       runByRunId.delete(run.runId);
       patch(taskId, (task) => ({
         ...task,
@@ -286,10 +362,22 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
               ? "failed"
               : "done",
         statusText: null,
-        usage: run.usage ?? task.usage,
+        usage: addUsage(task.usage, run.usage),
         settledAt: now(),
+        permissionRequest: null,
+        review: deps.ledger
+          ? task.review
+          : { ...task.review, status: "accepted" as const },
       }));
       const task = get().tasks[taskId];
+      if (task && deps.ledger) {
+        const outcomeState =
+          task.state === "draft" || task.state === "running"
+            ? "failed"
+            : task.state;
+        void finishReview(task, run.turn, outcomeState);
+        return;
+      }
       if (task) {
         deps.activity?.working?.(task.projectId, taskId, null);
         deps.activity?.attention?.(
@@ -308,6 +396,70 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       void persistNow(taskId);
     };
 
+    const finishReview = async (
+      task: KodworkTask,
+      turn: number,
+      outcomeState: "done" | "failed" | "cancelled" | "needs-user",
+    ) => {
+      try {
+        const collected = await deps.ledger!.finish(task);
+        const touched = humanChanges.get(task.id) ?? new Set<string>();
+        const review = {
+          ...collected,
+          files: collected.files.map((file) => ({
+            ...file,
+            humanTouched: [...touched].some((path) => nativeEquals(path, file.path)),
+          })),
+        };
+        humanChanges.delete(task.id);
+        patch(task.id, (current) => ({
+          ...current,
+          review:
+            review.files.length > 0
+              ? review
+              : { ...review, status: "accepted" as const },
+          state: review.files.length > 0 ? "needs-user" : outcomeState,
+          reviewOutcomeState: review.files.length > 0 ? outcomeState : null,
+        }));
+        const current = get().tasks[task.id];
+        if (!current) return;
+        deps.activity?.working?.(current.projectId, current.id, null);
+        deps.activity?.attention?.(
+          current.projectId,
+          current.id,
+          review.files.length > 0
+            ? "review task output"
+            : current.state === "needs-user"
+              ? "needs login"
+              : current.state === "failed"
+                ? "the agent failed"
+                : null,
+        );
+        if (review.files.length === 0) {
+          await deps.ledger!.accept(task.id);
+          if (current.state === "done") void checkpoint(current, turn);
+        }
+        void persistNow(current.id);
+      } catch (error) {
+        patch(task.id, (current) => ({
+          ...current,
+          state: "failed",
+          error: `Could not collect task output: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }));
+        const current = get().tasks[task.id];
+        if (current) {
+          deps.activity?.working?.(current.projectId, current.id, null);
+          deps.activity?.attention?.(
+            current.projectId,
+            current.id,
+            "output review failed",
+          );
+        }
+      }
+    };
+
     // The KödMem completion checkpoint. Ids and counts ONLY — the outcome,
     // plan, and summary text never leave this store. Failures are non-fatal.
     const checkpoint = async (task: KodworkTask, turn: number) => {
@@ -316,17 +468,22 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         const workspace = await deps.memory.resolveWorkspace(task.folder);
         if (!workspace) return;
         const done = task.plan.filter((item) => item.status === "completed").length;
-        await deps.memory.checkpoint({
+        const payload = {
           workspaceId: workspace.id,
           summary: `KödWork task completed: ${done}/${task.plan.length} plan items, ${task.tools.length} tool calls.`,
           decisions: [],
           nextActions: [],
-          changedPaths: [],
-          source: "kodade",
-          sourceClient: "kodwork",
+          changedPaths: task.review.files.map((file) => file.relativePath),
+          source: "kodade" as const,
+          sourceClient: "kodwork" as const,
           sessionId: task.id,
           idempotencyKey: `kodwork:${task.id}:${turn}`,
-        });
+        };
+        if (containsLikelySecret(JSON.stringify(payload))) {
+          console.warn(`kodade: KödWork checkpoint blocked by secret scan (${task.id})`);
+          return;
+        }
+        await deps.memory.checkpoint(payload);
       } catch (error) {
         console.error(`kodade: KödWork checkpoint failed (${task.id}):`, error);
       }
@@ -372,6 +529,22 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       const cwd = task.folder || deps.projectRoot(task.projectId);
       if (!cwd) return;
 
+      if (deps.ledger) {
+        try {
+          await deps.ledger.begin(task);
+          humanChanges.set(task.id, new Set());
+        } catch (error) {
+          patch(taskId, (current) => ({
+            ...current,
+            state: "failed",
+            error: `Could not start output ledger: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          }));
+          return;
+        }
+      }
+
       const turn = (turns.get(taskId) ?? 0) + 1;
       turns.set(taskId, turn);
       const runId = `${taskId}#${turn}`;
@@ -385,6 +558,8 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         failed: false,
         usage: null,
         turn,
+        interactive: false,
+        permissionTimer: null,
       };
       runs.set(taskId, run);
       runByRunId.set(runId, taskId);
@@ -401,8 +576,24 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         statusText: null,
         startedAt: now(),
         settledAt: null,
+        review: {
+          ...current.review,
+          status: "collecting",
+          feedback: "",
+        },
+        reviewOutcomeState: null,
         ...(resetProgress
-          ? { plan: [], tools: [], summary: null, usage: null, resumeId: null }
+          ? {
+              plan: [],
+              tools: [],
+              summary: null,
+              usage: null,
+              resumeId: null,
+              rejectionFingerprints: [],
+              doomLoop: false,
+              permissionRequest: null,
+              deniedTools: [],
+            }
           : {}),
       }));
       deps.activity?.attention?.(task.projectId, taskId, null);
@@ -416,7 +607,9 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         resumeId,
         model: null,
         access: task.access,
+        interactive: true,
       });
+      run.interactive = spawn.initialInput !== undefined;
       try {
         await deps.agent.start({
           id: runId,
@@ -425,6 +618,9 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           args: spawn.args,
           ...(spawn.stdin === undefined ? {} : { stdin: spawn.stdin }),
         });
+        if (spawn.initialInput !== undefined) {
+          await deps.agent.send({ id: runId, data: spawn.initialInput });
+        }
       } catch (error) {
         // The CLI is missing, or the run id collided. Record it and settle so
         // the task is startable again.
@@ -438,7 +634,11 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
 
     return {
       tasks: {},
+      templates: [],
+      templatesLoading: false,
+      templatesError: null,
       loaded: {},
+      pendingRestore: null,
 
       async start(): Promise<Unlisten> {
         const offEvent = await deps.agent.onEvent((event) => onLine(event.id, event.line));
@@ -494,6 +694,15 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           statusText: doc.statusText,
           summary: doc.summary,
           usage: doc.usage,
+          review: doc.review,
+          reviewOutcomeState: doc.reviewOutcomeState,
+          rejectionFingerprints: doc.rejectionFingerprints,
+          doomLoop: doc.doomLoop,
+          alwaysAllowedTools: doc.alwaysAllowedTools,
+          deniedTools: doc.deniedTools,
+          recurrence: doc.recurrence,
+          scheduleReceipts: doc.scheduleReceipts,
+          scheduledFromTaskId: doc.scheduledFromTaskId,
           resumeId: doc.resumeId,
           error: doc.error,
           needsLogin: doc.needsLogin,
@@ -541,6 +750,152 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         persistDebounced(taskId);
       },
 
+      async loadTemplates(taskId: string) {
+        const task = get().tasks[taskId];
+        if (!task || !deps.templates) return;
+        set({ templatesLoading: true, templatesError: null });
+        try {
+          const templates = await deps.templates.list(task.folder, task.providerId);
+          set({ templates, templatesLoading: false });
+        } catch (error) {
+          set({
+            templates: [],
+            templatesLoading: false,
+            templatesError: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+
+      applyTemplate(taskId: string, templateId: string) {
+        if (runs.has(taskId)) return;
+        const template = get().templates.find((candidate) => candidate.id === templateId);
+        if (!template) return;
+        patch(taskId, (task) => {
+          const outcome = templatePrompt(template, task.folder);
+          return { ...task, outcome, title: titleFromOutcome(outcome) };
+        });
+        persistDebounced(taskId);
+      },
+
+      setRecurrence(taskId: string, recurrence: KodworkRecurrenceInput | null) {
+        if (runs.has(taskId)) return;
+        patch(taskId, (task) => ({
+          ...task,
+          recurrence: recurrence ? recurrenceFromInput(recurrence, now()) : null,
+        }));
+        persistDebounced(taskId);
+      },
+
+      async reconcileSchedules(at = now()) {
+        for (const task of Object.values(get().tasks)) {
+          if (!task.recurrence) continue;
+          let recurrence = task.recurrence;
+          const receipts: KodworkScheduleReceipt[] = [];
+          let count = 0;
+          while (recurrence.nextRunAt <= at && count < 100) {
+            receipts.push({
+              scheduledFor: recurrence.nextRunAt,
+              recordedAt: at,
+              status: "missed" as const,
+              sessionId: null,
+              message: "missed — Ködade was not running",
+            });
+            recurrence = advanceRecurrence(recurrence);
+            count += 1;
+          }
+          if (receipts.length === 0) continue;
+          if (recurrence.nextRunAt <= at) {
+            recurrence = {
+              ...recurrence,
+              nextRunAt: nextRecurrenceAt(recurrence, at),
+            };
+          }
+          patch(task.id, (current) => ({
+            ...current,
+            recurrence,
+            scheduleReceipts: [...current.scheduleReceipts, ...receipts].slice(-100),
+          }));
+          await persistNow(task.id);
+        }
+      },
+
+      async tickSchedules(at = now()) {
+        const due = Object.values(get().tasks).filter(
+          (task) => task.recurrence && task.recurrence.nextRunAt <= at,
+        );
+        for (const source of due) {
+          let nextRecurrence = source.recurrence!;
+          const dueSlots: number[] = [];
+          while (nextRecurrence.nextRunAt <= at && dueSlots.length < 100) {
+            dueSlots.push(nextRecurrence.nextRunAt);
+            nextRecurrence = advanceRecurrence(nextRecurrence);
+          }
+          if (nextRecurrence.nextRunAt <= at) {
+            nextRecurrence = {
+              ...nextRecurrence,
+              nextRunAt: nextRecurrenceAt(nextRecurrence, at),
+            };
+          }
+          const scheduledFor = dueSlots.at(-1)!;
+          const sessionId = source.outcome.trim()
+            ? (deps.createScheduledSession?.(source.projectId) ?? null)
+            : null;
+          const receipt = sessionId
+            ? {
+                scheduledFor,
+                recordedAt: at,
+                status: "started" as const,
+                sessionId,
+                message: "started while Ködade was running",
+              }
+            : {
+                scheduledFor,
+                recordedAt: at,
+                status: "missed" as const,
+                sessionId: null,
+                message: source.outcome.trim()
+                  ? "missed — task session could not be created"
+                  : "missed — task outcome is empty",
+              };
+          patch(source.id, (current) => ({
+            ...current,
+            recurrence: current.recurrence ? nextRecurrence : null,
+            scheduleReceipts: [
+              ...current.scheduleReceipts,
+              ...dueSlots.slice(0, -1).map((slot) => ({
+                scheduledFor: slot,
+                recordedAt: at,
+                status: "missed" as const,
+                sessionId: null,
+                message: "missed — Ködade could not run this slot on time",
+              })),
+              receipt,
+            ].slice(-100),
+          }));
+          await persistNow(source.id);
+          if (!sessionId) continue;
+          const scheduled = {
+            ...newTask(
+              sessionId,
+              source.projectId,
+              source.folder,
+              source.providerId,
+              at,
+            ),
+            outcome: source.outcome,
+            title: source.title,
+            access: source.access,
+            scheduledFromTaskId: source.id,
+          };
+          set((state) => ({
+            tasks: { ...state.tasks, [sessionId]: scheduled },
+            loaded: { ...state.loaded, [sessionId]: true },
+          }));
+          await persistNow(sessionId);
+          await spawnRun(sessionId, scheduled.outcome, null, true);
+        }
+      },
+
       async startTask(taskId: string) {
         const task = get().tasks[taskId];
         if (!task) return;
@@ -573,6 +928,169 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         // The exit event still arrives and settles the task as cancelled.
       },
 
+      setReviewFeedback(taskId: string, feedback: string) {
+        patch(taskId, (task) => ({
+          ...task,
+          review: { ...task.review, feedback },
+        }));
+        persistDebounced(taskId);
+      },
+
+      async acceptReview(taskId: string) {
+        const task = get().tasks[taskId];
+        if (!task || task.review.status !== "pending" || !deps.ledger) return;
+        await deps.ledger.accept(taskId);
+        patch(taskId, (current) => ({
+          ...current,
+          state: current.reviewOutcomeState ?? "done",
+          reviewOutcomeState: null,
+          review: {
+            ...current.review,
+            status: "accepted",
+            files: [],
+            feedback: "",
+          },
+        }));
+        const accepted = get().tasks[taskId];
+        deps.activity?.attention?.(
+          task.projectId,
+          taskId,
+          accepted?.state === "needs-user"
+            ? "needs login"
+            : accepted?.state === "failed"
+              ? "the agent failed"
+              : null,
+        );
+        if (accepted?.state === "done") {
+          await checkpoint(task, turns.get(taskId) ?? 1);
+        }
+        await persistNow(taskId);
+      },
+
+      async rejectReview(taskId: string) {
+        const task = get().tasks[taskId];
+        if (!task || task.review.status !== "pending" || !deps.ledger) return;
+        const fingerprint = task.review.fingerprint;
+        const history = fingerprint
+          ? [...task.rejectionFingerprints, fingerprint].slice(-DOOM_LOOP_REJECTIONS)
+          : task.rejectionFingerprints;
+        if (
+          history.length === DOOM_LOOP_REJECTIONS &&
+          history.every((value) => value === history[0])
+        ) {
+          patch(taskId, (current) => ({
+            ...current,
+            rejectionFingerprints: history,
+            doomLoop: true,
+            error: "This task produced the same output three times. Review the approach before spending more tokens.",
+          }));
+          deps.activity?.attention?.(task.projectId, taskId, "task may be looping");
+          await persistNow(taskId);
+          return;
+        }
+        patch(taskId, (current) => ({
+          ...current,
+          rejectionFingerprints: history,
+        }));
+        const prompt = await deps.ledger.compileFeedback(task.review);
+        await spawnRun(taskId, prompt, task.resumeId, false);
+      },
+
+      async prepareRestore(taskId: string) {
+        const task = get().tasks[taskId];
+        if (!task || task.review.status !== "pending" || !deps.ledger) return;
+        set({ pendingRestore: await deps.ledger.prepareRestore(task) });
+      },
+
+      async confirmRestore(taskId: string) {
+        const task = get().tasks[taskId];
+        const plan = get().pendingRestore;
+        if (!task || !plan || plan.taskId !== taskId || !deps.ledger) return;
+        patch(taskId, (current) => ({
+          ...current,
+          review: { ...current.review, status: "restoring" },
+        }));
+        const result = await deps.ledger.applyRestore(plan);
+        if (!result.ok) {
+          await deps.ledger.rollbackRestore(plan);
+          patch(taskId, (current) => ({
+            ...current,
+            review: { ...current.review, status: "restore-failed" },
+            error: `Restore verification failed: ${result.reason}`,
+          }));
+          set({ pendingRestore: null });
+          return;
+        }
+        patch(taskId, (current) => ({
+          ...current,
+          state: "cancelled",
+          review: { ...EMPTY_KODWORK_REVIEW },
+        }));
+        set({ pendingRestore: null });
+        await persistNow(taskId);
+      },
+
+      cancelRestore(taskId: string) {
+        if (get().pendingRestore?.taskId === taskId) {
+          set({ pendingRestore: null });
+        }
+      },
+
+      noteHumanChange(path: string) {
+        for (const [taskId, run] of runs) {
+          const task = get().tasks[taskId];
+          if (!task || run.cancelled) continue;
+          if (nativeEquals(path, task.folder) || nativeIsDescendant(path, task.folder)) {
+            const touched = humanChanges.get(taskId) ?? new Set<string>();
+            touched.add(path);
+            humanChanges.set(taskId, touched);
+          }
+        }
+      },
+
+      async respondPermission(taskId, decision) {
+        const run = runs.get(taskId);
+        const task = get().tasks[taskId];
+        const request = task?.permissionRequest;
+        if (!run || !task || !request || !run.interactive) return;
+        if (run.permissionTimer) {
+          clearTimer(run.permissionTimer);
+          run.permissionTimer = null;
+        }
+        try {
+          await deps.agent.send({
+            id: run.runId,
+            data: encodeClaudePermissionResponse(request, decision),
+          });
+          patch(taskId, (current) => ({
+            ...current,
+            state: "running",
+            permissionRequest: null,
+            alwaysAllowedTools:
+              decision === "always" && !current.alwaysAllowedTools.includes(request.tool)
+                ? [...current.alwaysAllowedTools, request.tool].slice(-100)
+                : current.alwaysAllowedTools,
+          }));
+          deps.activity?.attention?.(task.projectId, taskId, null);
+          persistDebounced(taskId);
+        } catch (error) {
+          run.failed = true;
+          patch(taskId, (current) => ({
+            ...current,
+            error: `Could not answer permission request: ${error instanceof Error ? error.message : String(error)}`,
+          }));
+        }
+      },
+
+      async steerTask(taskId, message) {
+        const run = runs.get(taskId);
+        if (!run?.interactive || !message.trim()) return;
+        await deps.agent.send({
+          id: run.runId,
+          data: encodeClaudeUserMessage(message.trim()),
+        });
+      },
+
       async removeTask(taskId: string) {
         const handle = pending.get(taskId);
         if (handle) {
@@ -589,7 +1107,15 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
             // Already gone: removal must still complete.
           }
         }
+        if (deps.ledger) {
+          try {
+            await deps.ledger.accept(taskId);
+          } catch {
+            // Drafts and already-finalized tasks have no active ledger.
+          }
+        }
         turns.delete(taskId);
+        humanChanges.delete(taskId);
         set((state) => {
           const tasks = { ...state.tasks };
           const loaded = { ...state.loaded };

@@ -192,6 +192,21 @@ impl AgentManager {
             .map_err(|e| format!("write to agent run {id}: {e}"))
     }
 
+    // Close a streaming run's input without killing it. Claude Code treats
+    // EOF as the graceful end of a bidirectional session and flushes its
+    // resumable session before exiting.
+    pub fn end_input(&self, id: &str) -> Result<(), String> {
+        let handle = {
+            let runs = self.runs.lock().unwrap();
+            let run = runs
+                .get(id)
+                .ok_or_else(|| format!("unknown agent run: {id}"))?;
+            run.stdin.clone()
+        };
+        handle.lock().unwrap().take();
+        Ok(())
+    }
+
     // Kill a run's whole process group. The waiter still fires `on_exit`, so
     // the frontend settles a cancelled thread through the normal path.
     pub fn cancel(&self, id: &str) -> Result<(), String> {

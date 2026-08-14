@@ -17,7 +17,7 @@ import {
 } from "../../store/appStore";
 import type { ActivityModule, WorkspaceGroupKind } from "../../activity/activity";
 import type { KodworkState } from "../../kodwork/store";
-import { DEFAULT_TASK_TITLE, taskGroup, type KodworkTask } from "../../kodwork/model";
+import { DEFAULT_TASK_TITLE, projectTokenUsage, taskGroup, type KodworkTask } from "../../kodwork/model";
 import type { ProjectsState, SessionMeta } from "../../store/projects";
 import { isWorkSession } from "../../store/projects";
 
@@ -83,6 +83,7 @@ export function KodworkSection({
             (session) => session.projectId === project.id && isWorkSession(session),
           );
           const open = expanded[project.id] ?? project.id === activeProjectId;
+          const usage = projectTokenUsage(tasks, project.id).totalTokens;
           return (
             <div key={project.id} data-kodwork-project={project.id}>
               <div className="group flex items-center gap-0.5 rounded px-1 hover:bg-surface-hover">
@@ -102,6 +103,7 @@ export function KodworkSection({
                   <span className="ml-1.5 tabular-nums text-[10px]">
                     {workSessions.length || ""}
                   </span>
+                  {usage > 0 && <span className="ml-1.5 tabular-nums text-[10px]">{usage.toLocaleString()} tokens</span>}
                 </span>
                 <button
                   type="button"
@@ -186,6 +188,10 @@ function TaskGroups({
                 session={session}
                 task={tasks[session.id]}
                 group={kind}
+                closable={
+                  tasks[session.id]?.state !== "running" &&
+                  tasks[session.id]?.review.status !== "pending"
+                }
                 onOpen={() => onOpen(session.id)}
                 onClose={() => onClose(session.id)}
               />
@@ -201,12 +207,14 @@ function TaskRow({
   session,
   task,
   group,
+  closable,
   onOpen,
   onClose,
 }: {
   session: SessionMeta;
   task: KodworkTask | undefined;
   group: WorkspaceGroupKind;
+  closable: boolean;
   onOpen(): void;
   onClose(): void;
 }) {
@@ -232,9 +240,10 @@ function TaskRow({
       <button
         type="button"
         aria-label={`Close task ${label}`}
-        title="Close task (deletes its record)"
+        title={closable ? "Close task (deletes its record)" : "Finish or review this task before closing it"}
+        disabled={!closable}
         onClick={onClose}
-        className="absolute right-0.5 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-text-dim opacity-0 hover:text-text focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-accent group-focus-within/task:opacity-100 group-hover/task:opacity-100"
+        className="absolute right-0.5 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-text-dim opacity-0 hover:text-text disabled:cursor-not-allowed disabled:opacity-20 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-accent group-focus-within/task:opacity-100 group-hover/task:opacity-100"
       >
         <span aria-hidden="true">×</span>
       </button>

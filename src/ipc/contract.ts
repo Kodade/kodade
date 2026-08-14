@@ -16,6 +16,7 @@ export const CMD = {
   storageDeleteDoc: "storage_delete_doc",
   agentStart: "agent_start",
   agentSend: "agent_send",
+  agentEnd: "agent_end",
   agentCancel: "agent_cancel",
   isDir: "fs_is_dir",
   canonicalize: "fs_canonicalize",
@@ -24,6 +25,10 @@ export const CMD = {
   writeFile: "fs_write_file",
   watch: "fs_watch",
   unwatch: "fs_unwatch",
+  kodworkLedgerBegin: "kodwork_ledger_begin",
+  kodworkLedgerFinish: "kodwork_ledger_finish",
+  kodworkLedgerAccept: "kodwork_ledger_accept",
+  kodworkLedgerRestore: "kodwork_ledger_restore",
   createFile: "fs_create_file",
   createDir: "fs_create_dir",
   rename: "fs_rename",
@@ -513,6 +518,7 @@ export interface LocalIpc {
 export interface AgentIpc {
   start(args: AgentStartArgs): Promise<void>;
   send(args: AgentSendArgs): Promise<void>;
+  end?(args: AgentCancelArgs): Promise<void>;
   cancel(args: AgentCancelArgs): Promise<void>;
   onEvent(handler: (e: AgentEvent) => void): Promise<Unlisten>;
   onExit(handler: (e: AgentExitEvent) => void): Promise<Unlisten>;
@@ -590,6 +596,34 @@ export type GitOutput = { stdout: string; stderr: string };
 // stdout is raw git output — all parsing lives in TypeScript (M12b).
 export interface GitIpc {
   run(projectRoot: string, args: string[]): Promise<GitOutput>;
+}
+
+// Native filesystem snapshot seam for KödWork. Rust only captures/restores
+// bytes and reports a bounded ledger; review policy and git parsing stay in TS.
+export type KodworkNativeFile = {
+  path: string;
+  relativePath: string;
+  change: "added" | "modified" | "deleted";
+  binary: boolean;
+  before: string | null;
+  after: string | null;
+  adds: number;
+  dels: number;
+};
+
+export type KodworkNativeReview = {
+  kind: "git" | "folder";
+  files: KodworkNativeFile[];
+  fingerprint: string;
+};
+
+export interface KodworkIpc {
+  begin(taskId: string, root: string): Promise<void>;
+  finish(taskId: string): Promise<KodworkNativeReview>;
+  accept(taskId: string): Promise<void>;
+  // The native transaction restores the baseline, verifies it, and rolls the
+  // attempted restore back automatically when verification fails.
+  restore(taskId: string): Promise<void>;
 }
 
 export type BrowserBounds = {

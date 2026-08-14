@@ -19,6 +19,7 @@ pub mod exec;
 pub mod fs;
 pub mod git;
 pub mod github;
+pub mod kodwork;
 pub mod license;
 pub mod mcp;
 pub mod memory;
@@ -48,6 +49,8 @@ use agent::AgentManager;
 #[cfg(feature = "voice")]
 use commands::{ModeldManager, WatchManager};
 #[cfg(feature = "voice")]
+use kodwork::KodworkLedgerManager;
+#[cfg(feature = "voice")]
 use pty::PtyManager;
 #[cfg(feature = "voice")]
 use tauri::{Manager, RunEvent};
@@ -73,8 +76,10 @@ pub fn run() {
             document::serve(root.as_deref(), &request)
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(PtyManager::new())
         .manage(AgentManager::new())
+        .manage(KodworkLedgerManager::new())
         .manage(WatchManager::new())
         .manage(ModeldManager::new())
         .manage(VoxManager::new())
@@ -102,7 +107,12 @@ pub fn run() {
             commands::pty_foreground,
             commands::agent_start,
             commands::agent_send,
+            commands::agent_end,
             commands::agent_cancel,
+            commands::kodwork_ledger_begin,
+            commands::kodwork_ledger_finish,
+            commands::kodwork_ledger_accept,
+            commands::kodwork_ledger_restore,
             commands::local_modeld_status,
             commands::local_modeld_start,
             commands::local_modeld_stop,

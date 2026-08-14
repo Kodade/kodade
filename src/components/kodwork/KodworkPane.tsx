@@ -7,10 +7,17 @@
 // chips) so the two agent surfaces read as one design language.
 
 import { useStore } from "zustand";
+import { useEffect, useState } from "react";
 import type { StoreApi } from "zustand/vanilla";
-import { appStore, kodworkStore } from "../../store/appStore";
+import { appStore, filesStore, kodworkStore, reviewStore } from "../../store/appStore";
 import type { KodworkState } from "../../kodwork/store";
-import type { KodworkTask, KodworkToolLine } from "../../kodwork/model";
+import {
+  projectedCadenceTokens,
+  type KodworkRecurrence,
+  type KodworkRecurrenceInput,
+  type KodworkTask,
+  type KodworkToolLine,
+} from "../../kodwork/model";
 import type { AgentPlanItem } from "../../agents/contract";
 import {
   ACCESS_LEVELS,
@@ -86,7 +93,14 @@ function TaskComposer({
   );
   const provider = TASK_PROVIDERS.find((entry) => entry.id === task.providerId);
   const accessLevel = ACCESS_LEVELS.find((level) => level.id === task.access);
+  const templates = useStore(workStore, (state) => state.templates);
+  const templatesLoading = useStore(workStore, (state) => state.templatesLoading);
+  const templatesError = useStore(workStore, (state) => state.templatesError);
   const canStart = task.outcome.trim().length > 0 && !!provider;
+
+  useEffect(() => {
+    void workStore.getState().loadTemplates(task.id);
+  }, [task.id, task.providerId, workStore]);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-8">
@@ -98,6 +112,7 @@ function TaskComposer({
 
       <div className="mt-4 rounded-xl border border-border bg-surface focus-within:border-accent/70">
         <textarea
+          data-voice-target="kodwork-outcome"
           value={task.outcome}
           onChange={(event) =>
             workStore.getState().setOutcome(task.id, event.target.value)
@@ -123,6 +138,20 @@ function TaskComposer({
       />
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {templates.length > 0 && (
+          <ComposerMenu
+            label="Task template"
+            value=""
+            onSelect={(id) => workStore.getState().applyTemplate(task.id, id)}
+            options={templates.map((template) => ({
+              id: template.id,
+              label: template.name,
+              description: template.description,
+            }))}
+          >
+            <span>Skill template</span>
+          </ComposerMenu>
+        )}
         <ComposerMenu
           label="Provider"
           value={task.providerId}
@@ -163,8 +192,19 @@ function TaskComposer({
           Start task
         </button>
       </div>
+      {templatesLoading && <p className="mt-2 text-[10px] text-text-dim">Loading installed skill templates…</p>}
+      {templatesError && <p className="mt-2 text-[10px] text-text-dim">Skill templates unavailable: {templatesError}</p>}
+      <ScheduleEditor task={task} workStore={workStore} />
       {task.error && (
         <p className="mt-3 text-xs text-[var(--kd-error)]">{task.error}</p>
+      )}
+
+      {task.deniedTools.length > 0 && (
+        <section className="mt-4 rounded-lg border border-amber-400/40 bg-amber-400/5 px-3 py-2">
+          <h2 className="text-[10px] uppercase tracking-[0.12em] text-amber-400">Denied tools</h2>
+          {task.deniedTools.map((item, index) => <p key={`${item.tool}:${index}`} className="mt-1 break-all text-xs text-text">{item.tool}{item.detail ? ` · ${item.detail}` : ""}</p>)}
+          {task.access !== "full" && <p className="mt-1 text-[10px] text-text-dim">Choose a broader access level before resuming if this operation is expected.</p>}
+        </section>
       )}
     </div>
   );
@@ -180,6 +220,9 @@ function TaskProgress({
   workStore: StoreApi<KodworkState>;
 }) {
   const running = task.state === "running";
+  const live = running || task.permissionRequest !== null;
+  const pendingRestore = useStore(workStore, (state) => state.pendingRestore);
+  const reviewing = task.review.status === "pending";
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-8">
       <div className="flex items-start justify-between gap-3">
@@ -200,7 +243,7 @@ function TaskProgress({
             </span>
           </p>
         </div>
-        {running ? (
+        {live ? (
           <button
             type="button"
             onClick={() => void workStore.getState().cancelTask(task.id)}
@@ -212,7 +255,7 @@ function TaskProgress({
           <button
             type="button"
             onClick={() => void workStore.getState().resumeTask(task.id)}
-            disabled={task.needsLogin}
+            disabled={task.needsLogin || reviewing}
             title={
               task.needsLogin
                 ? "Log the CLI in through a terminal first"
@@ -234,6 +277,21 @@ function TaskProgress({
           {task.outcome}
         </p>
       </section>
+
+      {!running && <ScheduleEditor task={task} workStore={workStore} />}
+
+      {task.scheduleReceipts.length > 0 && (
+        <section className="mt-4">
+          <h2 className="text-[10px] uppercase tracking-[0.12em] text-text-dim">Schedule receipts</h2>
+          <ul className="mt-1 space-y-1 text-[10px] text-text-dim">
+            {task.scheduleReceipts.slice(-5).reverse().map((receipt) => (
+              <li key={`${receipt.scheduledFor}:${receipt.status}`}>
+                {new Date(receipt.scheduledFor).toLocaleString()} · {receipt.message}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {task.plan.length > 0 && (
         <section className="mt-4">
@@ -278,6 +336,33 @@ function TaskProgress({
         </p>
       )}
 
+      {task.permissionRequest && (
+        <PermissionPrompt task={task} workStore={workStore} />
+      )}
+
+      {running && <Steering task={task} workStore={workStore} />}
+
+      {reviewing && (
+        <OutputReview task={task} workStore={workStore} />
+      )}
+
+      {pendingRestore?.taskId === task.id && (
+        <section
+          role="dialog"
+          aria-label="Restore task output"
+          className="mt-4 rounded-lg border border-red-400/40 bg-red-400/5 px-3 py-2"
+        >
+          <p className="text-xs text-text">
+            Restore {pendingRestore.files.length} changed file
+            {pendingRestore.files.length === 1 ? "" : "s"} to the pre-task snapshot?
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button type="button" onClick={() => void workStore.getState().confirmRestore(task.id)} className="rounded bg-red-500 px-2.5 py-1 text-xs text-white">Restore</button>
+            <button type="button" onClick={() => workStore.getState().cancelRestore(task.id)} className="rounded border border-border px-2.5 py-1 text-xs text-text">Cancel</button>
+          </div>
+        </section>
+      )}
+
       {task.summary && (
         <section className="mt-4 rounded-lg border border-border bg-surface px-3 py-2">
           <h2 className="text-[10px] uppercase tracking-[0.12em] text-text-dim">
@@ -297,6 +382,163 @@ function TaskProgress({
         </p>
       )}
     </div>
+  );
+}
+
+function ScheduleEditor({ task, workStore }: { task: KodworkTask; workStore: StoreApi<KodworkState> }) {
+  const tasks = useStore(workStore, (state) => state.tasks);
+  const [kind, setKind] = useState<"none" | "interval" | "daily">(
+    task.recurrence?.kind ?? "none",
+  );
+  const [minutes, setMinutes] = useState(
+    task.recurrence?.kind === "interval" ? String(task.recurrence.minutes) : "60",
+  );
+  const [dailyTime, setDailyTime] = useState(
+    task.recurrence?.kind === "daily"
+      ? `${String(task.recurrence.hour).padStart(2, "0")}:${String(task.recurrence.minute).padStart(2, "0")}`
+      : "09:00",
+  );
+
+  useEffect(() => {
+    setKind(task.recurrence?.kind ?? "none");
+  }, [task.recurrence?.kind]);
+
+  const candidate: KodworkRecurrenceInput | null =
+    kind === "interval"
+      ? { kind, minutes: Math.min(43_200, Math.max(5, Number(minutes) || 5)) }
+      : kind === "daily"
+        ? (() => {
+            const [hour = 9, minute = 0] = dailyTime.split(":").map(Number);
+            return { kind, hour, minute };
+          })()
+        : null;
+  const projected = candidate
+    ? projectedCadenceTokens(tasks, task.id, {
+        ...candidate,
+        nextRunAt: Date.now(),
+      } as KodworkRecurrence)
+    : null;
+
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-surface px-3 py-2" aria-label="Task schedule">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-[10px] uppercase tracking-[0.12em] text-text-dim" htmlFor={`kodwork-schedule-${task.id}`}>Schedule</label>
+        <select id={`kodwork-schedule-${task.id}`} value={kind} onChange={(event) => setKind(event.target.value as typeof kind)} className="rounded border border-border bg-bg px-2 py-1 text-xs text-text">
+          <option value="none">Not recurring</option>
+          <option value="interval">Interval</option>
+          <option value="daily">Daily</option>
+        </select>
+        {kind === "interval" && <input aria-label="Interval minutes" type="number" min={5} max={43200} value={minutes} onChange={(event) => setMinutes(event.target.value)} className="w-24 rounded border border-border bg-bg px-2 py-1 text-xs text-text" />}
+        {kind === "interval" && <span className="text-xs text-text-dim">minutes</span>}
+        {kind === "daily" && <input aria-label="Daily time" type="time" value={dailyTime} onChange={(event) => setDailyTime(event.target.value)} className="rounded border border-border bg-bg px-2 py-1 text-xs text-text" />}
+        <button type="button" onClick={() => workStore.getState().setRecurrence(task.id, candidate)} className="ml-auto rounded border border-border px-2.5 py-1 text-xs text-text hover:bg-surface-hover">
+          {candidate ? (task.recurrence ? "Update" : "Enable") : "Disable"}
+        </button>
+      </div>
+      {projected && (
+        <p className="mt-1 text-[10px] tabular-nums text-text-dim">
+          Projected: {projected.totalTokens.toLocaleString()} tokens / 30 days · {projected.runsPer30Days} runs · {projected.averagePerRun.toLocaleString()} average
+        </p>
+      )}
+      {task.recurrence && (
+        <p className="mt-1 text-[10px] text-text-dim">Next run while Ködade is open: {new Date(task.recurrence.nextRunAt).toLocaleString()}</p>
+      )}
+    </section>
+  );
+}
+
+function PermissionPrompt({ task, workStore }: { task: KodworkTask; workStore: StoreApi<KodworkState> }) {
+  const request = task.permissionRequest!;
+  const detail = request.title ?? request.description ?? `${request.tool} wants permission to continue.`;
+  const metadata = [
+    typeof request.input.command === "string" ? request.input.command : null,
+    typeof request.input.path === "string" ? request.input.path : request.blockedPath,
+    typeof request.input.cwd === "string" ? request.input.cwd : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    <section role="dialog" aria-label="Tool permission" className="mt-4 rounded-lg border border-amber-400/50 bg-amber-400/5 px-3 py-2">
+      <h2 className="text-[10px] uppercase tracking-[0.12em] text-amber-400">Permission needed</h2>
+      <p className="mt-1 text-xs text-text">{detail}</p>
+      {metadata && <p className="mt-1 break-all font-mono text-[10px] text-text-dim">{metadata}</p>}
+      <p className="mt-1 text-[10px] text-text-dim">Automatically denied after 60 seconds.</p>
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
+        <button type="button" onClick={() => void workStore.getState().respondPermission(task.id, "deny")} className="rounded border border-border px-2.5 py-1 text-xs text-text">Deny</button>
+        <button type="button" onClick={() => void workStore.getState().respondPermission(task.id, "once")} className="rounded border border-border px-2.5 py-1 text-xs text-text">Allow once</button>
+        {request.suggestions.length > 0 && <button type="button" onClick={() => void workStore.getState().respondPermission(task.id, "always")} className="rounded bg-accent px-2.5 py-1 text-xs text-accent-text">Always allow this operation</button>}
+      </div>
+    </section>
+  );
+}
+
+function Steering({ task, workStore }: { task: KodworkTask; workStore: StoreApi<KodworkState> }) {
+  const [message, setMessage] = useState("");
+  return (
+    <form className="mt-4 flex gap-2" onSubmit={(event) => {
+      event.preventDefault();
+      if (!message.trim()) return;
+      void workStore.getState().steerTask(task.id, message);
+      setMessage("");
+    }}>
+      <input aria-label="Steer task" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Redirect this task…" className="min-w-0 flex-1 rounded border border-border bg-surface px-2.5 py-1.5 text-xs text-text focus:border-accent/70 focus:outline-none" />
+      <button type="submit" disabled={!message.trim()} className="rounded border border-border px-2.5 py-1 text-xs text-text disabled:opacity-40">Send</button>
+    </form>
+  );
+}
+
+function OutputReview({
+  task,
+  workStore,
+}: {
+  task: KodworkTask;
+  workStore: StoreApi<KodworkState>;
+}) {
+  return (
+    <section className="mt-4 rounded-lg border border-accent/40 bg-surface px-3 py-2" aria-label="Output review">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-[10px] uppercase tracking-[0.12em] text-text-dim">Output review</h2>
+        <span className="text-[10px] text-text-dim">{task.review.files.length} changed</span>
+      </div>
+      <ul className="mt-2 space-y-2">
+        {task.review.files.map((file) => (
+          <li key={`${file.change}:${file.relativePath}`} className="rounded border border-border px-2 py-1.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={file.bucket === "risky" ? "text-red-400" : file.bucket === "routine" ? "text-amber-400" : "text-text-dim"}>{file.bucket}</span>
+              <button type="button" className="min-w-0 flex-1 truncate text-left text-text hover:underline" title={file.path} onClick={() => void filesStore.getState().selectFile(file.path)}>{file.relativePath}</button>
+              <span className="shrink-0 text-text-dim">{file.change}</span>
+            </div>
+            {file.humanTouched && <p className="mt-1 text-[10px] text-amber-400">Changed by you during this task</p>}
+            {file.reasons.length > 0 && <p className="mt-1 text-[10px] text-text-dim">{file.reasons.join(" · ")}</p>}
+            {!file.binary && (file.before !== null || file.after !== null) && (
+              <details className="mt-1 text-[10px] text-text-dim">
+                <summary className="cursor-pointer">Before / after</summary>
+                <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-bg p-1.5">{file.before ?? "(new file)"}</pre>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-bg p-1.5">{file.after ?? "(deleted)"}</pre>
+                </div>
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
+      <textarea
+        aria-label="Review feedback"
+        value={task.review.feedback}
+        onChange={(event) => workStore.getState().setReviewFeedback(task.id, event.target.value)}
+        placeholder="Feedback for another pass"
+        rows={3}
+        className="mt-2 w-full resize-none rounded border border-border bg-bg px-2 py-1.5 text-xs text-text placeholder:text-text-dim focus:border-accent/70 focus:outline-none"
+      />
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
+        {task.review.kind === "git" && <button type="button" onClick={() => {
+          void reviewStore.getState().openWorktree(task.folder).then(() => {
+            filesStore.getState().openReviewTab();
+          });
+        }} className="rounded border border-border px-2.5 py-1 text-xs text-text">Open full diff</button>}
+        {task.review.kind === "folder" && <button type="button" onClick={() => void workStore.getState().prepareRestore(task.id)} className="rounded border border-border px-2.5 py-1 text-xs text-text">Restore output</button>}
+        <button type="button" onClick={() => void workStore.getState().rejectReview(task.id)} className="rounded border border-border px-2.5 py-1 text-xs text-text">Reject &amp; continue</button>
+        <button type="button" onClick={() => void workStore.getState().acceptReview(task.id)} className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-accent-text">Accept</button>
+      </div>
+    </section>
   );
 }
 

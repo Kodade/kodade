@@ -24,6 +24,7 @@ This file states the public product boundary.
 - KödLocal local-model workflows
 - KödWhisper local voice workflows
 - KödSSH and Remote projects
+- KödWork background-agent workflows
 
 Development features are compiled out of public release builds until they are
 ready to support. Their presence in source is not a support promise.

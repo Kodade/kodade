@@ -7,6 +7,7 @@ describe("release manifest", () => {
       local: false,
       voice: false,
       ssh: false,
+      work: false,
     });
   });
 
@@ -15,6 +16,7 @@ describe("release manifest", () => {
       local: true,
       voice: true,
       ssh: true,
+      work: true,
     });
   });
 });

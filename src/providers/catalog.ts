@@ -70,6 +70,11 @@ export type ProviderStream = {
   // Dynamic model discovery for provider/plugin catalogs that can change
   // independently of Ködade. The picker always keeps a Default escape hatch.
   modelDiscovery?: ProviderModelDiscovery;
+  // Bidirectional stdin protocol. Omitted providers remain one-shot.
+  input?: {
+    dialect: "claude-control";
+    args: readonly string[];
+  };
 };
 
 export const DEFAULT_ACCESS_LEVEL: ChatAccessLevel = "standard";
@@ -253,6 +258,16 @@ export const PROVIDERS: Provider[] = [
         { id: "claude-sonnet-5", label: "Sonnet 5" },
         { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
       ],
+      input: {
+        dialect: "claude-control",
+        args: [
+          "--input-format",
+          "stream-json",
+          "--permission-prompt-tool",
+          "stdio",
+          "--replay-user-messages",
+        ],
+      },
     },
     // Claude Code: global config under ~/.claude, project config under
     // <project>/.claude, project instructions at <project>/CLAUDE.md, project

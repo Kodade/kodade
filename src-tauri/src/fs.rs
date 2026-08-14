@@ -723,6 +723,17 @@ fn canonical_watch_path(path: &Path) -> PathBuf {
 // paths are the parent directories that need re-listing plus the changed paths
 // themselves — the frontend decides what to re-list.
 pub fn watch(root: &str, sink: ChangeSink) -> Result<WatchHandle, String> {
+    watch_inner(root, sink, true)
+}
+
+// KödWork needs visibility into generated and otherwise tree-hidden output.
+// Its bounded snapshot decides what can be previewed; the watcher must not
+// silently discard a changed path just because the Files pane hides it.
+pub(crate) fn watch_unfiltered(root: &str, sink: ChangeSink) -> Result<WatchHandle, String> {
+    watch_inner(root, sink, false)
+}
+
+fn watch_inner(root: &str, sink: ChangeSink, filter_ignored: bool) -> Result<WatchHandle, String> {
     let (tx, rx) = channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::recommended_watcher(tx).map_err(|e| format!("watcher init: {e}"))?;
     watcher
@@ -745,9 +756,9 @@ pub fn watch(root: &str, sink: ChangeSink) -> Result<WatchHandle, String> {
             // Wait for the first event (or a short poll to re-check stop).
             match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
                 Ok(res) => {
-                    collect_paths(res, &mut pending, &root_path);
+                    collect_paths(res, &mut pending, &root_path, filter_ignored);
                     // Drain any events already queued behind it, then flush.
-                    drain_ready(&rx, &mut pending, &root_path);
+                    drain_ready(&rx, &mut pending, &root_path, filter_ignored);
                     if !pending.is_empty() {
                         let paths: Vec<String> = pending.drain().collect();
                         sink(paths);
@@ -775,28 +786,34 @@ fn drain_ready(
     rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
     pending: &mut HashSet<String>,
     root: &Path,
+    filter_ignored: bool,
 ) {
     while let Ok(res) = rx.try_recv() {
-        collect_paths(res, pending, root);
+        collect_paths(res, pending, root, filter_ignored);
     }
 }
 
 // Add the affected paths from one notify event to `pending`, skipping anything
 // under an ignored directory inside the root. Emits both the changed path and
 // its parent dir (the frontend re-lists parents to pick up creates/deletes).
-fn collect_paths(res: notify::Result<notify::Event>, pending: &mut HashSet<String>, root: &Path) {
+fn collect_paths(
+    res: notify::Result<notify::Event>,
+    pending: &mut HashSet<String>,
+    root: &Path,
+    filter_ignored: bool,
+) {
     let event = match res {
         Ok(e) => e,
         Err(_) => return,
     };
     for path in event.paths {
-        if path_is_ignored(&path, root) {
+        if filter_ignored && path_is_ignored(&path, root) {
             continue;
         }
         pending.insert(path.to_string_lossy().to_string());
         if let Some(parent) = path.parent() {
             let p: PathBuf = parent.to_path_buf();
-            if !path_is_ignored(&p, root) {
+            if !filter_ignored || !path_is_ignored(&p, root) {
                 pending.insert(p.to_string_lossy().to_string());
             }
         }

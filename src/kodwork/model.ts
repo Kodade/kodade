@@ -14,10 +14,16 @@ import type { TokenUsage } from "../inference/backend";
 import type { ToolCall } from "../local/toolcall";
 import { titleFromMessage } from "../chat/model";
 import type { WorkspaceGroupKind } from "../activity/activity";
+import type { ClaudePermissionRequest } from "../agents/claude-input";
 import {
   DEFAULT_ACCESS_LEVEL,
   type ChatAccessLevel,
 } from "../providers/catalog";
+import {
+  EMPTY_KODWORK_REVIEW,
+  type KodworkFileChange,
+  type KodworkReview,
+} from "./ledger";
 
 // draft → running → needs-user | done | failed | cancelled. A settled task
 // (done/failed/cancelled) can be resumed, which returns it to running.
@@ -71,6 +77,21 @@ export type KodworkTask = {
   // The agent's final report for the last run.
   summary: string | null;
   usage: TokenUsage | null;
+  // Produced files must pass this gate before a successful run is final.
+  review: KodworkReview;
+  // Terminal result held behind a pending output review. A failed/cancelled
+  // run can still change files and must not bypass the same review gate.
+  reviewOutcomeState: "done" | "failed" | "cancelled" | "needs-user" | null;
+  // Fingerprints from reject/resume cycles. Three identical outputs stop the
+  // loop before another paid run is started.
+  rejectionFingerprints: string[];
+  doomLoop: boolean;
+  permissionRequest: ClaudePermissionRequest | null;
+  alwaysAllowedTools: string[];
+  deniedTools: { tool: string; detail: string | null }[];
+  recurrence: KodworkRecurrence | null;
+  scheduleReceipts: KodworkScheduleReceipt[];
+  scheduledFromTaskId: string | null;
   // The CLI's own session id, so a resume continues rather than starting cold.
   resumeId: string | null;
   error: string | null;
@@ -81,6 +102,21 @@ export type KodworkTask = {
   updatedAt: number;
   startedAt: number | null;
   settledAt: number | null;
+};
+
+export type KodworkRecurrence =
+  | { kind: "interval"; minutes: number; nextRunAt: number }
+  | { kind: "daily"; hour: number; minute: number; nextRunAt: number };
+export type KodworkRecurrenceInput =
+  | { kind: "interval"; minutes: number }
+  | { kind: "daily"; hour: number; minute: number };
+
+export type KodworkScheduleReceipt = {
+  scheduledFor: number;
+  recordedAt: number;
+  status: "started" | "missed";
+  sessionId: string | null;
+  message: string;
 };
 
 export const KODWORK_DOC_VERSION = 1;
@@ -102,6 +138,9 @@ export const MAX_TOOL_LINES = 500;
 const MAX_STATUS_CHARS = 160;
 const MAX_SUMMARY_CHARS = 20_000;
 const MAX_TOOL_DETAIL_CHARS = 120;
+const MAX_REVIEW_FILES = 500;
+const MAX_REVIEW_TEXT_CHARS = 16 * 1024;
+const MAX_REVIEW_FEEDBACK_CHARS = 20_000;
 
 export const DEFAULT_TASK_TITLE = "New task";
 
@@ -166,6 +205,16 @@ export function newTask(
     statusText: null,
     summary: null,
     usage: null,
+    review: { ...EMPTY_KODWORK_REVIEW },
+    reviewOutcomeState: null,
+    rejectionFingerprints: [],
+    doomLoop: false,
+    permissionRequest: null,
+    alwaysAllowedTools: [],
+    deniedTools: [],
+    recurrence: null,
+    scheduleReceipts: [],
+    scheduledFromTaskId: null,
     resumeId: null,
     error: null,
     needsLogin: false,
@@ -182,6 +231,17 @@ export function toPersistedTask(task: KodworkTask): PersistedKodworkTask {
     ...task,
     plan: task.plan.slice(0, MAX_PLAN_ITEMS),
     tools: task.tools.slice(-MAX_TOOL_LINES),
+    review: {
+      ...task.review,
+      files: task.review.files.slice(0, MAX_REVIEW_FILES).map((file) => ({
+        ...file,
+        before: file.before?.slice(0, MAX_REVIEW_TEXT_CHARS) ?? null,
+        after: file.after?.slice(0, MAX_REVIEW_TEXT_CHARS) ?? null,
+        reasons: file.reasons.slice(0, 10).map((reason) => reason.slice(0, 240)),
+      })),
+      feedback: task.review.feedback.slice(0, MAX_REVIEW_FEEDBACK_CHARS),
+    },
+    scheduleReceipts: task.scheduleReceipts.slice(-MAX_SCHEDULE_RECEIPTS),
   };
 }
 
@@ -201,6 +261,11 @@ export function parsePersistedTask(raw: string): PersistedKodworkTask | null {
   if (doc.version !== KODWORK_DOC_VERSION) return null;
   if (typeof doc.id !== "string" || typeof doc.projectId !== "string") return null;
   const state = parseState(doc.state);
+  const interrupted =
+    state === "running" ||
+    (!!doc.review &&
+      typeof doc.review === "object" &&
+      (doc.review as Record<string, unknown>).status === "collecting");
   return {
     version: KODWORK_DOC_VERSION,
     id: doc.id,
@@ -213,20 +278,196 @@ export function parsePersistedTask(raw: string): PersistedKodworkTask | null {
       doc.access === "plan" || doc.access === "standard" || doc.access === "full"
         ? doc.access
         : DEFAULT_ACCESS_LEVEL,
-    state: state === "running" ? "needs-user" : state,
+    state: interrupted ? "needs-user" : state,
     plan: parsePlan(doc.plan),
     tools: parseTools(doc.tools),
     statusText: typeof doc.statusText === "string" ? doc.statusText : null,
     summary: typeof doc.summary === "string" ? doc.summary : null,
     usage: parseUsage(doc.usage),
+    review: interrupted ? { ...EMPTY_KODWORK_REVIEW } : parseReview(doc.review),
+    reviewOutcomeState:
+      doc.reviewOutcomeState === "done" ||
+      doc.reviewOutcomeState === "failed" ||
+      doc.reviewOutcomeState === "cancelled" ||
+      doc.reviewOutcomeState === "needs-user"
+        ? (interrupted ? null : doc.reviewOutcomeState)
+        : null,
+    rejectionFingerprints: Array.isArray(doc.rejectionFingerprints)
+      ? doc.rejectionFingerprints.filter((value): value is string => typeof value === "string").slice(-3)
+      : [],
+    doomLoop: doc.doomLoop === true,
+    // A permission request belongs to a live process and cannot survive reload.
+    permissionRequest: null,
+    alwaysAllowedTools: Array.isArray(doc.alwaysAllowedTools)
+      ? doc.alwaysAllowedTools.filter((value): value is string => typeof value === "string").slice(0, 100)
+      : [],
+    deniedTools: parseDeniedTools(doc.deniedTools),
+    recurrence: parseRecurrence(doc.recurrence),
+    scheduleReceipts: parseScheduleReceipts(doc.scheduleReceipts),
+    scheduledFromTaskId:
+      typeof doc.scheduledFromTaskId === "string" ? doc.scheduledFromTaskId : null,
     resumeId: typeof doc.resumeId === "string" ? doc.resumeId : null,
-    error: typeof doc.error === "string" ? doc.error : null,
+    error: interrupted
+      ? "Task stopped when Ködade closed. Resume to recover its original output baseline and continue."
+      : typeof doc.error === "string" ? doc.error : null,
     needsLogin: doc.needsLogin === true,
     createdAt: asTime(doc.createdAt),
     updatedAt: asTime(doc.updatedAt),
     startedAt: asTimeOrNull(doc.startedAt),
     settledAt: asTimeOrNull(doc.settledAt),
   };
+}
+
+const MIN_INTERVAL_MINUTES = 5;
+const MAX_INTERVAL_MINUTES = 30 * 24 * 60;
+const MAX_SCHEDULE_RECEIPTS = 100;
+
+export function nextRecurrenceAt(
+  recurrence: KodworkRecurrenceInput,
+  after: number,
+): number {
+  if (recurrence.kind === "interval") {
+    const minutes = Math.min(
+      MAX_INTERVAL_MINUTES,
+      Math.max(MIN_INTERVAL_MINUTES, Math.round(recurrence.minutes)),
+    );
+    return after + minutes * 60_000;
+  }
+  const next = new Date(after);
+  next.setSeconds(0, 0);
+  next.setHours(recurrence.hour, recurrence.minute, 0, 0);
+  if (next.getTime() <= after) next.setDate(next.getDate() + 1);
+  return next.getTime();
+}
+
+export function recurrenceFromInput(
+  recurrence: KodworkRecurrenceInput,
+  after: number,
+): KodworkRecurrence | null {
+  if (recurrence.kind === "interval") {
+    if (!Number.isFinite(recurrence.minutes)) return null;
+    const minutes = Math.min(
+      MAX_INTERVAL_MINUTES,
+      Math.max(MIN_INTERVAL_MINUTES, Math.round(recurrence.minutes)),
+    );
+    return {
+      kind: "interval",
+      minutes,
+      nextRunAt: nextRecurrenceAt({ kind: "interval", minutes }, after),
+    };
+  }
+  if (
+    !Number.isInteger(recurrence.hour) ||
+    !Number.isInteger(recurrence.minute) ||
+    recurrence.hour < 0 ||
+    recurrence.hour > 23 ||
+    recurrence.minute < 0 ||
+    recurrence.minute > 59
+  ) return null;
+  return {
+    ...recurrence,
+    nextRunAt: nextRecurrenceAt(recurrence, after),
+  };
+}
+
+export function advanceRecurrence(recurrence: KodworkRecurrence): KodworkRecurrence {
+  return {
+    ...recurrence,
+    nextRunAt: nextRecurrenceAt(recurrence, recurrence.nextRunAt),
+  };
+}
+
+export function projectedCadenceTokens(
+  tasks: Record<string, KodworkTask>,
+  sourceTaskId: string,
+  recurrence: KodworkRecurrence,
+): { averagePerRun: number; runsPer30Days: number; totalTokens: number } {
+  const history = Object.values(tasks).filter(
+    (task) =>
+      (task.id === sourceTaskId || task.scheduledFromTaskId === sourceTaskId) &&
+      task.usage !== null,
+  );
+  const averagePerRun = history.length
+    ? Math.round(
+        history.reduce((total, task) => total + (task.usage?.totalTokens ?? 0), 0) /
+          history.length,
+      )
+    : 0;
+  const runsPer30Days =
+    recurrence.kind === "daily"
+      ? 30
+      : Math.ceil((30 * 24 * 60) / recurrence.minutes);
+  return {
+    averagePerRun,
+    runsPer30Days,
+    totalTokens: averagePerRun * runsPer30Days,
+  };
+}
+
+function parseRecurrence(value: unknown): KodworkRecurrence | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (typeof item.nextRunAt !== "number" || !Number.isFinite(item.nextRunAt)) return null;
+  if (item.kind === "interval" && typeof item.minutes === "number") {
+    const minutes = Math.round(item.minutes);
+    if (minutes < MIN_INTERVAL_MINUTES || minutes > MAX_INTERVAL_MINUTES) return null;
+    return { kind: "interval", minutes, nextRunAt: item.nextRunAt };
+  }
+  if (
+    item.kind === "daily" &&
+    Number.isInteger(item.hour) &&
+    Number.isInteger(item.minute) &&
+    (item.hour as number) >= 0 &&
+    (item.hour as number) <= 23 &&
+    (item.minute as number) >= 0 &&
+    (item.minute as number) <= 59
+  ) {
+    return {
+      kind: "daily",
+      hour: item.hour as number,
+      minute: item.minute as number,
+      nextRunAt: item.nextRunAt,
+    };
+  }
+  return null;
+}
+
+function parseScheduleReceipts(value: unknown): KodworkScheduleReceipt[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .flatMap((entry) => {
+      if (
+        typeof entry.scheduledFor !== "number" ||
+        typeof entry.recordedAt !== "number" ||
+        (entry.status !== "started" && entry.status !== "missed") ||
+        typeof entry.message !== "string"
+      ) return [];
+      return [{
+        scheduledFor: entry.scheduledFor,
+        recordedAt: entry.recordedAt,
+        status: entry.status as KodworkScheduleReceipt["status"],
+        sessionId: typeof entry.sessionId === "string" ? entry.sessionId : null,
+        message: entry.message,
+      }];
+    })
+    .slice(-MAX_SCHEDULE_RECEIPTS);
+}
+
+export function projectTokenUsage(
+  tasks: Record<string, KodworkTask>,
+  projectId: string,
+): TokenUsage {
+  return Object.values(tasks)
+    .filter((task) => task.projectId === projectId && task.usage)
+    .reduce<TokenUsage>(
+      (total, task) => ({
+        promptTokens: total.promptTokens + (task.usage?.promptTokens ?? 0),
+        completionTokens: total.completionTokens + (task.usage?.completionTokens ?? 0),
+        totalTokens: total.totalTokens + (task.usage?.totalTokens ?? 0),
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
 }
 
 function parseState(value: unknown): KodworkTaskState {
@@ -273,6 +514,17 @@ function parseTools(value: unknown): KodworkToolLine[] {
   return lines;
 }
 
+function parseDeniedTools(value: unknown): { tool: string; detail: string | null }[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-50).flatMap((raw) => {
+    if (typeof raw !== "object" || raw === null) return [];
+    const item = raw as Record<string, unknown>;
+    return typeof item.tool === "string"
+      ? [{ tool: item.tool, detail: typeof item.detail === "string" ? item.detail : null }]
+      : [];
+  });
+}
+
 function parseUsage(value: unknown): TokenUsage | null {
   if (typeof value !== "object" || value === null) return null;
   const usage = value as Record<string, unknown>;
@@ -288,6 +540,74 @@ function parseUsage(value: unknown): TokenUsage | null {
     completionTokens: usage.completionTokens,
     totalTokens: usage.totalTokens,
   };
+}
+
+function parseReview(value: unknown): KodworkReview {
+  if (typeof value !== "object" || value === null) {
+    return { ...EMPTY_KODWORK_REVIEW };
+  }
+  const review = value as Record<string, unknown>;
+  const status =
+    review.status === "collecting" ||
+    review.status === "pending" ||
+    review.status === "accepted" ||
+    review.status === "restoring" ||
+    review.status === "restore-failed"
+      ? review.status
+      : "idle";
+  return {
+    kind: review.kind === "git" || review.kind === "folder" ? review.kind : null,
+    // A process cannot still be collecting after an app restart.
+    status: status === "collecting" ? "pending" : status,
+    files: parseReviewFiles(review.files),
+    feedback:
+      typeof review.feedback === "string"
+        ? review.feedback.slice(0, MAX_REVIEW_FEEDBACK_CHARS)
+        : "",
+    fingerprint:
+      typeof review.fingerprint === "string" ? review.fingerprint : null,
+  };
+}
+
+function parseReviewFiles(value: unknown): KodworkFileChange[] {
+  if (!Array.isArray(value)) return [];
+  const files: KodworkFileChange[] = [];
+  for (const raw of value.slice(0, MAX_REVIEW_FILES)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const file = raw as Record<string, unknown>;
+    if (typeof file.path !== "string" || typeof file.relativePath !== "string") continue;
+    files.push({
+      path: file.path,
+      relativePath: file.relativePath,
+      change:
+        file.change === "added" ||
+        file.change === "deleted" ||
+        file.change === "renamed"
+          ? file.change
+          : "modified",
+      binary: file.binary === true,
+      humanTouched: file.humanTouched === true,
+      before:
+        typeof file.before === "string"
+          ? file.before.slice(0, MAX_REVIEW_TEXT_CHARS)
+          : null,
+      after:
+        typeof file.after === "string"
+          ? file.after.slice(0, MAX_REVIEW_TEXT_CHARS)
+          : null,
+      bucket:
+        file.bucket === "risky" || file.bucket === "trivial"
+          ? file.bucket
+          : "routine",
+      reasons: Array.isArray(file.reasons)
+        ? file.reasons
+            .filter((reason): reason is string => typeof reason === "string")
+            .slice(0, 10)
+            .map((reason) => reason.slice(0, 240))
+        : [],
+    });
+  }
+  return files;
 }
 
 function asTime(value: unknown): number {
