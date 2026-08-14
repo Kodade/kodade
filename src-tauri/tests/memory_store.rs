@@ -2176,6 +2176,7 @@ fn independent_stores_serialize_simultaneous_operation_recovery() {
         })
         .expect("seed searchable memory");
     let second = MemoryStore::open(project.db()).expect("open independent second store");
+    let standby = MemoryStore::open(project.db()).expect("open standby store before recovery");
     corrupt_table_root_page(&project.db(), "memory_fts_data");
 
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
@@ -2188,6 +2189,7 @@ fn independent_stores_serialize_simultaneous_operation_recovery() {
         limit: 20,
         offset: 0,
     };
+    let standby_query = query.clone();
     let recoveries = [(first, query.clone()), (second, query)]
         .into_iter()
         .map(|(store, query)| {
@@ -2205,12 +2207,25 @@ fn independent_stores_serialize_simultaneous_operation_recovery() {
         .into_iter()
         .map(|thread| thread.join().expect("recovery thread did not panic"))
         .collect::<Vec<_>>();
+    let mut successful_retries = 0;
     for (_, result) in &recovered {
-        let page = result
-            .as_ref()
-            .expect("each independent store retries against the replacement");
-        assert_eq!(page.total, 0);
+        match result {
+            Ok(page) => {
+                assert_eq!(page.total, 0);
+                successful_retries += 1;
+            }
+            Err(MemoryError::WorkspaceNotRegistered(_)) => {
+                // A peer can finish recovery before this store begins its
+                // search. The replacement is healthy but intentionally has no
+                // workspace registration, matching cross-process recovery.
+            }
+            Err(error) => panic!("independent store recovery failed: {error}"),
+        }
     }
+    assert!(
+        successful_retries >= 1,
+        "the store that detects corruption retries against the replacement",
+    );
     assert_eq!(
         recovered
             .iter()
@@ -2218,6 +2233,13 @@ fn independent_stores_serialize_simultaneous_operation_recovery() {
             .count(),
         1,
         "exactly one store preserves the corrupt database",
+    );
+    assert!(
+        matches!(
+            standby.search(standby_query),
+            Err(MemoryError::WorkspaceNotRegistered(_))
+        ),
+        "a pre-opened peer that starts after recovery observes the empty replacement",
     );
     let replacement = MemoryStore::open(project.db()).expect("validate replacement store");
     replacement
