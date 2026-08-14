@@ -10,6 +10,7 @@
   requesting the CLI's 1.5x speed tier and increased usage per turn.
 - Fixed automatic KödBrowser setup to migrate known stale packaged helper paths
   to the profile-neutral executable without replacing user-owned MCP servers.
+- Fixed KödPR review diffs to wrap long lines in both unified and split views.
 
 ## 1.6.1 - 2026-08-12
 

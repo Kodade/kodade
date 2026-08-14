@@ -124,6 +124,7 @@ function DiffColumn({
       const extensions: Extension[] = [
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
+        EditorView.lineWrapping,
         lineNumbers({ formatNumber: (n) => lineNoFor(rows[n - 1] ?? rows[0], side) }),
         decorationsField(rows),
         toCodeMirrorTheme(theme),

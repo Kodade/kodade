@@ -92,6 +92,24 @@ describe("DiffView", () => {
     expect(newCol!.textContent).not.toContain("old line");
   });
 
+  it.each([
+    ["unified", 1],
+    ["split", 2],
+  ] as const)("wraps long code lines in %s view", async (viewMode, columnCount) => {
+    const file = fileDiff();
+    file.hunks[0].lines[2].content = `const value = ${"veryLongIdentifier.".repeat(30)}`;
+    await act(async () =>
+      root?.render(<DiffView file={file} path="a.txt" viewMode={viewMode} />),
+    );
+    await flush();
+
+    const columns = container!.querySelectorAll("[data-diff-column]");
+    expect(columns).toHaveLength(columnCount);
+    for (const column of columns) {
+      expect(column.querySelector(".cm-content.cm-lineWrapping")).not.toBeNull();
+    }
+  });
+
   it("shows an honest message when there are no textual hunks", async () => {
     const file = { ...fileDiff(), hunks: [] };
     await act(async () => root?.render(<DiffView file={file} path="a.txt" viewMode="unified" />));
