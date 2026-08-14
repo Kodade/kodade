@@ -13,8 +13,14 @@ import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveCargoTargetDir } from "./cargo-target-dir.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const srcTauri = join(root, "src-tauri");
+const cargoTargetDir = resolveCargoTargetDir(
+  srcTauri,
+  process.env.CARGO_TARGET_DIR,
+);
 const signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
 const entitlements = join(srcTauri, "Entitlements.plist");
 const windowsCertificate = process.env.SIGNTOOL_CERT_SHA1;
@@ -98,7 +104,7 @@ execFileSync(
 );
 
 for (const binaryName of binaryNames) {
-  const builtBinary = join(srcTauri, "target", "release", binaryName);
+  const builtBinary = join(cargoTargetDir, "release", binaryName);
   const stagedBinary = join(srcTauri, "binaries", binaryName);
   if (!existsSync(builtBinary)) {
     throw new Error(`cargo completed without producing ${builtBinary}`);

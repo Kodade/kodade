@@ -11,8 +11,10 @@ import {
   rmSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { resolveCargoTargetDir } from "./cargo-target-dir.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const srcTauri = join(root, "src-tauri");
@@ -22,12 +24,10 @@ const publicBinaryDir = join(srcTauri, "helpers");
 const publicSkillsDir = join(srcTauri, "kodskills");
 const publicLegalDir = join(srcTauri, "legal");
 const dependencyLicensesDir = join(root, "licenses", "dependencies", "generated");
-const configuredTargetDir = process.env.CARGO_TARGET_DIR;
-const cargoTargetDir = configuredTargetDir
-  ? isAbsolute(configuredTargetDir)
-    ? configuredTargetDir
-    : resolve(srcTauri, configuredTargetDir)
-  : join(srcTauri, "target");
+const cargoTargetDir = resolveCargoTargetDir(
+  srcTauri,
+  process.env.CARGO_TARGET_DIR,
+);
 
 execFileSync(
   process.execPath,
