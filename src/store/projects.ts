@@ -284,6 +284,9 @@ export type ProjectsState = {
   expandedProjects: Record<string, boolean>;
 
   hydrate(): Promise<void>;
+  // Force any pending debounce and wait until every scheduled settings write
+  // has landed. Useful at lifecycle boundaries and for deterministic tests.
+  flushPersistence(): Promise<void>;
   addProject(path: string): Promise<void>;
   removeProject(id: string): Promise<void>;
   setActiveProject(id: string): Promise<void>;
@@ -680,6 +683,20 @@ export function createProjectsStore(deps: StoreDeps) {
       return writeChain;
     };
 
+    // Background mutations expose one completion seam instead of making
+    // callers guess how many microtasks or debounce intervals persistence
+    // needs. Each scheduled operation reaches persist(), whose write chain
+    // preserves disk order.
+    let persistenceWork: Promise<void> = Promise.resolve();
+    const persistAfterHydration = (): Promise<void> => {
+      const work = (async () => {
+        await hydrationSettled();
+        await persist();
+      })();
+      persistenceWork = work;
+      return work;
+    };
+
     // Foreground poller handle (null when not running). Lives in the closure so
     // start/stop are idempotent and the interval survives re-renders.
     let pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -696,16 +713,34 @@ export function createProjectsStore(deps: StoreDeps) {
 
     // Debounced persist for bursty changes — layout drags, tab churn, and
     // session lifecycle (open/close/exit/rename all reuse this one timer).
-    let layoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let persistTimer: ReturnType<typeof setTimeout> | null = null;
     const persistDebounced = () => {
-      if (layoutTimer) clearTimeout(layoutTimer);
-      layoutTimer = setTimeout(() => {
-        layoutTimer = null;
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+      if (persistTimer) clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => {
+        persistTimer = null;
+        void persistAfterHydration();
       }, LAYOUT_PERSIST_DEBOUNCE_MS);
+    };
+
+    const flushPersistence = async () => {
+      for (;;) {
+        if (persistTimer) {
+          clearTimeout(persistTimer);
+          persistTimer = null;
+          void persistAfterHydration();
+        }
+        const scheduled = persistenceWork;
+        await scheduled;
+        const writes = writeChain;
+        await writes;
+        if (
+          !persistTimer &&
+          scheduled === persistenceWork &&
+          writes === writeChain
+        ) {
+          return;
+        }
+      }
     };
 
     const emitSelectedSessionActivity = (projectId: string) => {
@@ -1157,6 +1192,8 @@ export function createProjectsStore(deps: StoreDeps) {
         })();
         return hydration;
       },
+
+      flushPersistence,
 
       // Picker and drag-drop both funnel here. Duplicate paths (after
       // canonicalization) select the existing project instead of duplicating.
@@ -1628,10 +1665,7 @@ export function createProjectsStore(deps: StoreDeps) {
         set({ theme });
         // Persist only after hydration settles — a pre-hydration pick must
         // never write the still-empty project list over the saved document.
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       // The provider new KödChat threads start on. Rejects an id KödChat can't
@@ -1641,10 +1675,7 @@ export function createProjectsStore(deps: StoreDeps) {
           return;
         }
         set({ chatProvider });
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       setSidebarMode(sidebarMode: SidebarMode) {
@@ -1653,10 +1684,7 @@ export function createProjectsStore(deps: StoreDeps) {
         set({ sidebarMode });
         // Match theme/color persistence: wait for hydration so a quick toggle
         // cannot write an empty in-memory project list over the saved document.
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       toggleSidebarMode() {
@@ -1667,10 +1695,7 @@ export function createProjectsStore(deps: StoreDeps) {
         if (get().filesCollapsed === filesCollapsed) return;
         set({ filesCollapsed });
         // Same rule as setSidebarMode: never persist before hydration settles.
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       toggleFilesPanel() {
@@ -1688,10 +1713,7 @@ export function createProjectsStore(deps: StoreDeps) {
         }));
         // Follow the theme-setting pattern: do not let a pre-hydration change
         // overwrite the persisted project list before the read has settled.
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       // Record a project's open editor tabs (v1.1) and persist debounced —
@@ -1719,10 +1741,7 @@ export function createProjectsStore(deps: StoreDeps) {
         const key = remoteTargetKey(clean);
         if (get().remoteTargets.some((t) => remoteTargetKey(t) === key)) return;
         set((s) => ({ remoteTargets: [...s.remoteTargets, clean] }));
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       // Remove a pinned remote target (matched by host+path) and persist.
@@ -1774,10 +1793,7 @@ export function createProjectsStore(deps: StoreDeps) {
           }
           deps.onSessionRemoved?.(session);
         }
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       // Record one review scope's reviewed-path set (KödPR, M12d) and persist
@@ -1805,10 +1821,7 @@ export function createProjectsStore(deps: StoreDeps) {
         const normalized = normalizeVoicePreferences(preferences);
         if (sameVoicePreferences(get().voicePreferences, normalized)) return;
         set({ voicePreferences: normalized });
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       setLocalModelPreferences(preferences: LocalModelPreferences) {
@@ -1816,10 +1829,7 @@ export function createProjectsStore(deps: StoreDeps) {
         if (sameLocalModelPreferences(get().localModelPreferences, normalized))
           return;
         set({ localModelPreferences: normalized });
-        void (async () => {
-          await hydrationSettled();
-          await persist();
-        })();
+        void persistAfterHydration();
       },
 
       // Record a project's KödWhisper Pro user vocabulary terms (M9e), keyed by

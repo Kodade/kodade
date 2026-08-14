@@ -3,10 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{
-    audit_mutation, now_millis, validate_no_likely_credential, AuditMutation, MemoryError,
-    MemoryStore, Result,
-};
+use super::credential::validate_no_likely_credential;
+use super::{audit_mutation, now_millis, AuditMutation, MemoryError, MemoryStore, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

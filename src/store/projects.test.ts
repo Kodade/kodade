@@ -59,6 +59,21 @@ function makeStore(
 }
 
 describe("projects store", () => {
+  it("flushes immediate and debounced persistence through one observable seam", async () => {
+    const { store, storage } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const project = store.getState().projects[0];
+
+    store.getState().setTheme("dark");
+    store.getState().setLayout(project.id, [10, 50, 15, 25]);
+    await store.getState().flushPersistence();
+
+    expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
+      theme: "dark",
+      layouts: { [project.id]: [10, 50, 15, 25] },
+    });
+  });
+
   it("addProject adds, selects, and auto-opens a terminal at the project root", async () => {
     const { store, opens } = makeStore();
     await store.getState().addProject("/repos/alpha");
@@ -154,7 +169,7 @@ describe("projects store", () => {
         },
       ],
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await first.store.getState().flushPersistence();
 
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       version: STORAGE_VERSION,
@@ -188,7 +203,7 @@ describe("projects store", () => {
     const storage = new MockStorage();
     const first = makeStore(storage);
     first.store.getState().setSidebarMode("rail");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await first.store.getState().flushPersistence();
 
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       sidebarMode: "rail",
@@ -212,9 +227,8 @@ describe("projects store", () => {
     // The shortcut can run during startup before initApp() gets to hydrate().
     // Its persist must wait instead of overwriting this saved document.
     store.getState().setSidebarMode("rail");
-    await new Promise((resolve) => setTimeout(resolve, 0));
     await store.getState().hydrate();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await store.getState().flushPersistence();
 
     expect(store.getState().projects).toMatchObject([
       { id: "p-saved", path: "/repos/saved" },
@@ -230,7 +244,7 @@ describe("projects store", () => {
     const storage = new MockStorage();
     const first = makeStore(storage);
     first.store.getState().toggleFilesPanel();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await first.store.getState().flushPersistence();
 
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       filesCollapsed: true,
@@ -242,7 +256,7 @@ describe("projects store", () => {
 
     // Toggling back persists the expanded state too.
     second.store.getState().toggleFilesPanel();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await second.store.getState().flushPersistence();
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       filesCollapsed: false,
     });
@@ -538,7 +552,7 @@ describe("projects store", () => {
     const alpha = first.store.getState().projects[0];
 
     first.store.getState().setProjectColor(alpha.id, "teal");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await first.store.getState().flushPersistence();
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       projects: [{ id: alpha.id, color: "teal" }],
     });
@@ -555,7 +569,7 @@ describe("projects store", () => {
 
     store.getState().setProjectColor(alpha.id, "teal");
     store.getState().setProjectColor(alpha.id, null);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await store.getState().flushPersistence();
 
     expect(store.getState().projects[0].color).toBeUndefined();
     expect(
@@ -776,6 +790,8 @@ describe("projects store", () => {
 
     const first = store.getState().addProject("/repos/alpha"); // write 1 (stalls)
     const second = store.getState().addProject("/repos/beta"); // write 2 (chained)
+    // This deliberate scheduler window proves the second write cannot overtake
+    // the blocked first write; ordinary persistence tests use flushPersistence.
     await new Promise((r) => setTimeout(r, 10));
     expect(finished).toEqual([]); // second waits on first — never overtakes
     releaseFirst();
@@ -907,7 +923,7 @@ describe("projects store", () => {
 
     store.getState().setTheme("dark");
     expect(store.getState().theme).toBe("dark");
-    await new Promise((r) => setTimeout(r, 0)); // let the gated persist chain flush
+    await store.getState().flushPersistence();
     const doc = JSON.parse(storage.doc!) as PersistedDoc;
     expect(doc.theme).toBe("dark");
   });
@@ -924,7 +940,7 @@ describe("projects store", () => {
     const storage = new MockStorage();
     const first = makeStore(storage);
     first.store.getState().setTheme("light");
-    await new Promise((r) => setTimeout(r, 0)); // gated persist flush
+    await first.store.getState().flushPersistence();
 
     const second = makeStore(storage);
     await second.store.getState().hydrate();
@@ -958,7 +974,7 @@ describe("projects store", () => {
       pushToTalkCombo: null,
       pushToTalkCommandCombo: null,
     });
-    await new Promise((r) => setTimeout(r, 0));
+    await first.store.getState().flushPersistence();
 
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       voice: {
@@ -995,7 +1011,7 @@ describe("projects store", () => {
       ...defaults,
       commandAutoConfirm: true,
     });
-    await new Promise((r) => setTimeout(r, 0));
+    await first.store.getState().flushPersistence();
 
     expect(first.store.getState().voicePreferences.commandAutoConfirm).toBe(
       true,
@@ -2250,11 +2266,6 @@ describe("pinned remote targets (M11c)", () => {
 // Session identity (id/name/lock) persists so an app restart recreates local
 // sessions with stable ids.
 describe("session identity persistence", () => {
-  // Flush the shared debounced persist (sessions reuse the layout timer).
-  async function flushDebounce() {
-    await new Promise((resolve) => setTimeout(resolve, 501));
-  }
-
   it("persists session ids and revives them (not fresh ids) after a restart", async () => {
     vi.useFakeTimers();
     const storage = new MockStorage();
@@ -2404,7 +2415,7 @@ describe("session identity persistence", () => {
     // (e.g. a theme change) must NOT drop beta's still-unrevived sessions.
     expect(opens).toEqual([{ id: "sess-a", cwd: "/repos/alpha" }]);
     store.getState().setTheme("dark");
-    await new Promise((r) => setTimeout(r, 0)); // gated persist flush
+    await store.getState().flushPersistence();
     let doc = JSON.parse(storage.doc!) as PersistedDoc;
     expect(doc.sessions?.pb).toEqual([
       { id: "sess-b", name: "claude 1", nameLocked: true },
@@ -2431,7 +2442,7 @@ describe("session identity persistence", () => {
     await first.store.getState().addProject("/repos/alpha");
     const session = first.store.getState().sessions[0];
     first.store.getState().renameSession(session.id, "build watcher");
-    await flushDebounce();
+    await first.store.getState().flushPersistence();
 
     const second = makeStore(storage);
     await second.store.getState().hydrate();

@@ -16,6 +16,7 @@ use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::credential::{validate_no_likely_credential, validate_optional_no_likely_credential};
 use super::projects::ProjectLocation;
 use super::{
     audit_mutation, checkpoint_with_connection, memory_with_connection, now_millis, AuditMutation,
@@ -775,8 +776,8 @@ impl MemoryStore {
             );
         };
         super::validate_source_client("memory", source_client)?;
-        super::validate_no_likely_credential("memory id", id)?;
-        super::validate_optional_no_likely_credential("memory session id", session_id)?;
+        validate_no_likely_credential("memory id", id)?;
+        validate_optional_no_likely_credential("memory session id", session_id)?;
         self.require_portable_write_access(&location)?;
         let expected = required_content_hash(expected_content_sha256)?;
         let _lock = self.lock_portable_project(&location)?;
@@ -839,8 +840,8 @@ impl MemoryStore {
             return self.restore_legacy(id, expected_version, source_client, session_id);
         };
         super::validate_source_client("memory", source_client)?;
-        super::validate_no_likely_credential("memory id", id)?;
-        super::validate_optional_no_likely_credential("memory session id", session_id)?;
+        validate_no_likely_credential("memory id", id)?;
+        validate_optional_no_likely_credential("memory session id", session_id)?;
         self.require_portable_write_access(&location)?;
         let expected = required_content_hash(expected_content_sha256)?;
         let _lock = self.lock_portable_project(&location)?;
