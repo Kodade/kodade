@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.7.0 - 2026-08-14
+
 - Added the development-gated KödWork surface for background CLI tasks with
   durable progress, scoped tool approvals, reviewable and restorable file
   output, native attention, KödSkills templates, and in-app recurrence.
@@ -19,6 +21,13 @@
   recoverable when editor content changes.
 - Fixed long KödChat tool paths and command details to wrap inside the chat
   activity card instead of painting across adjacent panes.
+
+### Platform status
+
+- macOS Apple Silicon: Developer ID-signed local DMG passed version, arm64,
+  disk-integrity, and nested-signature checks; notarization and installed-app
+  acceptance are pending.
+- Windows x64: not packaged or tested for this candidate.
 
 ## 1.6.1 - 2026-08-12
 
