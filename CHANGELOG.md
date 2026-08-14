@@ -14,6 +14,8 @@
 - Fixed workspace panes to retain one user-sized layout across chats and
   projects, preserve explicit sidebar visibility, and keep the Files pane
   recoverable when editor content changes.
+- Fixed long KödChat tool paths and command details to wrap inside the chat
+  activity card instead of painting across adjacent panes.
 
 ## 1.6.1 - 2026-08-12
 

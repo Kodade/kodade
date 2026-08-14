@@ -42,7 +42,7 @@ export function ChatTranscript({
 
   return (
     <div
-      className="flex h-full flex-col gap-3 overflow-y-auto px-3 py-3"
+      className="flex h-full min-w-0 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 py-3"
       data-testid="chat-transcript"
     >
       {transcriptRows(thread.entries).map((row) =>
@@ -206,9 +206,9 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
   return (
     <section
       data-testid="chat-tool-activity"
-      className="rounded-md border border-border bg-surface px-3 py-2 text-xs"
+      className="min-w-0 max-w-full rounded-md border border-border bg-surface px-3 py-2 text-xs"
     >
-      <div className="flex items-start gap-2">
+      <div className="flex min-w-0 items-start gap-2">
         <span
           aria-hidden="true"
           className={
@@ -218,7 +218,12 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
           }
         />
         <div className="min-w-0 flex-1">
-          <p className="text-text">{activityLabel(entries)}</p>
+          <p
+            data-testid="chat-tool-activity-label"
+            className="min-w-0 [overflow-wrap:anywhere] text-text"
+          >
+            {activityLabel(entries)}
+          </p>
           <p className="mt-1 flex flex-wrap gap-x-2 text-[11px] text-text-dim">
             <span>{count}</span>
             <span>{state}</span>
@@ -243,11 +248,11 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
           {entries.map((entry) => (
             <div key={entry.id} className="rounded bg-bg px-2 py-1.5">
               <p className="mb-1 font-medium text-text-dim">{toolLabel(entry)}</p>
-              <pre className="mb-1 whitespace-pre-wrap break-words text-xs text-text-dim">
+              <pre className="mb-1 whitespace-pre-wrap [overflow-wrap:anywhere] text-xs text-text-dim">
                 {bound(formatArgs(entry.call.args))}
               </pre>
               {entry.outcome && (
-                <pre className="whitespace-pre-wrap break-words text-xs text-text">
+                <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] text-xs text-text">
                   {bound(entry.outcome.result || "(no output)")}
                 </pre>
               )}

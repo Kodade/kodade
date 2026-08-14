@@ -194,7 +194,10 @@ export function ChatPane({
   }
 
   const chatSurface = (
-    <div ref={dropRegion} className="flex h-full min-h-0 flex-col">
+    <div
+      ref={dropRegion}
+      className="flex h-full min-h-0 min-w-0 flex-col"
+    >
           {!activeProjectId ? (
             <EmptyWorkspace />
           ) : !thread ? (
@@ -203,7 +206,7 @@ export function ChatPane({
             />
           ) : (
             <>
-              <div className="min-h-0 flex-1">
+              <div className="min-h-0 min-w-0 flex-1">
                 <ChatTranscript
                   thread={thread}
                   onOpenLink={(url) => {

@@ -73,6 +73,26 @@ describe("ChatTranscript", () => {
     expect(summary.textContent).toContain("source");
   });
 
+  it("wraps long tool paths inside the chat activity card", async () => {
+    const longPath =
+      "/Users/example/Documents/github.nosync/projects/kodade/.claude/worktrees/task-core/implementation-without-a-breakpoint.ts";
+    const host = await render([
+      {
+        kind: "tool",
+        id: "1",
+        call: { tool: "Read", args: { file_path: longPath } },
+        outcome: null,
+      },
+    ]);
+
+    const transcript = host.querySelector('[data-testid="chat-transcript"]')!;
+    const label = host.querySelector('[data-testid="chat-tool-activity-label"]')!;
+    expect(transcript.className).toContain("min-w-0");
+    expect(transcript.className).toContain("overflow-x-hidden");
+    expect(label.textContent).toBe(`Read ${longPath}`);
+    expect(label.className).toContain("[overflow-wrap:anywhere]");
+  });
+
   it("keeps failed and denied work visible without merging across message boundaries", async () => {
     const host = await render([
       { kind: "tool", id: "1", call: { tool: "search", args: { query: "adapter" } }, outcome: { status: "error", result: "offline" } },
