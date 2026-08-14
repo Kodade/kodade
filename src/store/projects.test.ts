@@ -62,15 +62,14 @@ describe("projects store", () => {
   it("flushes immediate and debounced persistence through one observable seam", async () => {
     const { store, storage } = makeStore();
     await store.getState().addProject("/repos/alpha");
-    const project = store.getState().projects[0];
 
     store.getState().setTheme("dark");
-    store.getState().setLayout(project.id, [10, 50, 15, 25]);
+    store.getState().setLayout([10, 50, 15, 25]);
     await store.getState().flushPersistence();
 
     expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
       theme: "dark",
-      layouts: { [project.id]: [10, 50, 15, 25] },
+      layout: [10, 50, 15, 25],
     });
   });
 
@@ -636,17 +635,28 @@ describe("projects store", () => {
     expect(s.sessions.find((x) => x.id === second.id)?.exited).toBeUndefined();
   });
 
-  // --- Per-project layout persistence (M2b) ---
+  // --- App-level layout persistence ---
 
-  it("setLayout stores sizes per project and persists them (debounced)", async () => {
+  it("keeps the user's pane sizes when moving between projects", async () => {
+    const { store } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    await store.getState().addProject("/repos/beta");
+    const [, beta] = store.getState().projects;
+
+    store.getState().setLayout([10, 50, 15, 25]);
+    await store.getState().setActiveProject(beta.id);
+
+    expect(store.getState().layout).toEqual([10, 50, 15, 25]);
+  });
+
+  it("setLayout stores app-level sizes and persists them (debounced)", async () => {
     vi.useFakeTimers();
     try {
       const { store, storage } = makeStore();
       await store.getState().addProject("/repos/alpha");
-      const alpha = store.getState().projects[0];
 
-      store.getState().setLayout(alpha.id, [10, 50, 15, 25]);
-      expect(store.getState().layouts[alpha.id]).toEqual([10, 50, 15, 25]);
+      store.getState().setLayout([10, 50, 15, 25]);
+      expect(store.getState().layout).toEqual([10, 50, 15, 25]);
 
       // Nothing written to disk until the debounce elapses.
       const writesBefore = storage.writes;
@@ -654,7 +664,7 @@ describe("projects store", () => {
       expect(storage.writes).toBe(writesBefore);
       await vi.advanceTimersByTimeAsync(1);
       const doc = JSON.parse(storage.doc!) as PersistedDoc;
-      expect(doc.layouts?.[alpha.id]).toEqual([10, 50, 15, 25]);
+      expect(doc.layout).toEqual([10, 50, 15, 25]);
     } finally {
       vi.useRealTimers();
     }
@@ -665,40 +675,37 @@ describe("projects store", () => {
     try {
       const { store, storage } = makeStore();
       await store.getState().addProject("/repos/alpha");
-      const alpha = store.getState().projects[0];
       const writesBefore = storage.writes;
 
       // Many changes within the window (a drag) -> one write on pause.
-      store.getState().setLayout(alpha.id, [10, 50, 15, 25]);
+      store.getState().setLayout([10, 50, 15, 25]);
       await vi.advanceTimersByTimeAsync(100);
-      store.getState().setLayout(alpha.id, [12, 48, 15, 25]);
+      store.getState().setLayout([12, 48, 15, 25]);
       await vi.advanceTimersByTimeAsync(100);
-      store.getState().setLayout(alpha.id, [14, 46, 15, 25]);
+      store.getState().setLayout([14, 46, 15, 25]);
       await vi.advanceTimersByTimeAsync(500);
 
       expect(storage.writes).toBe(writesBefore + 1);
       const doc = JSON.parse(storage.doc!) as PersistedDoc;
-      expect(doc.layouts?.[alpha.id]).toEqual([14, 46, 15, 25]);
+      expect(doc.layout).toEqual([14, 46, 15, 25]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("setLayout ignores unknown projects and malformed sizes", () => {
+  it("setLayout ignores malformed sizes", () => {
     const { store } = makeStore();
-    // No such project.
-    store.getState().setLayout("nope", [10, 50, 15, 25]);
-    expect(store.getState().layouts).toEqual({});
+    store.getState().setLayout([1, 2, 3]);
+    expect(store.getState().layout).toBeUndefined();
   });
 
-  it("layouts survive a restart and restore only for surviving projects", async () => {
+  it("the app-level layout survives a restart", async () => {
     vi.useFakeTimers();
     const storage = new MockStorage();
     try {
       const first = makeStore(storage);
       await first.store.getState().addProject("/repos/alpha");
-      const alpha = first.store.getState().projects[0];
-      first.store.getState().setLayout(alpha.id, [10, 50, 15, 25]);
+      first.store.getState().setLayout([10, 50, 15, 25]);
       await vi.advanceTimersByTimeAsync(500); // flush the debounced write
     } finally {
       vi.useRealTimers();
@@ -707,24 +714,20 @@ describe("projects store", () => {
     // "Restart": a fresh store hydrates the saved layout.
     const second = makeStore(storage);
     await second.store.getState().hydrate();
-    const s = second.store.getState();
-    const alpha = s.projects.find((p) => p.path === "/repos/alpha")!;
-    expect(s.layouts[alpha.id]).toEqual([10, 50, 15, 25]);
+    expect(second.store.getState().layout).toEqual([10, 50, 15, 25]);
   });
 
-  it("a project with no saved layout hydrates without one (defaults apply)", async () => {
+  it("hydrates without a layout when the user has never resized panes", async () => {
     const storage = new MockStorage();
     const first = makeStore(storage);
     await first.store.getState().addProject("/repos/alpha"); // never resized
 
     const second = makeStore(storage);
     await second.store.getState().hydrate();
-    const s = second.store.getState();
-    const alpha = s.projects.find((p) => p.path === "/repos/alpha")!;
-    expect(s.layouts[alpha.id]).toBeUndefined();
+    expect(second.store.getState().layout).toBeUndefined();
   });
 
-  it("hydrate tolerates a malformed layouts field and drops bad entries", async () => {
+  it("migrates the legacy active project's layout into the app-level preference", async () => {
     const storage = new MockStorage();
     storage.doc = JSON.stringify({
       version: STORAGE_VERSION,
@@ -741,8 +744,7 @@ describe("projects store", () => {
     });
     const { store } = makeStore(storage);
     await store.getState().hydrate(); // must not throw
-    const s = store.getState();
-    expect(s.layouts).toEqual({ p1: [10, 50, 15, 25] });
+    expect(store.getState().layout).toEqual([10, 50, 15, 25]);
   });
 
   it("hydrate rejects an all-zero layout (crushed panes) as malformed", async () => {
@@ -755,7 +757,7 @@ describe("projects store", () => {
     });
     const { store } = makeStore(storage);
     await store.getState().hydrate();
-    expect(store.getState().layouts).toEqual({}); // dropped, defaults apply
+    expect(store.getState().layout).toBeUndefined(); // dropped, defaults apply
   });
 
   it("overlapping persists land in call order (no stale write wins)", async () => {
@@ -799,15 +801,13 @@ describe("projects store", () => {
     expect(finished).toEqual(["first", "second"]);
   });
 
-  it("removeProject drops the removed project's layout entry", async () => {
+  it("removing a project keeps the app-level pane layout", async () => {
     vi.useFakeTimers();
     const { store, storage } = makeStore();
     try {
       await store.getState().addProject("/repos/alpha");
       await store.getState().addProject("/repos/beta");
-      const [alpha, beta] = store.getState().projects;
-      store.getState().setLayout(alpha.id, [10, 50, 15, 25]);
-      store.getState().setLayout(beta.id, [20, 40, 20, 20]);
+      store.getState().setLayout([20, 40, 20, 20]);
       vi.advanceTimersByTime(500);
     } finally {
       vi.useRealTimers();
@@ -815,11 +815,9 @@ describe("projects store", () => {
 
     const [, beta] = store.getState().projects;
     await store.getState().removeProject(beta.id);
-    expect(store.getState().layouts[beta.id]).toBeUndefined();
-    // Persisted doc no longer mentions beta's layout either.
+    expect(store.getState().layout).toEqual([20, 40, 20, 20]);
     const doc = JSON.parse(storage.doc!) as PersistedDoc;
-    expect(doc.layouts?.[beta.id]).toBeUndefined();
-    expect(Object.keys(doc.layouts ?? {})).toHaveLength(1);
+    expect(doc.layout).toEqual([20, 40, 20, 20]);
   });
 
   it("addSession accepts a custom base name and counts it independently", async () => {

@@ -11,6 +11,9 @@
 - Fixed automatic KödBrowser setup to migrate known stale packaged helper paths
   to the profile-neutral executable without replacing user-owned MCP servers.
 - Fixed KödPR review diffs to wrap long lines in both unified and split views.
+- Fixed workspace panes to retain one user-sized layout across chats and
+  projects, preserve explicit sidebar visibility, and keep the Files pane
+  recoverable when editor content changes.
 
 ## 1.6.1 - 2026-08-12
 

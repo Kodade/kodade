@@ -90,9 +90,8 @@ export function isChatSession(s: SessionMeta): boolean {
 }
 
 // Persisted pane sizes for the 4-pane layout, as react-resizable-panels
-// percentages in panel order: [sidebar, terminal, files, editor]. A collapsed
-// pane persists as its collapsedSize (0), so this one array captures both drag
-// resizes and collapse state. Per project so each remembers its own layout.
+// percentages in panel order: [sidebar, terminal, files, editor]. Pane geometry
+// is an app-level preference: switching projects or chats must not move it.
 export type PaneSizes = number[];
 export type SidebarMode = "full" | "rail";
 
@@ -170,8 +169,11 @@ export type PersistedDoc = {
   version: number;
   projects: Project[];
   activeProjectId: string | null;
-  // Optional and additive (still STORAGE_VERSION 1): per-project pane sizes.
+  // Optional and additive (still STORAGE_VERSION 1): app-level pane sizes.
   // hydrate() tolerates it being absent or malformed.
+  layout?: PaneSizes;
+  // Legacy per-project pane sizes. Read only to migrate an existing user's
+  // active-project layout into the app-level `layout` preference.
   layouts?: Record<string, PaneSizes>;
   // Optional and additive (still STORAGE_VERSION 1): app-level theme selection —
   // a theme id, or "system" (the default when absent). hydrate() tolerates it
@@ -263,7 +265,7 @@ export type ProjectsState = {
   sessions: SessionMeta[];
   activeProjectId: string | null;
   activeSessionByProject: Record<string, string>;
-  layouts: Record<string, PaneSizes>; // per-project pane sizes
+  layout: PaneSizes | undefined; // app-level pane sizes shared by every project/chat
   theme: string; // app-level theme selection ("system" or a theme id)
   chatProvider: string; // provider id new KödChat threads start on
   sidebarMode: SidebarMode; // full project/session list, or compact icon rail
@@ -310,7 +312,7 @@ export type ProjectsState = {
   // nothing (or only one) to switch to.
   cycleSession(direction: 1 | -1): void;
   cycleProject(direction: 1 | -1): Promise<void>;
-  setLayout(projectId: string, sizes: PaneSizes): void;
+  setLayout(sizes: PaneSizes): void;
   setTheme(theme: string): void;
   // Record which provider new KödChat threads start on. Existing threads keep
   // whatever provider they were created with.
@@ -323,7 +325,7 @@ export type ProjectsState = {
   // Set a picked palette id, or null to return to deterministic auto-color.
   setProjectColor(projectId: string, colorId: string | null): void;
   // Record a project's open editor tabs (v1.1) and persist (debounced, like
-  // layouts — opening/closing tabs shouldn't hammer the disk). No-op for an
+  // layout changes — opening/closing tabs shouldn't hammer the disk). No-op for an
   // unknown project id.
   setOpenTabs(projectId: string, paths: string[]): void;
   setVoicePreferences(preferences: VoicePreferences): void;
@@ -629,7 +631,7 @@ export function createProjectsStore(deps: StoreDeps) {
           projects,
           sessions,
           activeProjectId,
-          layouts,
+          layout,
           theme,
           chatProvider,
           sidebarMode,
@@ -660,7 +662,7 @@ export function createProjectsStore(deps: StoreDeps) {
           version: STORAGE_VERSION,
           projects,
           activeProjectId,
-          layouts,
+          layout,
           theme,
           chatProvider,
           sidebarMode,
@@ -876,7 +878,7 @@ export function createProjectsStore(deps: StoreDeps) {
       sessions: [],
       activeProjectId: null,
       activeSessionByProject: {},
-      layouts: {},
+      layout: undefined,
       theme: "system", // system-following by default (resolved by the theme store)
       chatProvider: DEFAULT_CHAT_PROVIDER,
       sidebarMode: "full",
@@ -920,8 +922,7 @@ export function createProjectsStore(deps: StoreDeps) {
                 `kodade: skipped ${skipped} invalid project entr(y/ies)`,
               );
             }
-            // Keep only well-formed layout entries — tolerate the layouts field
-            // being absent or partly corrupt.
+            // Read the legacy per-project layout map only for migration.
             const persistedLayouts: Record<string, PaneSizes> = {};
             if (doc.layouts && typeof doc.layouts === "object") {
               for (const p of persisted) {
@@ -1007,6 +1008,10 @@ export function createProjectsStore(deps: StoreDeps) {
                   )))
                 ? doc.activeProjectId
                 : null;
+            const persistedLayout = isPaneSizes(doc.layout)
+              ? doc.layout
+              : ((activeFromDoc ? persistedLayouts[activeFromDoc] : undefined) ??
+                Object.values(persistedLayouts)[0]);
 
             // Merge, don't replace: a project added while hydration was in
             // flight (mutations gate on us, but belt-and-braces) survives —
@@ -1020,20 +1025,10 @@ export function createProjectsStore(deps: StoreDeps) {
                 ),
                 ...s.projects,
               ];
-              // Restore layouts for surviving ids. When a runtime project shadows
-              // a persisted twin (same path, newer id), carry the twin's saved
-              // layout over to the surviving id. Session-set layouts win; entries
-              // for dropped projects are pruned.
-              const layouts: Record<string, PaneSizes> = {};
-              for (const p of projects) {
-                const twin = persisted.find((q) => q.path === p.path);
-                const saved =
-                  persistedLayouts[p.id] ??
-                  (twin ? persistedLayouts[twin.id] : undefined);
-                const chosen = s.layouts[p.id] ?? saved;
-                if (chosen) layouts[p.id] = chosen;
-              }
-              // Open tabs: same shadow/twin carry-over as layouts. Session-set
+              // Pane geometry is app-level. An in-session resize wins; older
+              // per-project documents migrate from the last active project.
+              const layout = s.layout ?? persistedLayout;
+              // Open tabs retain project shadow/twin carry-over. Session-set
               // tabs win; entries for dropped projects are pruned (v1.1).
               const openTabs: Record<string, string[]> = {};
               for (const p of projects) {
@@ -1137,7 +1132,7 @@ export function createProjectsStore(deps: StoreDeps) {
                 expandedProjects: activeProjectId
                   ? { ...s.expandedProjects, [activeProjectId]: true }
                   : s.expandedProjects,
-                layouts,
+                layout,
                 theme,
                 chatProvider,
                 sidebarMode,
@@ -1158,7 +1153,7 @@ export function createProjectsStore(deps: StoreDeps) {
               });
             }
             // Stage persisted session identities for revival, with the same
-            // shadow/twin carry-over as layouts. A project that already has
+            // shadow/twin carry-over as open tabs. A project that already has
             // live sessions (belt-and-braces) keeps them — its saved set is
             // simply dropped.
             if (doc.sessions && typeof doc.sessions === "object") {
@@ -1231,8 +1226,6 @@ export function createProjectsStore(deps: StoreDeps) {
           const remaining = s.projects.filter((p) => p.id !== id);
           const active = { ...s.activeSessionByProject };
           delete active[id];
-          const layouts = { ...s.layouts };
-          delete layouts[id]; // drop the removed project's saved layout
           const openTabs = { ...s.openTabs };
           delete openTabs[id]; // drop the removed project's saved tabs
           const reviewChecks = { ...s.reviewChecks };
@@ -1250,7 +1243,6 @@ export function createProjectsStore(deps: StoreDeps) {
             projects: remaining,
             sessions: s.sessions.filter((sess) => sess.projectId !== id),
             activeSessionByProject: active,
-            layouts,
             openTabs,
             reviewChecks,
             voiceVocabulary,
@@ -1648,12 +1640,11 @@ export function createProjectsStore(deps: StoreDeps) {
         await get().setActiveProject(projectIds[next]);
       },
 
-      // Record a project's pane sizes after a drag/collapse, then persist
-      // debounced (a drag fires many changes; one write on pause is enough).
-      setLayout(projectId: string, sizes: PaneSizes) {
-        if (!get().projects.some((p) => p.id === projectId)) return;
+      // Record the app-level pane sizes after a drag, then persist debounced
+      // (a drag fires many changes; one write on pause is enough).
+      setLayout(sizes: PaneSizes) {
         if (!isPaneSizes(sizes)) return;
-        set((s) => ({ layouts: { ...s.layouts, [projectId]: sizes } }));
+        set({ layout: sizes });
         persistDebounced();
       },
 
@@ -1717,7 +1708,7 @@ export function createProjectsStore(deps: StoreDeps) {
       },
 
       // Record a project's open editor tabs (v1.1) and persist debounced —
-      // opening/closing tabs in a burst writes once on pause, like layouts.
+      // opening/closing tabs in a burst writes once on pause, like layout changes.
       // An empty array is a valid state (all tabs closed) and is persisted.
       setOpenTabs(projectId: string, paths: string[]) {
         if (

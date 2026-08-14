@@ -50,7 +50,7 @@ export default function App() {
     [],
   );
 
-  const activeProjectId = useStore(appStore, (s) => s.activeProjectId);
+  const savedLayout = useStore(appStore, (s) => s.layout);
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
   const settingsOpen = useStore(settingsViewStore, (s) => s.section !== null);
@@ -58,20 +58,17 @@ export default function App() {
   const sidebarRef = usePanelRef();
   const filesRef = usePanelRef();
 
-  // Apply the active project's saved sizes imperatively on project switch and
+  // Apply the app-level saved sizes imperatively after hydration and on
   // rail-mode changes (sidebar and files pane). In rail mode a panel's 44px
   // constraints win; the saved full layout is reapplied untouched when those
   // constraints lift. Deliberately NOT a keyed remount: the terminal hosts
   // live outside React in the session registry, and remounting the group
   // would reparent live xterm canvases mid-session (a WKWebView/WebGL hazard).
   useEffect(() => {
-    const saved = activeProjectId
-      ? appStore.getState().layouts[activeProjectId]
-      : undefined;
     const expand: PanelId[] = [];
     if (sidebarMode === "full") expand.push("sidebar");
     if (!filesCollapsed) expand.push("files");
-    const target = sizesToRestoredLayout(saved, expand);
+    const target = sizesToRestoredLayout(savedLayout, expand);
     groupRef.current?.setLayout(target);
 
     // react-resizable-panels reconciles a rail's old fixed 44px constraint
@@ -84,7 +81,7 @@ export default function App() {
       if (!filesCollapsed) filesRef.current?.resize(`${target.files}%`);
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeProjectId, sidebarMode, filesCollapsed]);
+  }, [savedLayout, sidebarMode, filesCollapsed]);
 
   // Persist only user-driven changes (drag/keyboard). Programmatic setLayout
   // (the effect above) and initial mount report isUserInteraction=false, so
@@ -92,39 +89,38 @@ export default function App() {
   const onLayoutChanged = (layout: Layout, meta: LayoutChangedMeta) => {
     if (!shouldPersistLayout(meta.isUserInteraction, sidebarMode, filesCollapsed))
       return;
-    const projectId = appStore.getState().activeProjectId;
-    if (!projectId) return;
-    appStore.getState().setLayout(projectId, layoutToSizes(layout));
+    appStore.getState().setLayout(layoutToSizes(layout));
   };
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-bg text-text">
+    <main className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col overflow-hidden bg-bg text-text">
       <TitleBar />
       {/* Settings covers the workspace rather than replacing it in the tree:
           terminal hosts live outside React in the session registry, so
           unmounting the group would detach live xterm canvases and lose the
           restored pane sizes and split layout. `inert` takes the covered
           workspace out of focus and the accessibility tree meanwhile. */}
-      <div className="relative flex min-h-0 flex-1">
-        <div className="flex min-h-0 flex-1" inert={settingsOpen}>
+      <div className="relative flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
+        <div
+          className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
+          inert={settingsOpen}
+        >
           <Group
             groupRef={groupRef}
-            className="min-h-0 flex-1"
+            className="min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
             defaultLayout={sizesToLayout(undefined)}
             onLayoutChanged={onLayoutChanged}
           >
-            {/* Sidebar, editor, files collapse to 0; the chat/terminal pane is
-                the workhorse and stays. Double-click a handle resets it to its
-                default. minSize must be a percentage STRING — bare numbers are
-                pixels. */}
+            {/* Left/right visibility is controlled only by their buttons. Drag
+                handles resize panes but cannot strand one at 0px. minSize must
+                be a percentage STRING — bare numbers are pixels. */}
             <Panel
               panelRef={sidebarRef}
               id="sidebar"
               minSize={sidebarMode === "rail" ? 44 : "10%"}
               maxSize={sidebarMode === "rail" ? 44 : undefined}
               disabled={sidebarMode === "rail"}
-              collapsible={sidebarMode === "full"}
-              collapsedSize={sidebarMode === "full" ? 0 : undefined}
+              collapsible={false}
             >
               <ProjectsSidebar />
             </Panel>
@@ -141,7 +137,7 @@ export default function App() {
               <ChatPane />
             </Panel>
             <Separator className={SEP} />
-            <Panel id="editor" minSize="12%" collapsible collapsedSize={0}>
+            <Panel id="editor" minSize="12%" collapsible={false}>
               <EditorPane />
             </Panel>
             <Separator
@@ -157,8 +153,7 @@ export default function App() {
               minSize={filesCollapsed ? 44 : "10%"}
               maxSize={filesCollapsed ? 44 : undefined}
               disabled={filesCollapsed}
-              collapsible={!filesCollapsed}
-              collapsedSize={filesCollapsed ? undefined : 0}
+              collapsible={false}
             >
               <WorkspaceFilesPane />
             </Panel>
