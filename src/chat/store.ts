@@ -136,6 +136,8 @@ export type ChatState = {
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 400;
 const DEFAULT_STREAM_DETACH_MS = 15_000;
+const MAX_BUFFERED_NATIVE_LINES = 256;
+const MAX_BUFFERED_NATIVE_RUNS = 32;
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_MODEL_DISCOVERY_LINES = 2_048;
 const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
@@ -213,6 +215,8 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   const runByRunId = new Map<string, string>(); // runId → threadId
   const turns = new Map<string, number>();
   const nativeLiveRunIds = new Set<string>();
+  const bufferedNativeLines = new Map<string, string[]>();
+  let liveRunReconciliations = 0;
   // A list snapshot can resolve after its process has exited. Keep that exit
   // fact until a newer snapshot omits the id, so stale data cannot re-adopt it.
   const exitedNativeRunIds = new Set<string>();
@@ -349,6 +353,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               text: event.text,
               conversationId: run.conversationId,
               streaming: true,
+              providerMessageId: event.messageId,
             });
           }
           deps.activity?.streamed?.(thread.projectId, threadId);
@@ -365,6 +370,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
                     role: "assistant",
                     text: event.message.content,
                     conversationId: entry.conversationId ?? run.conversationId,
+                    providerMessageId: entry.providerMessageId ?? event.messageId,
                   }
                 : entry,
             );
@@ -377,6 +383,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               role: "assistant",
               text: event.message.content,
               conversationId: run.conversationId,
+              providerMessageId: event.messageId,
             });
           }
           deps.activity?.streamed?.(thread.projectId, threadId);
@@ -414,7 +421,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         case "tool-call-started": {
           const id = newId();
           run.toolEntries.set(event.callId, id);
-          appendEntry(threadId, { kind: "tool", id, call: event.call, outcome: null });
+          appendEntry(threadId, {
+            kind: "tool",
+            id,
+            call: event.call,
+            outcome: null,
+            providerCallId: event.callId,
+          });
           deps.activity?.streamed?.(thread.projectId, threadId);
           return;
         }
@@ -481,6 +494,33 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       void persistNow(threadId);
     };
 
+    const rebuildRunCorrelations = (thread: ChatThread, run: Run) => {
+      for (const entry of thread.entries) {
+        if (entry.kind === "message" && entry.providerMessageId) {
+          run.messageEntries.set(entry.providerMessageId, entry.id);
+        }
+        if (entry.kind === "tool" && entry.providerCallId) {
+          run.toolEntries.set(entry.providerCallId, entry.id);
+        }
+      }
+    };
+
+    const replayBufferedLines = (threadId: string, run: Run) => {
+      const lines = bufferedNativeLines.get(run.runId) ?? [];
+      bufferedNativeLines.delete(run.runId);
+      for (const line of lines) {
+        resumeStream(threadId, run);
+        for (const event of run.parser?.line(line) ?? []) applyEvent(threadId, run, event);
+      }
+      if (lines.length) persistDebounced(threadId);
+    };
+
+    const discardUnlistedBufferedLines = () => {
+      for (const runId of bufferedNativeLines.keys()) {
+        if (!nativeLiveRunIds.has(runId)) bufferedNativeLines.delete(runId);
+      }
+    };
+
     const adoptLiveRun = (threadId: string, runId: string) => {
       const thread = get().threads[threadId];
       if (!thread || runs.has(threadId) || threadIdOfRun(runId) !== threadId) return;
@@ -496,14 +536,17 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         conversationId: thread.conversationId,
         turn: Number.isSafeInteger(turn) && turn >= 0 ? turn : 0,
       };
+      rebuildRunCorrelations(thread, run);
       runs.set(threadId, run);
       runByRunId.set(runId, threadId);
       turns.set(threadId, Math.max(turns.get(threadId) ?? 0, run.turn));
       patch(threadId, (current) => ({ ...current, status: "working", needsLogin: false }));
       armDetachTimer(threadId, run);
+      replayBufferedLines(threadId, run);
     };
 
     const reconcileLiveRun = async (threadId: string) => {
+      liveRunReconciliations++;
       try {
         const liveRuns = await deps.agent.listLive();
         const snapshotIds = new Set(liveRuns.map((run) => run.id));
@@ -514,8 +557,11 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         for (const { id } of liveRuns) {
           if (!exitedNativeRunIds.has(id)) nativeLiveRunIds.add(id);
         }
+        discardUnlistedBufferedLines();
       } catch (error) {
         console.error(`kodade: KödChat live-run reconciliation failed (${threadId}):`, error);
+      } finally {
+        liveRunReconciliations--;
       }
       const liveRun = [...nativeLiveRunIds].find((id) => threadIdOfRun(id) === threadId);
       if (liveRun) adoptLiveRun(threadId, liveRun);
@@ -532,7 +578,21 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       if (!runs.has(threadId) && nativeLiveRunIds.has(runId)) adoptLiveRun(threadId, runId);
       const run = runs.get(threadId);
-      if (!run || run.runId !== runId) return; // a stale/cancelled turn
+      if (!run || run.runId !== runId) {
+        if (liveRunReconciliations > 0) {
+          const lines = bufferedNativeLines.get(runId) ?? [];
+          if (
+            !lines.length &&
+            !bufferedNativeLines.has(runId) &&
+            bufferedNativeLines.size >= MAX_BUFFERED_NATIVE_RUNS
+          ) {
+            return;
+          }
+          if (lines.length < MAX_BUFFERED_NATIVE_LINES) lines.push(line);
+          bufferedNativeLines.set(runId, lines);
+        }
+        return; // a stale/cancelled turn
+      }
       if (!run.parser) return;
       resumeStream(threadId, run);
       for (const event of run.parser.line(line)) applyEvent(threadId, run, event);
@@ -590,6 +650,8 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         const offExit = await deps.agent.onExit((event) =>
           onExit(event.id, event.code, event.stderr),
         );
+        const threadIds = Object.keys(get().threads);
+        liveRunReconciliations++;
         try {
           const liveRuns = await deps.agent.listLive();
           const snapshotIds = new Set(liveRuns.map((run) => run.id));
@@ -600,12 +662,21 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           for (const { id } of liveRuns) {
             if (!exitedNativeRunIds.has(id)) nativeLiveRunIds.add(id);
           }
-          for (const threadId of Object.keys(get().threads)) {
+          discardUnlistedBufferedLines();
+          for (const threadId of threadIds) {
             const liveRun = [...nativeLiveRunIds].find((id) => threadIdOfRun(id) === threadId);
             if (liveRun) adoptLiveRun(threadId, liveRun);
+            else {
+              const bufferedRunId = [...bufferedNativeLines.keys()].find(
+                (id) => threadIdOfRun(id) === threadId,
+              );
+              if (bufferedRunId) bufferedNativeLines.delete(bufferedRunId);
+            }
           }
         } catch (error) {
           console.error("kodade: KödChat live-run reconciliation failed:", error);
+        } finally {
+          liveRunReconciliations--;
         }
         return () => {
           offEvent();

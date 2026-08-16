@@ -134,6 +134,185 @@ describe("a turn", () => {
     expect(store.getState().threads.t1.status).toBe("idle");
   });
 
+  it("replays a live-run line received before open-thread reconciliation resolves", async () => {
+    const { agent, storage, store } = setup();
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const opened = store.getState().openThread("t1", "p1", "claude");
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Buffered output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await opened;
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Buffered output." })]),
+    );
+  });
+
+  it("replays a live-run line received before startup reconciliation resolves", async () => {
+    const { agent, store } = setup();
+    await openThread(store);
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Startup output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await started;
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Startup output." })]),
+    );
+  });
+
+  it("keeps an unknown live-run line until its thread opens after startup", async () => {
+    const { agent, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(1));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Unopened output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await started;
+    agent.deferListLive = false;
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Unopened output." })]),
+    );
+  });
+
+  it("closes a persisted in-flight tool card after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "tool",
+            id: "tool-card",
+            call: { tool: "Read", args: { file_path: "note.txt" } },
+            outcome: null,
+            providerCallId: "call-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "call-1", content: "done" }],
+        },
+      }),
+    );
+
+    expect(store.getState().threads.t1.entries).toEqual([
+      expect.objectContaining({ id: "tool-card", outcome: { status: "executed", result: "done" } }),
+    ]);
+  });
+
+  it("replaces a persisted in-flight message after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "message",
+            id: "assistant-card",
+            role: "assistant",
+            text: "Partial",
+            conversationId: 0,
+            providerMessageId: "message-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "message-1", content: [{ type: "text", text: "Complete answer." }] },
+      }),
+    );
+
+    const answers = store
+      .getState()
+      .threads.t1.entries.filter((entry) => entry.kind === "message" && entry.role === "assistant");
+    expect(answers).toEqual([
+      expect.objectContaining({ id: "assistant-card", text: "Complete answer." }),
+    ]);
+  });
+
   it("does not adopt a run that exits while its live-run snapshot is in flight", async () => {
     const { agent, storage, store } = setup();
     storage.docs.set(
