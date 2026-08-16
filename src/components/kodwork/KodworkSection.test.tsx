@@ -111,6 +111,40 @@ describe("KodworkSection", () => {
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Target project"]')?.value).toBe("");
   });
 
+  it("adopts the active project when projects finish loading", () => {
+    const projects = createStore(() => ({
+      projects: [] as ProjectsState["projects"],
+      sessions: [],
+      expandedProjects: {},
+      activeProjectId: null as string | null,
+    })) as unknown as StoreApi<ProjectsState>;
+    const work = createStore(() => ({ tasks: {}, loaded: {} })) as unknown as StoreApi<KodworkState>;
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+
+    act(() =>
+      mounted?.render(
+        <KodworkSection
+          projectsStore={projects}
+          workStore={work}
+          activity={createActivityModule()}
+        />,
+      ),
+    );
+    act(() =>
+      projects.setState({
+        projects: [{ id: "p1", name: "kodade", path: "/repo" }],
+        activeProjectId: "p1",
+      }),
+    );
+
+    expect(
+      host.querySelector<HTMLSelectElement>('select[aria-label="Target project"]')
+        ?.value,
+    ).toBe("p1");
+  });
+
   it("shows only task-bearing projects once work exists", () => {
     const { projects, work } = stores();
     projects.setState({

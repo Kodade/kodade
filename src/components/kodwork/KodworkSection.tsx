@@ -7,7 +7,7 @@
 // session (the kodwork store feeds it metadata-only facts), falling back to
 // the task's own state for sessions it hasn't seen yet.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
@@ -62,6 +62,14 @@ export function KodworkSection({
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
   const tasks = useStore(workStore, (s) => s.tasks);
   const [targetProjectId, setTargetProjectId] = useState(activeProjectId ?? "");
+
+  useEffect(() => {
+    setTargetProjectId((current) =>
+      projects.some((project) => project.id === current)
+        ? current
+        : activeProjectId ?? "",
+    );
+  }, [activeProjectId, projects]);
 
   if (projects.length === 0) return null;
 
