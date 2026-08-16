@@ -36,7 +36,13 @@ export type ChatEntry =
       // Preserved so later authoritative provider output replaces this bubble.
       providerMessageId?: string;
     }
-  | { kind: "thinking"; id: string; text: string }
+  | {
+      kind: "thinking";
+      id: string;
+      text: string;
+      // Preserved so raw provider thinking deltas update this entry on reload.
+      providerMessageId?: string;
+    }
   | {
       kind: "tool";
       id: string;
@@ -281,7 +287,14 @@ function parseEntry(value: unknown, fallbackConversationId = 0): ChatEntry | nul
   }
   if (entry.kind === "thinking") {
     return typeof entry.text === "string"
-      ? { kind: "thinking", id, text: entry.text }
+      ? {
+          kind: "thinking",
+          id,
+          text: entry.text,
+          ...(typeof entry.providerMessageId === "string"
+            ? { providerMessageId: entry.providerMessageId }
+            : {}),
+        }
       : null;
   }
   if (entry.kind === "tool") {

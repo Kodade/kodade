@@ -41,6 +41,10 @@ class ClaudeParser implements AgentStreamParser {
   // without re-reading the block's start frame.
   private blocks = new Map<number, "text" | "thinking" | "tool_use">();
 
+  seedMessageId(messageId: string) {
+    this.messageId = messageId;
+  }
+
   line(raw: string): AgentStreamEvent[] {
     const value = parseJsonLine(raw);
     if (!value) return [];

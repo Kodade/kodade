@@ -398,7 +398,12 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           } else {
             const id = newId();
             run.thinkingEntries.set(event.messageId, id);
-            appendEntry(threadId, { kind: "thinking", id, text: event.text });
+            appendEntry(threadId, {
+              kind: "thinking",
+              id,
+              text: event.text,
+              providerMessageId: event.messageId,
+            });
           }
           return;
         }
@@ -411,7 +416,12 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           } else {
             const id = newId();
             run.thinkingEntries.set(event.messageId, id);
-            appendEntry(threadId, { kind: "thinking", id, text: event.text });
+            appendEntry(threadId, {
+              kind: "thinking",
+              id,
+              text: event.text,
+              providerMessageId: event.messageId,
+            });
           }
           return;
         }
@@ -495,14 +505,21 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     };
 
     const rebuildRunCorrelations = (thread: ChatThread, run: Run) => {
+      let latestProviderMessageId: string | null = null;
       for (const entry of thread.entries) {
         if (entry.kind === "message" && entry.providerMessageId) {
           run.messageEntries.set(entry.providerMessageId, entry.id);
+          latestProviderMessageId = entry.providerMessageId;
+        }
+        if (entry.kind === "thinking" && entry.providerMessageId) {
+          run.thinkingEntries.set(entry.providerMessageId, entry.id);
+          latestProviderMessageId = entry.providerMessageId;
         }
         if (entry.kind === "tool" && entry.providerCallId) {
           run.toolEntries.set(entry.providerCallId, entry.id);
         }
       }
+      if (latestProviderMessageId) run.parser?.seedMessageId?.(latestProviderMessageId);
     };
 
     const replayBufferedLines = (threadId: string, run: Run) => {
@@ -519,6 +536,19 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       for (const runId of bufferedNativeLines.keys()) {
         if (!nativeLiveRunIds.has(runId)) bufferedNativeLines.delete(runId);
       }
+    };
+
+    const bufferNativeLine = (runId: string, line: string) => {
+      const lines = bufferedNativeLines.get(runId) ?? [];
+      if (
+        !lines.length &&
+        !bufferedNativeLines.has(runId) &&
+        bufferedNativeLines.size >= MAX_BUFFERED_NATIVE_RUNS
+      ) {
+        return;
+      }
+      if (lines.length < MAX_BUFFERED_NATIVE_LINES) lines.push(line);
+      bufferedNativeLines.set(runId, lines);
     };
 
     const adoptLiveRun = (threadId: string, runId: string) => {
@@ -579,18 +609,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       if (!runs.has(threadId) && nativeLiveRunIds.has(runId)) adoptLiveRun(threadId, runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) {
-        if (liveRunReconciliations > 0) {
-          const lines = bufferedNativeLines.get(runId) ?? [];
-          if (
-            !lines.length &&
-            !bufferedNativeLines.has(runId) &&
-            bufferedNativeLines.size >= MAX_BUFFERED_NATIVE_RUNS
-          ) {
-            return;
-          }
-          if (lines.length < MAX_BUFFERED_NATIVE_LINES) lines.push(line);
-          bufferedNativeLines.set(runId, lines);
-        }
+        if (liveRunReconciliations > 0 || nativeLiveRunIds.has(runId)) bufferNativeLine(runId, line);
         return; // a stale/cancelled turn
       }
       if (!run.parser) return;

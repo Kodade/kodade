@@ -219,6 +219,24 @@ describe("a turn", () => {
     );
   });
 
+  it("keeps a known live-run line after startup until its thread opens", async () => {
+    const { agent, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    await store.getState().start();
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Known output." }] },
+      }),
+    );
+
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Known output." })]),
+    );
+  });
+
   it("closes a persisted in-flight tool card after reload", async () => {
     const { agent, storage, store } = setup();
     agent.liveRunIds = ["t1#4"];
@@ -310,6 +328,69 @@ describe("a turn", () => {
       .threads.t1.entries.filter((entry) => entry.kind === "message" && entry.role === "assistant");
     expect(answers).toEqual([
       expect.objectContaining({ id: "assistant-card", text: "Complete answer." }),
+    ]);
+  });
+
+  it("updates persisted message and thinking entries from raw deltas after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "message",
+            id: "assistant-card",
+            role: "assistant",
+            text: "Partial",
+            conversationId: 0,
+            providerMessageId: "message-1",
+          },
+          {
+            kind: "thinking",
+            id: "thinking-card",
+            text: "Reasoning",
+            providerMessageId: "message-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " extended" } },
+      }),
+    );
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "thinking_delta", thinking: " extended" },
+        },
+      }),
+    );
+
+    expect(store.getState().threads.t1.entries).toEqual([
+      expect.objectContaining({ id: "assistant-card", text: "Partial extended" }),
+      expect.objectContaining({ id: "thinking-card", text: "Reasoning extended" }),
     ]);
   });
 

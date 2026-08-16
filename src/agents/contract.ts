@@ -82,6 +82,9 @@ export type AgentSpawn = {
 export interface AgentStreamParser {
   // Parse one raw stdout line into zero or more normalized events.
   line(raw: string): AgentStreamEvent[];
+  // A restored transcript can resume midway through one provider message.
+  // Parsers that need an active message id for raw deltas may seed it here.
+  seedMessageId?(messageId: string): void;
   // The process exited. Adapters can turn a non-zero exit (or stderr that
   // reads like an auth failure) into transcript events; the store treats this
   // native exit callback, rather than a provider frame, as terminal.
