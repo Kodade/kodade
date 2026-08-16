@@ -749,6 +749,7 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async setScope(scope) {
+        ++targetGeneration;
         if (scope.kind === "branch" && get().chatTarget?.baselineSha) {
           scope = { kind: "branch", base: get().chatTarget!.baselineSha };
         }
