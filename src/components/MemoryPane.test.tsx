@@ -8,7 +8,7 @@ const openDialog = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialog }));
 
-import { filesStore, harnessStore, memoryStore } from "../store/appStore";
+import { appStore, filesStore, harnessStore, memoryStore } from "../store/appStore";
 import { buildMemoryMcpSetup } from "../memory/mcp-config";
 import { MemoryPane } from "./MemoryPane";
 
@@ -73,6 +73,7 @@ describe("KödMem pane", () => {
     const setup = container.querySelector<HTMLButtonElement>(
       'button[aria-controls="kodmem-agent-setup"]',
     );
+    if (setup?.getAttribute("aria-expanded") === "true") return;
     await act(async () => {
       setup?.click();
       await Promise.resolve();
@@ -182,6 +183,9 @@ describe("KödMem pane", () => {
       preparing: false,
       applying: false,
       mutationError: null,
+    });
+    appStore.setState({
+      memoryAgentAccess: { enabled: false, access: "read-write" },
     });
     filesStore.setState({ selectedPath: null });
     container = document.createElement("div");
@@ -474,6 +478,14 @@ describe("KödMem pane", () => {
     expect(container.textContent).toContain("One preview installs the project workflow");
     expect(container.textContent).toContain("review setup");
     expect(invoke).toHaveBeenCalledWith(CMD.memoryMcpBinaryPath);
+    const scrollRegion = container.querySelector<HTMLElement>(
+      '[data-kodmem-scroll="true"]',
+    );
+    expect(scrollRegion?.getAttribute("aria-label")).toBe(
+      "KödMem navigation and setup",
+    );
+    expect(scrollRegion?.tabIndex).toBe(0);
+    expect(scrollRegion?.classList.contains("overflow-y-auto")).toBe(true);
 
     const readOnly = [...container.querySelectorAll("label")]
       .find((label) => label.textContent?.includes("read-only access"))
@@ -702,6 +714,99 @@ describe("KödMem pane", () => {
     expect(container.textContent).toContain("configure KödMCP for codex");
 
     await act(async () => harnessStore.getState().cancelPendingChange());
+  });
+
+  it("reconciles a mapped project's missing connectors after one-time approval", async () => {
+    const originalConfirm = harnessStore.getState().confirmPendingChange;
+    const confirm = vi.fn(async () => {
+      harnessStore.setState({
+        applying: false,
+        pendingChange: null,
+        mutationError: null,
+      });
+    });
+    harnessStore.setState({ confirmPendingChange: confirm });
+    appStore.setState({
+      memoryAgentAccess: { enabled: true, access: "read-only" },
+    });
+    mockInvoke((command: string, payload?: unknown) => {
+      if (command === CMD.memoryContext) {
+        return Promise.resolve({
+          workspace,
+          latestCheckpoint: null,
+          pinnedDecisions: [],
+          openTasks: [],
+          recentMemories: [],
+          projectKnowledge: {
+            projectId: "kodade",
+            projectDisplayName: "Ködade",
+            origin: "C:\\ProjectsVault\\10-Projects\\kodade",
+            sync: {
+              status: "current",
+              refreshedAt: 5,
+              indexedDocuments: 1,
+              indexHash: "a".repeat(64),
+              truncated: false,
+              error: null,
+            },
+            sources: [],
+          },
+        });
+      }
+      if (command === CMD.memoryAudit || command === CMD.memoryListDeleted) {
+        return Promise.resolve({ items: [], total: 0, limit: 100, offset: 0 });
+      }
+      if (command === CMD.configEnv) {
+        return Promise.resolve({
+          home: "/Users/developer",
+          platform: "mac",
+          appDataRoaming: null,
+          appDataLocal: null,
+        });
+      }
+      if (command === CMD.configRead) {
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        if (path.endsWith(".claude.json")) {
+          return Promise.resolve({ kind: "text", content: '{ "projects": {} }\n' });
+        }
+        if (path.endsWith("config.toml")) {
+          return Promise.resolve({ kind: "text", content: "" });
+        }
+        return Promise.resolve({ kind: "text", content: "# Existing\n" });
+      }
+      if (command === CMD.configReadOptionalText) {
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        if (path.endsWith(".claude.json")) return Promise.resolve('{ "projects": {} }\n');
+        if (path.endsWith("config.toml")) return Promise.resolve("");
+        return Promise.resolve("# Existing\n");
+      }
+      if (command === CMD.configExternalSkillSnapshot) {
+        return Promise.reject(new Error("missing"));
+      }
+      if (command === CMD.configScan) {
+        return Promise.resolve({ status: "missing", root: "skills" });
+      }
+      throw new Error(`unexpected Tauri command: ${command}`);
+    });
+
+    try {
+      await act(async () => {
+        root.render(<MemoryPane workspaceId={workspace.id} />);
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      expect(confirm).toHaveBeenCalledWith({
+        surface: "memory",
+        scopeId: workspace.id,
+      });
+      expect(container.textContent).toContain(
+        "Approved access is maintained for mapped projects.",
+      );
+    } finally {
+      harnessStore.setState({ confirmPendingChange: originalConfirm });
+    }
   });
 
   it("keeps a staged KödMCP merge owned by its workspace across an unmount and remount", async () => {

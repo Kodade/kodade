@@ -177,6 +177,16 @@ export type PersistedSession = {
 
 // Persisted JSON schema, version-gated so later tickets can migrate it.
 export const STORAGE_VERSION = 1;
+export type MemoryAgentAccessPreference = {
+  enabled: boolean;
+  access: "read-only" | "read-write";
+};
+
+export const DEFAULT_MEMORY_AGENT_ACCESS: MemoryAgentAccessPreference = {
+  enabled: false,
+  access: "read-write",
+};
+
 export type PersistedDoc = {
   version: number;
   projects: Project[];
@@ -212,6 +222,11 @@ export type PersistedDoc = {
   // Optional and additive (still STORAGE_VERSION 1): KödLocal's downloaded
   // catalog entries, custom GGUF paths, and raw-chat context choice.
   local?: LocalModelPreferences;
+  // Optional and additive (still STORAGE_VERSION 1): one-time consent for
+  // Ködade to keep supported agent connectors reconciled as mapped projects
+  // become active. Disabled by default; the Connect agents review flow turns
+  // it on only after a successful, explicitly approved batch.
+  memoryAgentAccess?: MemoryAgentAccessPreference;
   // Optional and additive (still STORAGE_VERSION 1): KödPR reviewed-file
   // checkmarks (M12d, Pro). Keyed by project PATH (not id — the review store
   // only knows project roots, not the projects-store id), then by a review
@@ -285,6 +300,7 @@ export type ProjectsState = {
   openTabs: Record<string, string[]>; // per-project encoded editor tabs
   voicePreferences: VoicePreferences; // app-level KödWhisper preferences
   localModelPreferences: LocalModelPreferences;
+  memoryAgentAccess: MemoryAgentAccessPreference;
   // KödPR reviewed-file checkmarks (M12d, Pro), keyed by project path then
   // review-scope key. See PersistedDoc.reviewChecks for the shape/pruning rule.
   reviewChecks: Record<string, Record<string, ReviewCheckEntry>>;
@@ -345,6 +361,7 @@ export type ProjectsState = {
   setOpenTabs(projectId: string, paths: string[]): void;
   setVoicePreferences(preferences: VoicePreferences): void;
   setLocalModelPreferences(preferences: LocalModelPreferences): void;
+  setMemoryAgentAccess(preference: MemoryAgentAccessPreference): void;
   // Record one review scope's reviewed-path set for `projectRoot` (KödPR,
   // M12d) and persist debounced, like setOpenTabs. No-op for a project whose
   // path isn't currently tracked. Caps the project's scope-entry count (see
@@ -423,6 +440,19 @@ function isOpenTabs(v: unknown): v is string[] {
 
 function isSidebarMode(v: unknown): v is SidebarMode {
   return v === "full" || v === "rail";
+}
+
+function normalizeMemoryAgentAccess(
+  value: unknown,
+): MemoryAgentAccessPreference {
+  if (!value || typeof value !== "object") {
+    return DEFAULT_MEMORY_AGENT_ACCESS;
+  }
+  const candidate = value as Partial<MemoryAgentAccessPreference>;
+  return {
+    enabled: candidate.enabled === true,
+    access: candidate.access === "read-only" ? "read-only" : "read-write",
+  };
 }
 
 // The provider new KödChat threads start on. Only a CLI with a verified
@@ -654,6 +684,7 @@ export function createProjectsStore(deps: StoreDeps) {
           openTabs,
           voicePreferences,
           localModelPreferences,
+          memoryAgentAccess,
           reviewChecks,
           voiceVocabulary,
           remoteTargets,
@@ -685,6 +716,7 @@ export function createProjectsStore(deps: StoreDeps) {
           openTabs,
           voice: voicePreferences,
           local: localModelPreferences,
+          memoryAgentAccess,
           reviewChecks,
           voiceVocabulary,
           remoteTargets,
@@ -906,6 +938,7 @@ export function createProjectsStore(deps: StoreDeps) {
       openTabs: {}, // per-project open editor tabs (v1.1)
       voicePreferences: DEFAULT_VOICE_PREFERENCES,
       localModelPreferences: DEFAULT_LOCAL_MODEL_PREFERENCES,
+      memoryAgentAccess: DEFAULT_MEMORY_AGENT_ACCESS,
       reviewChecks: {}, // KödPR reviewed-file checkmarks, per project path (M12d)
       voiceVocabulary: {}, // KödWhisper Pro per-project user vocabulary (M9e)
       remoteTargets: [], // pinned remote projects (KödSSH Pro, M11c)
@@ -1131,6 +1164,11 @@ export function createProjectsStore(deps: StoreDeps) {
                 )
                   ? s.localModelPreferences
                   : docLocalModelPreferences;
+              const persistedMemoryAgentAccess =
+                normalizeMemoryAgentAccess(doc.memoryAgentAccess);
+              const memoryAgentAccess = s.memoryAgentAccess.enabled
+                ? s.memoryAgentAccess
+                : persistedMemoryAgentAccess;
               const activeProjectId = s.activeProjectId ?? activeFromDoc;
               // Union runtime (pre-hydration) pins with persisted ones, runtime
               // winning on a key collision, so a pin made before the read landed
@@ -1160,6 +1198,7 @@ export function createProjectsStore(deps: StoreDeps) {
                 openTabs,
                 voicePreferences,
                 localModelPreferences,
+                memoryAgentAccess,
                 reviewChecks,
                 voiceVocabulary,
                 remoteTargets,
@@ -1864,6 +1903,19 @@ export function createProjectsStore(deps: StoreDeps) {
         if (sameLocalModelPreferences(get().localModelPreferences, normalized))
           return;
         set({ localModelPreferences: normalized });
+        void persistAfterHydration();
+      },
+
+      setMemoryAgentAccess(preference: MemoryAgentAccessPreference) {
+        const normalized = normalizeMemoryAgentAccess(preference);
+        const current = get().memoryAgentAccess;
+        if (
+          current.enabled === normalized.enabled &&
+          current.access === normalized.access
+        ) {
+          return;
+        }
+        set({ memoryAgentAccess: normalized });
         void persistAfterHydration();
       },
 

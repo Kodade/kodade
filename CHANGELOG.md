@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed KödMem settings overflow and added one-time, reviewable consent for
+  automatic Claude Code and Codex connector reconciliation on mapped projects.
 - Fixed Codex collaboration activity emitted by the CLI to appear in KödChat
   tool cards instead of being silently dropped.
 - Added user- and project-scoped Codex custom-agent TOML profiles to the
