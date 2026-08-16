@@ -439,7 +439,9 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           deps.activity?.attention?.(thread.projectId, threadId, "the agent failed");
           return;
         case "done":
-          settle(threadId, run);
+          // Provider completion is transcript metadata. Native process exit is
+          // authoritative for run ownership because a CLI can emit this while
+          // delegated/background work is still alive.
           return;
       }
     };
@@ -562,8 +564,8 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       if (run.parser) {
         for (const event of run.parser.end(code, stderr)) applyEvent(threadId, run, event);
       }
-      // `end` always yields a `done`, but settle defensively in case a future
-      // adapter forgets: a thread must never be stuck "working".
+      // Native exit is the sole settlement signal. Parser end events can add
+      // final usage/failure details, but cannot release ownership themselves.
       settle(threadId, run);
     };
 

@@ -77,6 +77,21 @@ describe("a turn", () => {
     expect(store.getState().threads.t1.status).toBe("idle");
   });
 
+  it("keeps ownership after any provider completion frame until native exit", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await openThread(store, "codex");
+    await store.getState().send("t1", "keep ownership");
+
+    agent.emitLines("t1#1", CODEX_TOOL_TURN);
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(1);
+
+    agent.exit("t1#1", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
   it("adopts a live native run when reopening its thread without starting another", async () => {
     const { agent, storage, store } = setup();
     agent.liveRunIds = ["t1#4"];
