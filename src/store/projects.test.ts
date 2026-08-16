@@ -198,6 +198,32 @@ describe("projects store", () => {
     ]);
   });
 
+  it("persists one-time KödMem agent reconciliation consent across a restart", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage);
+    await first.store.getState().hydrate();
+    first.store.getState().setMemoryAgentAccess({
+      enabled: true,
+      access: "read-only",
+    });
+    await first.store.getState().flushPersistence();
+
+    expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
+      version: STORAGE_VERSION,
+      memoryAgentAccess: {
+        enabled: true,
+        access: "read-only",
+      },
+    });
+
+    const second = makeStore(storage);
+    await second.store.getState().hydrate();
+    expect(second.store.getState().memoryAgentAccess).toEqual({
+      enabled: true,
+      access: "read-only",
+    });
+  });
+
   it("persists the sidebar rail mode across a restart", async () => {
     const storage = new MockStorage();
     const first = makeStore(storage);

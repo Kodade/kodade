@@ -41,7 +41,7 @@ import {
 } from "../platform/capabilities";
 import { nativeEquals, nativeJoin } from "../platform/native-path";
 import { ChangeConfirmDialog } from "./HarnessPane";
-import { filesStore, harnessStore, memoryStore } from "../store/appStore";
+import { appStore, filesStore, harnessStore, memoryStore } from "../store/appStore";
 import { isPendingChangeOwned, type PendingChangeOwner } from "../store/harness";
 import { settingsViewStore } from "../store/settingsView";
 import { RELEASE_MANIFEST } from "../release/manifest";
@@ -81,6 +81,7 @@ export function MemoryPane({
   const [creating, setCreating] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [showAgentSetup, setShowAgentSetup] = useState(false);
+  const agentOnboardingIntent = useRef<AgentOnboardingIntent | null>(null);
   const [workingMode, setWorkingMode] = useState<WorkingMemoryMode>("commit");
   const [exportExisting, setExportExisting] = useState(true);
   useEffect(() => {
@@ -225,8 +226,13 @@ export function MemoryPane({
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,38%)_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-r border-border bg-surface/40">
-          <form className="grid gap-2 border-b border-border p-3" onSubmit={runSearch}>
+        <aside
+          aria-label="KödMem navigation and setup"
+          className="flex min-h-0 flex-col overflow-y-auto overscroll-contain border-r border-border bg-surface/40 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent"
+          data-kodmem-scroll="true"
+          tabIndex={0}
+        >
+          <form className="grid shrink-0 gap-2 border-b border-border p-3" onSubmit={runSearch}>
             <div className="flex gap-2">
               <input
                 aria-label="search KödMem"
@@ -254,7 +260,7 @@ export function MemoryPane({
             </div>
           </form>
 
-          <div className="border-b border-border p-3">
+          <div className="shrink-0 border-b border-border p-3">
             <div className="mb-2 flex items-center">
               <span className="memory-heading flex-1">Hub</span>
               <button
@@ -296,7 +302,7 @@ export function MemoryPane({
           </div>
 
           {context?.projectKnowledge && (
-            <section className="border-b border-border p-3" aria-label="Mapped project knowledge">
+            <section className="shrink-0 border-b border-border p-3" aria-label="Mapped project knowledge">
               <div className="memory-heading">Mapped project knowledge</div>
               <p className="mt-1 truncate text-[11px] text-text-dim">
                 {context.projectKnowledge.projectDisplayName} · {context.projectKnowledge.origin}
@@ -334,7 +340,7 @@ export function MemoryPane({
             </section>
           )}
 
-          <section className="border-b border-border p-3" aria-label="Project working memory">
+          <section className="shrink-0 border-b border-border p-3" aria-label="Project working memory">
             <div className="memory-heading">Project working memory</div>
             {workingMemory ? (
               <>
@@ -406,11 +412,15 @@ export function MemoryPane({
 
           <ConnectAgentsSection
             workspace={workspace}
+            mapped={Boolean(context?.projectKnowledge)}
             expanded={showAgentSetup}
             onExpandedChange={setShowAgentSetup}
+            onIntentChange={(intent) => {
+              agentOnboardingIntent.current = intent;
+            }}
           />
 
-          <div className="border-b border-border p-3">
+          <div className="shrink-0 border-b border-border p-3">
             <button
               aria-controls="kodmem-recently-deleted"
               aria-expanded={showDeleted}
@@ -456,11 +466,11 @@ export function MemoryPane({
             )}
           </div>
 
-          <div className="flex items-center border-b border-border px-3 py-2">
+          <div className="flex shrink-0 items-center border-b border-border px-3 py-2">
             <span className="memory-heading flex-1">Memories</span>
             <span className="text-[10px] text-text-dim">{showingSearchResults ? resultTotal : list.length}</span>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto">
+          <div className="shrink-0">
             {list.map((item) => (
               <button
                 type="button"
@@ -523,10 +533,25 @@ export function MemoryPane({
             applying={harness.applying}
             error={harness.mutationError}
             projectRoot={workspace.canonicalRoot}
-            onCancel={() => harnessStore.getState().cancelPendingChange(memoryOwner)}
-            onConfirm={() =>
-              void harnessStore.getState().confirmPendingChange(memoryOwner)
-            }
+            onCancel={() => {
+              agentOnboardingIntent.current = null;
+              harnessStore.getState().cancelPendingChange(memoryOwner);
+            }}
+            onConfirm={() => {
+              const intent = agentOnboardingIntent.current;
+              void harnessStore
+                .getState()
+                .confirmPendingChange(memoryOwner)
+                .then(() => {
+                  if (!intent || harnessStore.getState().mutationError) return;
+                  appStore.getState().setMemoryAgentAccess(
+                    intent.action === "connect"
+                      ? { enabled: true, access: intent.access }
+                      : { enabled: false, access: intent.access },
+                  );
+                  agentOnboardingIntent.current = null;
+                });
+            }}
           />
         </div>
       )}
@@ -547,6 +572,11 @@ type ConnectionStatus =
   | "configured-unhealthy-readwrite"
   | "configured-unhealthy-readonly"
   | "not-connected";
+
+type AgentOnboardingIntent = {
+  action: "connect" | "remove";
+  access: "read-only" | "read-write";
+};
 
 type ProjectKnowledgeAction = NonNullable<MemoryMcpHealth["action"]>;
 
@@ -579,16 +609,24 @@ const MCP_CLIENTS: { id: MemoryMcpClient; label: string; scope: "global" | "proj
 
 function ConnectAgentsSection({
   workspace,
+  mapped,
   expanded,
   onExpandedChange,
+  onIntentChange,
 }: {
   workspace: MemoryWorkspace;
+  mapped: boolean;
   expanded: boolean;
   onExpandedChange(expanded: boolean): void;
+  onIntentChange(intent: AgentOnboardingIntent | null): void;
 }) {
   const caps = useStore(capabilitiesStore, (state) => state.capabilities);
   const nativeMcpSetup = canConfigureMemoryMcp(caps);
   const harness = useStore(harnessStore);
+  const desiredAccess = useStore(
+    appStore,
+    (state) => state.memoryAgentAccess,
+  );
   const orchestrationEntitled = useStore(licenseStore, (state) =>
     state.entitlements.hasFeature(FEATURES.localOrchestrate),
   );
@@ -613,13 +651,21 @@ function ConnectAgentsSection({
     ? harness.pendingChange
     : null;
   const visible = expanded || pendingForWorkspace !== null;
+  const offeredWorkspace = useRef<string | null>(null);
+  const automaticAttempt = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (desiredAccess.enabled) {
+      setReadOnly(desiredAccess.access === "read-only");
+    }
+  }, [desiredAccess.access, desiredAccess.enabled]);
 
   useEffect(() => {
     if (pendingForWorkspace) onExpandedChange(true);
   }, [onExpandedChange, pendingForWorkspace]);
 
   useEffect(() => {
-    if (!nativeMcpSetup || !visible) return;
+    if (!nativeMcpSetup) return;
     let cancelled = false;
     setBinary({ kind: "loading" });
     void Promise.resolve()
@@ -643,7 +689,7 @@ function ConnectAgentsSection({
     return () => {
       cancelled = true;
     };
-  }, [nativeMcpSetup, visible]);
+  }, [nativeMcpSetup, workspace.id]);
 
   useEffect(() => {
     if (!nativeMcpSetup || !localDelegationAvailable || !visible) return;
@@ -701,7 +747,13 @@ function ConnectAgentsSection({
   const refreshConnections = async () => {
     if (setup.state !== "ready") return;
     setConnections({ claude: "checking", codex: "checking" });
-    const env = await configIpc.env().catch(() => null);
+    let env: Awaited<ReturnType<typeof configIpc.env>> | null = null;
+    try {
+      env = await configIpc.env();
+    } catch {
+      // A missing or unreadable runtime config is a visible not-connected
+      // state, not an unhandled background rejection.
+    }
     if (!env) {
       setConnections({ claude: "not-connected", codex: "not-connected" });
       setKnowledgeAction(null);
@@ -761,26 +813,34 @@ function ConnectAgentsSection({
     setKnowledgeAction(
       checked.find(([, , action]) => action !== null)?.[2] ?? null,
     );
+    if (
+      mapped &&
+      !desiredAccess.enabled &&
+      checked.some(([, status]) => status === "not-connected") &&
+      offeredWorkspace.current !== workspace.id
+    ) {
+      offeredWorkspace.current = workspace.id;
+      onExpandedChange(true);
+    }
   };
 
   const previouslyPending = useRef(pendingForWorkspace !== null);
   useEffect(() => {
     const finished = previouslyPending.current && pendingForWorkspace === null;
     previouslyPending.current = pendingForWorkspace !== null;
-    if (finished && !harness.mutationError && visible && binary.kind === "ready") {
+    if (finished && !harness.mutationError && binary.kind === "ready") {
       void refreshConnections();
     }
     // refreshConnections is intentionally driven by the pending-change edge.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [binary.kind, harness.mutationError, pendingForWorkspace, visible]);
+  }, [binary.kind, harness.mutationError, pendingForWorkspace]);
 
   useEffect(() => {
-    if (!visible || binary.kind !== "ready") return;
+    if (binary.kind !== "ready") return;
     void refreshConnections();
     // Recheck whenever the exact generated command or arguments can change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    visible,
     binary.kind,
     binary.kind === "ready" ? binary.path : "",
     workspace.id,
@@ -792,11 +852,17 @@ function ConnectAgentsSection({
   // requested through the remote memory transport.
   if (!nativeMcpSetup) return null;
 
-  const prepareOnboarding = async (action: "connect" | "remove") => {
-    if (setup.state !== "ready" || binary.kind !== "ready" || busy) return;
+  const prepareOnboarding = async (
+    action: "connect" | "remove",
+    automatic = false,
+    access: "read-only" | "read-write" = readOnly ? "read-only" : "read-write",
+  ) => {
+    if (binary.kind !== "ready" || busy) return;
     const helperPath = binary.path;
+    const requestedReadOnly = access === "read-only";
     let localHome = configHome;
     setSetupError(null);
+    if (!automatic) onIntentChange({ action, access });
     try {
       const env = await configIpc.env();
       localHome = env.home;
@@ -809,10 +875,18 @@ function ConnectAgentsSection({
         platform: env.platform,
         appDataRoaming: env.appDataRoaming,
         appDataLocal: env.appDataLocal,
-        access: readOnly ? "read-only" : "read-write",
+        access,
       }, action);
       if (plan.requests.length === 0) {
         await refreshConnections();
+        if (!automatic) {
+          appStore.getState().setMemoryAgentAccess(
+            action === "connect"
+              ? { enabled: true, access }
+              : { enabled: false, access },
+          );
+          onIntentChange(null);
+        }
         return;
       }
       setReviewing(true);
@@ -824,7 +898,7 @@ function ConnectAgentsSection({
           ? async () => {
               const checked = await Promise.all(
                 MCP_CLIENTS.map((client) =>
-                  memoryIpc.mcpHealth(workspace.id, client.id, readOnly),
+                  memoryIpc.mcpHealth(workspace.id, client.id, requestedReadOnly),
                 ),
               );
               setKnowledgeAction(
@@ -837,8 +911,16 @@ function ConnectAgentsSection({
             }
           : undefined,
       );
+      if (automatic && isPendingChangeOwned(
+        harnessStore.getState().pendingChange,
+        pendingOwner,
+      )) {
+        await harnessStore.getState().confirmPendingChange(pendingOwner);
+        if (harnessStore.getState().mutationError) onExpandedChange(true);
+      }
       if (!harnessStore.getState().pendingChange) setReviewing(false);
     } catch (error) {
+      if (!automatic) onIntentChange(null);
       setReviewing(false);
       const detail = error instanceof Error ? error.message : String(error);
       setSetupError(redactOnboardingError(detail, [
@@ -848,6 +930,32 @@ function ConnectAgentsSection({
       ]));
     }
   };
+
+  useEffect(() => {
+    if (
+      !desiredAccess.enabled ||
+      binary.kind !== "ready" ||
+      busy ||
+      Object.values(connections).some((status) => status === "checking") ||
+      Object.values(connections).every(isConfiguredConnection)
+    ) {
+      return;
+    }
+    const attemptKey = `${workspace.id}:${desiredAccess.access}`;
+    if (automaticAttempt.current === attemptKey) return;
+    automaticAttempt.current = attemptKey;
+    void prepareOnboarding("connect", true, desiredAccess.access);
+    // Automatic reconciliation is intentionally one attempt per mounted
+    // workspace. A failure expands the reviewed repair flow instead of looping.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    binary.kind,
+    busy,
+    connections,
+    desiredAccess.access,
+    desiredAccess.enabled,
+    workspace.id,
+  ]);
 
   const addDelegateToConfig = async (client: MemoryMcpClient) => {
     if (delegateSetup.state !== "ready" || busy) return;
@@ -876,10 +984,24 @@ function ConnectAgentsSection({
     }
   };
 
+  const connectorSummary = Object.values(connections).some(
+    (status) => status === "checking",
+  )
+    ? "checking agent access…"
+    : Object.values(connections).some((status) =>
+        status.startsWith("configured-unhealthy"),
+      )
+      ? "connector repair required"
+      : Object.values(connections).every(isConfiguredConnection)
+        ? "agent access ready · new sessions use it"
+        : desiredAccess.enabled
+          ? "reconciling enabled agents…"
+          : "agent setup required";
+
   return (
     <section
       id="kodmem-agent-access"
-      className="border-b border-border p-3"
+      className="shrink-0 border-b border-border p-3"
       aria-label="Connect agents"
     >
       <button
@@ -894,6 +1016,9 @@ function ConnectAgentsSection({
           <span className="mt-1 block text-[11px] leading-4 text-text-dim">
             Connect once. New agent sessions are instructed to load context and
             leave a checkpoint.
+          </span>
+          <span className="mt-1 block text-[10px] leading-4 text-text-dim">
+            {connectorSummary}
           </span>
         </span>
         <span className="shrink-0 text-[11px] text-accent">
@@ -949,6 +1074,11 @@ function ConnectAgentsSection({
               One preview installs the project workflow, manages bounded instruction
               blocks, and configures both clients. Health verifies client discovery,
               KödMCP tools, and context for this project.
+            </p>
+            <p className="mt-2 text-[10px] leading-4 text-text-dim">
+              Approved access is maintained for mapped projects. Connector changes
+              apply when you start a new agent session; already-running sessions keep
+              their original tool configuration.
             </p>
             {knowledgeAction && (
               <div className="mt-3 rounded border border-border bg-bg/70 p-2 text-[10px] leading-4 text-text-dim">
