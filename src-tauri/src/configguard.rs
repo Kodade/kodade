@@ -819,6 +819,19 @@ mod tests {
     }
 
     #[test]
+    fn allows_renaming_a_codex_toml_agent_entry() {
+        let fx = fixture("rename-codex-agent-toml");
+        let agents = fx.project.join(".codex").join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let worker = agents.join("worker.toml");
+        std::fs::write(&worker, "name = \"worker\"\n").unwrap();
+
+        guard(&fx)
+            .authorize(worker.to_str().unwrap(), Access::RenameEntry)
+            .expect("a Codex TOML profile inside an agents dir must be renamable");
+    }
+
+    #[test]
     fn allows_renaming_to_a_disabled_target_that_does_not_exist_yet() {
         // The disable destination (foo.disabled) does not exist; container
         // membership plus the command's suffix check gate it.

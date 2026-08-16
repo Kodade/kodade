@@ -1,0 +1,2 @@
+{"type":"item.started","item":{"id":"item_collab_wait","type":"collab_tool_call","tool":"wait","sender_thread_id":"thread_parent","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress","internal_trace":"omit-me"}}
+{"type":"item.completed","item":{"id":"item_collab_wait","type":"collab_tool_call","tool":"wait","sender_thread_id":"thread_parent","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed","internal_trace":"omit-me"}}

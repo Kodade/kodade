@@ -2,6 +2,7 @@
 // short chip label. Parsing lives in TypeScript (Rust returns raw stdout).
 
 import { describe, expect, it } from "vitest";
+import { resolveLocations } from "../harness/locations";
 import { releaseManifestFor } from "../release/manifest";
 import { availableProviders, PROVIDERS, versionToken } from "./catalog";
 
@@ -52,5 +53,31 @@ describe("provider catalog", () => {
       { id: "grok-4.6", label: "Grok 4.6" },
       { id: "grok-4.5", label: "Grok 4.5" },
     ]);
+  });
+
+  it("discovers Codex custom agents at user and project scope", () => {
+    const codex = PROVIDERS.find((provider) => provider.id === "codex");
+    expect(codex?.harness).toBeDefined();
+
+    const context = {
+      home: "/Users/keith",
+      projectRoot: "/work/acme",
+      platform: "mac" as const,
+    };
+
+    expect(resolveLocations("codex", codex!.harness!, "global", context)).toContainEqual({
+      cli: "codex",
+      scope: "global",
+      kind: "subagent",
+      container: "dir",
+      path: "/Users/keith/.codex/agents",
+    });
+    expect(resolveLocations("codex", codex!.harness!, "project", context)).toContainEqual({
+      cli: "codex",
+      scope: "project",
+      kind: "subagent",
+      container: "dir",
+      path: "/work/acme/.codex/agents",
+    });
   });
 });

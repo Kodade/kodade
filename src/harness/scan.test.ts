@@ -180,6 +180,35 @@ describe("scanSubagents", () => {
       source: { via: "symlink", target: "/Users/keith/dotfiles/agents/Linked.md" },
     });
   });
+
+  it("models Codex TOML profiles without treating TOML as a universal subagent format", () => {
+    const codexLoc: ArtifactLocation = {
+      cli: "codex",
+      scope: "global",
+      kind: "subagent",
+      container: "dir",
+      path: "/Users/keith/.codex/agents",
+    };
+    const entries = [
+      dirEntry({ name: "worker.toml", path: `${codexLoc.path}/worker.toml`, isDir: false }),
+      dirEntry({ name: "reviewer.toml.disabled", path: `${codexLoc.path}/reviewer.toml.disabled`, isDir: false }),
+    ];
+
+    const codex = scanSubagents(codexLoc, {
+      status: "listing",
+      root: codexLoc.path,
+      entries,
+    });
+    expect(codex.artifacts.map((artifact) => artifact.name)).toEqual(["worker", "reviewer"]);
+    expect(codex.artifacts[1]).toMatchObject({ enabled: false, path: `${codexLoc.path}/reviewer.toml.disabled` });
+
+    const claude = scanSubagents({ ...codexLoc, cli: "claude" }, {
+      status: "listing",
+      root: codexLoc.path,
+      entries,
+    });
+    expect(claude.artifacts).toEqual([]);
+  });
 });
 
 describe("scanInstruction", () => {

@@ -82,6 +82,7 @@ describe("codex adapter detect()", () => {
     expect(project.map((l) => `${l.kind}:${l.path}`)).toEqual([
       "instruction:/Users/keith/proj/AGENTS.md",
       "skill:/Users/keith/proj/.agents/skills",
+      "subagent:/Users/keith/proj/.codex/agents",
     ]);
 
     const global = await adapter.detect("global", MAC);
@@ -89,6 +90,7 @@ describe("codex adapter detect()", () => {
       "instruction:/Users/keith/.codex/AGENTS.md",
       "skill:/Users/keith/.agents/skills",
       "skill:/Users/keith/.codex/skills",
+      "subagent:/Users/keith/.codex/agents",
       "mcp-server:/Users/keith/.codex/config.toml",
     ]);
   });
@@ -103,6 +105,7 @@ describe("codex adapter detect()", () => {
       "C:\\Users\\Keith\\.codex\\AGENTS.md",
       "C:\\Users\\Keith\\.agents\\skills",
       "C:\\Users\\Keith\\.codex\\skills",
+      "C:\\Users\\Keith\\.codex\\agents",
       "C:\\Users\\Keith\\.codex\\config.toml",
     ]);
   });

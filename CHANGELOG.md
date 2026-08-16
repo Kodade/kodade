@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed Codex collaboration activity emitted by the CLI to appear in KödChat
+  tool cards instead of being silently dropped.
+- Added user- and project-scoped Codex custom-agent TOML profiles to the
+  KödHarness inventory without exposing them as KödLocal agents.
+
 ## 1.7.0 - 2026-08-14
 
 - Added the KödWork surface for background CLI tasks with

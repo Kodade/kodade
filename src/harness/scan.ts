@@ -168,8 +168,10 @@ function findManifest(entry: ConfigDirEntry): string | null {
 
 // --- Subagent directories ---
 
-// Subagents are flat `.md` files (one per agent). Same symlink/orphan/disabled
-// handling as skills, but the artifact name is the file stem.
+// Most CLIs define flat Markdown subagents. Codex custom agents are TOML
+// profiles, so accept that extension only for Codex locations. Same
+// symlink/orphan/disabled handling as skills, but the artifact name is the
+// file stem.
 export function scanSubagents(loc: ArtifactLocation, scan: ConfigScan): LocationScan {
   if (scan.status === "missing") return EMPTY;
   if (scan.status === "unreadable") {
@@ -177,12 +179,15 @@ export function scanSubagents(loc: ArtifactLocation, scan: ConfigScan): Location
   }
 
   const artifacts: HarnessArtifact[] = [];
+  const subagentFile = loc.cli === "codex"
+    ? /\.(?:md|toml)(?:\.disabled)?$/i
+    : /\.md(?:\.disabled)?$/i;
   for (const entry of scan.entries) {
     if (IGNORED_ENTRY_NAMES.has(entry.name)) continue;
     if (isBackupName(entry.name)) continue; // a backup sibling is never a subagent
-    // Subagents are markdown files; a symlink pointing at a `.md` counts too.
+    // Codex custom agents are TOML; other CLIs use Markdown files.
     if (entry.isDir) continue;
-    if (!/\.md(\.disabled)?$/i.test(entry.name)) continue;
+    if (!subagentFile.test(entry.name)) continue;
 
     const { display, enabled } = splitDisabled(entry.name);
     const name = stripExtension(display);

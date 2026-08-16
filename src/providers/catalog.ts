@@ -189,6 +189,13 @@ const CODEX_AGENTS_HARNESS: HarnessLocations = {
       project: { base: "projectRoot", segments: [".agents", "skills"] },
     },
   },
+  // Codex loads user custom agents from ~/.codex/agents and project custom
+  // agents from <project>/.codex/agents. These TOML profiles can pin a worker
+  // model and instructions, so surface both scopes in KödHarness.
+  subagents: {
+    global: { base: "home", segments: [".codex", "agents"] },
+    project: { base: "projectRoot", segments: [".codex", "agents"] },
+  },
   mcp: [
     {
       scope: "global",
@@ -197,6 +204,14 @@ const CODEX_AGENTS_HARNESS: HarnessLocations = {
       keyPath: "mcp_servers",
     },
   ],
+};
+
+// KödLocal consumes Codex-compatible instructions and skills, but it cannot
+// run Codex custom-agent profiles. Keep those out of its KödHarness inventory.
+const KODLOCAL_AGENTS_HARNESS: HarnessLocations = {
+  instruction: CODEX_AGENTS_HARNESS.instruction,
+  skills: CODEX_AGENTS_HARNESS.skills,
+  mcp: CODEX_AGENTS_HARNESS.mcp,
 };
 
 // Order here is the order chips render in. `launch` is usually just the bin,
@@ -520,7 +535,7 @@ export const PROVIDERS: Provider[] = [
     remote: { bin: "kodade-local", launch: "kodade-local" },
     // Same instruction/skills artifacts as Codex. This is a read-only adapter:
     // KödLocal consumes the harness but adds no mutation paths.
-    harness: CODEX_AGENTS_HARNESS,
+    harness: KODLOCAL_AGENTS_HARNESS,
   },
 ];
 

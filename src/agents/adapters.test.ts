@@ -9,6 +9,7 @@ import type { AgentStreamEvent } from "./contract";
 import { buildAgentArgs, looksLikeAuthFailure } from "./engine";
 import {
   CLAUDE_TOOL_TURN,
+  CODEX_COLLABORATION_TURN,
   CODEX_TOOL_TURN,
   GROK_TOOL_TURN,
   OPENCODE_TOOL_TURN,
@@ -171,6 +172,114 @@ describe("codex dialect", () => {
         type: "tool-call-completed",
         callId: "item_3",
         outcome: { status: "executed", result: "hello world\n" },
+      },
+    ]);
+  });
+
+  it("renders collaboration calls as paired, sanitized tool cards", () => {
+    const events = drain("codex", CODEX_COLLABORATION_TURN);
+    expect(events.filter((event) => event.type === "tool-call-started")).toEqual([
+      {
+        type: "tool-call-started",
+        callId: "item_collab_wait",
+        call: {
+          tool: "wait",
+          args: {
+            receiver_thread_ids: [],
+            prompt: null,
+            agents_states: {},
+          },
+        },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "tool-call-completed")).toEqual([
+      {
+        type: "tool-call-completed",
+        callId: "item_collab_wait",
+        outcome: { status: "executed", result: "" },
+      },
+    ]);
+  });
+
+  it("preserves richer collaboration fields and failures when Codex emits them", () => {
+    const rich = drain("codex", [
+      JSON.stringify({
+        type: "item.started",
+        item: {
+          id: "item_collab_spawn",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          sender_thread_id: "thread_parent",
+          receiver_thread_ids: ["thread_child"],
+          prompt: "Inspect the parser",
+          agents_states: { thread_child: "running" },
+          internal_trace: "omit-me",
+        },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_collab_spawn",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          receiver_thread_ids: ["thread_child"],
+          prompt: "Inspect the parser",
+          agents_states: { thread_child: "completed" },
+          result: "spawned thread_child",
+          status: "completed",
+        },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_collab_message",
+          type: "collab_tool_call",
+          tool: "send_message",
+          receiver_thread_ids: ["thread_child"],
+          prompt: "Send evidence",
+          agents_states: { thread_child: "failed" },
+          result: "delivery failed",
+          status: "failed",
+        },
+      }),
+    ]);
+
+    expect(rich.filter((event) => event.type === "tool-call-started")).toEqual([
+      {
+        type: "tool-call-started",
+        callId: "item_collab_spawn",
+        call: {
+          tool: "spawn_agent",
+          args: {
+            receiver_thread_ids: ["thread_child"],
+            prompt: "Inspect the parser",
+            agents_states: { thread_child: "running" },
+          },
+        },
+      },
+      {
+        type: "tool-call-started",
+        callId: "item_collab_message",
+        call: {
+          tool: "send_message",
+          args: {
+            receiver_thread_ids: ["thread_child"],
+            prompt: "Send evidence",
+            agents_states: { thread_child: "failed" },
+          },
+        },
+      },
+    ]);
+    expect(rich.filter((event) => event.type === "tool-call-completed")).toEqual([
+      {
+        type: "tool-call-completed",
+        callId: "item_collab_spawn",
+        outcome: { status: "executed", result: "spawned thread_child" },
+      },
+      {
+        type: "tool-call-completed",
+        callId: "item_collab_message",
+        outcome: { status: "error", result: "delivery failed" },
       },
     ]);
   });

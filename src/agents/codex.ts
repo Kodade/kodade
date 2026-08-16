@@ -40,6 +40,7 @@ const TOOL_ITEMS = new Set([
   "file_change",
   "patch_apply",
   "web_search",
+  "collab_tool_call",
 ]);
 
 class CodexParser implements AgentStreamParser {
@@ -186,6 +187,20 @@ function toolCall(kind: string, item: Json): { tool: string; args: Json } {
   }
   if (kind === "web_search") {
     return { tool: "web_search", args: { query: asString(item.query) ?? "" } };
+  }
+  if (kind === "collab_tool_call") {
+    const args: Json = {};
+    if (Array.isArray(item.receiver_thread_ids)) {
+      args.receiver_thread_ids = item.receiver_thread_ids.filter(
+        (threadId): threadId is string => typeof threadId === "string",
+      );
+    }
+    if (item.prompt === null || typeof item.prompt === "string") {
+      args.prompt = item.prompt;
+    }
+    const agentStates = asRecord(item.agents_states);
+    if (agentStates) args.agents_states = agentStates;
+    return { tool: asString(item.tool) ?? "collaboration", args };
   }
   return { tool: kind, args: {} };
 }
