@@ -703,7 +703,9 @@ export function createReviewStore(deps: ReviewDeps) {
         try {
           const out = await deps.git.run(target.executionRoot, ["worktree", "list", "--porcelain"]);
           if (targetGen !== targetGeneration) return;
-          const roots = worktreeRoots(out.stdout).filter((root) => root !== target.executionRoot);
+          const roots = worktreeRoots(out.stdout).filter(
+            (root) => root !== target.executionRoot && root !== target.selectedWorktreeRoot,
+          );
           choices = [target, ...roots.map((root) => ({
             ...target,
             selectedWorktreeRoot: root,
