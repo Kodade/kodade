@@ -685,6 +685,7 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async openWorktree(projectRoot) {
+        ++targetGeneration;
         set({
           scope: { kind: "worktree" },
           branchBase: null,

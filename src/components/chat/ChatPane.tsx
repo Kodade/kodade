@@ -160,6 +160,14 @@ export function ChatPane({
 
   const title = thread ? `KödChat — ${thread.title}` : "KödChat";
 
+  const openChatReview = () => {
+    const root = filesStore.getState().rootPath;
+    if (!root || !thread) return;
+    if (thread.reviewTarget) void review.getState().openChatReview(thread.reviewTarget);
+    else void review.getState().openWorktree(root);
+    filesStore.getState().openReviewTab();
+  };
+
   const toggleTerminal = () => {
     if (!activeProjectId || !threadId) return;
     if (terminalOpen) {
@@ -223,14 +231,18 @@ export function ChatPane({
               {showWorkingTreeSummary && (
                 <EditedFilesCard
                   summary={workingTreeSummary}
-                  onReview={() => {
-                    const root = filesStore.getState().rootPath;
-                    if (!root) return;
-                    if (thread.reviewTarget) void review.getState().openChatReview(thread.reviewTarget);
-                    else void review.getState().openWorktree(root);
-                    filesStore.getState().openReviewTab();
-                  }}
+                  onReview={openChatReview}
                 />
+              )}
+              {thread.reviewTarget && !showWorkingTreeSummary && (
+                <button
+                  type="button"
+                  data-testid="chat-review-target"
+                  onClick={openChatReview}
+                  className="mx-3 mb-2 self-start rounded border border-border px-2 py-1 text-xs text-text-dim hover:bg-surface-hover"
+                >
+                  Review this chat’s work
+                </button>
               )}
               <ChatComposer
                 providers={providerList}

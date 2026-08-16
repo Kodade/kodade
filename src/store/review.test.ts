@@ -130,6 +130,19 @@ describe("createReviewStore", () => {
     expect(store.getState().projectRoot).toBe("/newer/work");
   });
 
+  it("does not let delayed chat discovery replace project-wide review", async () => {
+    const git = new DelayableGit();
+    git.delay("worktree list --porcelain");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    const opening = store.getState().openChatReview({ threadId: "t", executionRoot: "/chat", baselineSha: null, branch: null, sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null });
+    await Promise.resolve();
+    await store.getState().openWorktree("/project");
+    git.resolveDelayed({ stdout: "worktree /chat\n", stderr: "" });
+    await opening;
+    expect(store.getState().chatTarget).toBeNull();
+    expect(store.getState().projectRoot).toBe("/project");
+  });
+
   it("discovers and persists the pull request associated with a chat checkout", async () => {
     const git = new MockGit();
     const github = new MockGithub();

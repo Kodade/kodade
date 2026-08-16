@@ -607,6 +607,25 @@ describe("ChatPane", () => {
     expect(host.querySelector('[data-testid="chat-edited-files"]')).toBeNull();
   });
 
+  it("offers chat Review when the registered root is clean", async () => {
+    const cleanGit = new MockGit();
+    const workingTree = makeWorkingTreeStore(cleanGit);
+    const review = makeReviewStore();
+    const { host, root, projectsStore, chatThreadsStore, projectId } = await mount({ workingTree, review });
+    mounted = root;
+    const threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+    await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+    chatThreadsStore.getState().setReviewTarget(threadId, {
+      threadId, executionRoot: "/repos/alpha", baselineSha: "base", branch: "main",
+      sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null,
+    });
+    await act(async () => await Promise.resolve());
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="chat-review-target"]')!;
+    expect(button).not.toBeNull();
+    await act(async () => button.click());
+    expect(filesStore.getState().activeTab).toEqual({ kind: "review" });
+  });
+
   it("keeps a prior card from surviving a current working-tree read failure", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: "1\t0\tsrc/a.ts\0", stderr: "" });
