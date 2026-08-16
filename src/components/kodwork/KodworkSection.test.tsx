@@ -1,12 +1,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createActivityModule } from "../../activity/activity";
 import { newTask } from "../../kodwork/model";
 import type { KodworkState } from "../../kodwork/store";
+import { filesStore } from "../../store/appStore";
 import type { ProjectsState } from "../../store/projects";
 import { KodworkSection } from "./KodworkSection";
+import { KodworkPane } from "./KodworkPane";
 
 function stores() {
   const projects = createStore(() => ({
@@ -46,6 +48,7 @@ afterEach(() => {
   if (mounted) act(() => mounted?.unmount());
   mounted = null;
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 describe("KodworkSection", () => {
@@ -109,6 +112,89 @@ describe("KodworkSection", () => {
 
     expect(host.querySelector<HTMLButtonElement>('button[aria-label="New KödWork task"]')?.disabled).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Target project"]')?.value).toBe("");
+  });
+
+  it("creates and focuses a draft in the selected target project", async () => {
+    let projects: StoreApi<ProjectsState>;
+    const setActiveProject = vi.fn(async (projectId: string) => {
+      projects.setState({ activeProjectId: projectId });
+    });
+    const addWorkSession = vi.fn((projectId: string) => {
+      projects.setState((state) => ({
+        sessions: [
+          ...state.sessions,
+          { id: "draft", projectId, name: "work", kind: "work" as const },
+        ],
+      }));
+      return "draft";
+    });
+    projects = createStore(() => ({
+      projects: [
+        { id: "p1", name: "kodade", path: "/repo" },
+        { id: "p2", name: "archive", path: "/archive" },
+      ],
+      sessions: [],
+      expandedProjects: {},
+      activeProjectId: "p1",
+      setActiveProject,
+      addWorkSession,
+    })) as unknown as StoreApi<ProjectsState>;
+    let work: StoreApi<KodworkState>;
+    const openTask = vi.fn(async (taskId: string, projectId: string) => {
+      work.setState({
+        tasks: { [taskId]: newTask(taskId, projectId, "/archive", "claude", 1) },
+      });
+    });
+    work = createStore(() => ({
+      tasks: {},
+      loaded: {},
+      templates: [],
+      templatesLoading: false,
+      templatesError: null,
+      openTask,
+      loadTemplates: vi.fn(),
+    })) as unknown as StoreApi<KodworkState>;
+    filesStore.setState({ rootPath: "/archive" });
+    vi.spyOn(filesStore.getState(), "openKodworkTab").mockImplementation(() => undefined);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+
+    act(() =>
+      mounted?.render(
+        <>
+          <KodworkSection
+            projectsStore={projects}
+            workStore={work}
+            activity={createActivityModule()}
+          />
+          <KodworkPane taskId="draft" workStore={work} />
+        </>,
+      ),
+    );
+    const target = host.querySelector<HTMLSelectElement>('select[aria-label="Target project"]')!;
+    act(() => {
+      target.value = "p2";
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="New KödWork task"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(setActiveProject).toHaveBeenCalledWith("p2");
+    expect(addWorkSession).toHaveBeenCalledWith("p2");
+    expect(projects.getState().sessions.find((session) => session.id === "draft")?.projectId).toBe("p2");
+    expect(work.getState().tasks.draft?.projectId).toBe("p2");
+    expect(document.activeElement).toBe(
+      host.querySelector('[data-voice-target="kodwork-outcome"]'),
+    );
   });
 
   it("adopts the active project when projects finish loading", () => {
