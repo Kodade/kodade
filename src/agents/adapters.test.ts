@@ -83,7 +83,7 @@ describe("claude dialect", () => {
   it("does not treat a provider result as process completion", () => {
     const adapter = adapterFor("claude");
     if (!adapter) throw new Error("Claude adapter missing");
-    const parser = adapter.createParser();
+    const parser = adapter.createParser({ providerResultIsTerminal: false });
     const result = CLAUDE_TOOL_TURN.flatMap((line) => parser.line(line));
     const done = result.filter((e) => e.type === "done");
     expect(done).toHaveLength(0);
@@ -138,12 +138,13 @@ describe("claude dialect", () => {
   });
 
   it("preserves a nonzero native exit failure after a result frame", () => {
-    const events = drain(
-      "claude",
-      [JSON.stringify({ type: "result", session_id: "s1" })],
-      1,
-      "native provider process failed",
-    );
+    const adapter = adapterFor("claude");
+    if (!adapter) throw new Error("Claude adapter missing");
+    const parser = adapter.createParser({ providerResultIsTerminal: false });
+    const events = [
+      ...parser.line(JSON.stringify({ type: "result", session_id: "s1" })),
+      ...parser.end(1, "native provider process failed"),
+    ];
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "error", message: "native provider process failed" }),

@@ -564,7 +564,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       const turn = Number(runId.slice(runId.lastIndexOf("#") + 1));
       const run: Run = {
         runId,
-        parser: adapter.createParser(),
+        parser: adapter.createParser({ providerResultIsTerminal: false }),
         messageEntries: new Map(),
         thinkingEntries: new Map(),
         toolEntries: new Map(),
@@ -1111,7 +1111,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         const runId = `${threadId}#${turn}`;
         const run: Run = {
           runId,
-          parser: adapter.createParser(),
+          parser: adapter.createParser({ providerResultIsTerminal: false }),
           messageEntries: new Map(),
           thinkingEntries: new Map(),
           toolEntries: new Map(),

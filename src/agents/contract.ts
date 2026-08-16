@@ -91,8 +91,14 @@ export interface AgentStreamParser {
   end(code: number | null, stderr: string): AgentStreamEvent[];
 }
 
+export type AgentStreamParserOptions = {
+  // KödChat keeps the native process alive after a provider result so it can
+  // render later frames. Other consumers preserve the CLI's result completion.
+  providerResultIsTerminal?: boolean;
+};
+
 export interface AgentStreamAdapter {
   readonly id: string; // provider id from the catalog
   spawn(request: AgentRunRequest): AgentSpawn;
-  createParser(): AgentStreamParser;
+  createParser(options?: AgentStreamParserOptions): AgentStreamParser;
 }
