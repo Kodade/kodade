@@ -903,7 +903,7 @@ struct AgentExit {
 }
 
 #[derive(Clone, Serialize)]
-struct AgentLiveRun {
+pub struct AgentLiveRun {
     id: String,
 }
 

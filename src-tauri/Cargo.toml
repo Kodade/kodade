@@ -1,6 +1,6 @@
 [package]
 name = "kodade"
-version = "1.7.0"
+version = "1.7.1"
 description = "A custom agentic development environment"
 authors = ["Keith Bloemendaal"]
 license = "Apache-2.0"

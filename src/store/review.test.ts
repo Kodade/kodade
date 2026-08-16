@@ -105,7 +105,7 @@ function makeStore(git: MockGit, watch = new MockWatch(), opts: { maxDiffBytes?:
 }
 
 describe("createReviewStore", () => {
-  it("keeps the execution checkout selected when one alternate worktree exists", async () => {
+  it("keeps the execution checkout selected when no delegated worktree has changes", async () => {
     const git = new MockGit();
     git.responses.set("worktree list --porcelain", { stdout: "worktree /repo\nHEAD a\n\nworktree /repo/delegated\nHEAD b\n", stderr: "" });
     const store = makeStore(git);
@@ -113,6 +113,44 @@ describe("createReviewStore", () => {
     await store.getState().openChatReview(target);
     expect(store.getState().projectRoot).toBe(ROOT);
     expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([null, "/repo/delegated"]);
+  });
+
+  it("defaults a chat review to its only dirty delegated worktree", async () => {
+    const calls: { root: string; args: string[] }[] = [];
+    const git: GitIpc = {
+      async run(root, args) {
+        calls.push({ root, args });
+        if (args[0] === "worktree") {
+          return { stdout: "worktree /repo\nHEAD a\n\nworktree /repo/delegated\nHEAD b\n", stderr: "" };
+        }
+        if (args[0] === "status") {
+          return { stdout: root === "/repo/delegated" ? "1 M. N... 100644 100644 100644 a b src/edited.ts\0" : "", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      },
+    };
+    const store = createReviewStore({ git, watch: new MockWatch(), debounceMs: 0 });
+
+    await store.getState().openChatReview({
+      threadId: "t1",
+      executionRoot: ROOT,
+      baselineSha: "base",
+      branch: "main",
+      sharedCheckout: true,
+      pullRequest: null,
+      selectedWorktreeRoot: null,
+    });
+
+    expect(store.getState().projectRoot).toBe("/repo/delegated");
+    expect(store.getState().chatTarget).toMatchObject({
+      selectedWorktreeRoot: "/repo/delegated",
+      sharedCheckout: false,
+    });
+    expect(calls.filter((call) => call.args[0] === "status").map((call) => call.root)).toEqual([
+      "/repo",
+      "/repo/delegated",
+      "/repo/delegated",
+    ]);
   });
 
   it("does not duplicate a persisted selected worktree when reopening Review", async () => {

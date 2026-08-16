@@ -700,6 +700,7 @@ export function createReviewStore(deps: ReviewDeps) {
       async openChatReview(target) {
         const targetGen = ++targetGeneration;
         let choices = [target];
+        let selected = target;
         try {
           const out = await deps.git.run(target.executionRoot, ["worktree", "list", "--porcelain"]);
           if (targetGen !== targetGeneration) return;
@@ -711,11 +712,34 @@ export function createReviewStore(deps: ReviewDeps) {
             selectedWorktreeRoot: root,
             sharedCheckout: false,
           }))];
+
+          // A chat begins in the registered checkout, but a delegated agent can
+          // leave its edits in a sibling worktree. When that evidence identifies
+          // exactly one dirty sibling and the registered checkout is clean,
+          // select it automatically. Any ambiguity (or an unreadable status)
+          // keeps the captured execution root as the deterministic default.
+          if (!target.selectedWorktreeRoot && roots.length > 0) {
+            const statuses = await Promise.all([
+              deps.git.run(target.executionRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]),
+              ...roots.map((root) =>
+                deps.git.run(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]),
+              ),
+            ]);
+            if (targetGen !== targetGeneration) return;
+            const dirtyRoots = roots.filter((_, index) => statuses[index + 1].stdout.length > 0);
+            if (statuses[0].stdout.length === 0 && dirtyRoots.length === 1) {
+              selected = {
+                ...target,
+                selectedWorktreeRoot: dirtyRoots[0],
+                sharedCheckout: false,
+              };
+            }
+          }
         } catch {
           if (targetGen !== targetGeneration) return;
           // The subsequent load surfaces the actual Git error inline.
         }
-        const selected = await discoverPullRequest(target);
+        selected = await discoverPullRequest(selected);
         if (targetGen !== targetGeneration) return;
         set({
           scope: { kind: "worktree" },

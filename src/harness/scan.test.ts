@@ -187,7 +187,7 @@ describe("scanSubagents", () => {
       scope: "global",
       kind: "subagent",
       container: "dir",
-      path: "/Users/keith/.codex/agents",
+      path: "/home/tester/.codex/agents",
     };
     const entries = [
       dirEntry({ name: "worker.toml", path: `${codexLoc.path}/worker.toml`, isDir: false }),

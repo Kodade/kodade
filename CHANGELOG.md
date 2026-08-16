@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.7.1 - 2026-08-16
+
 - Fixed KödMem settings overflow and added one-time, reviewable consent for
   automatic Claude Code and Codex connector reconciliation on mapped projects.
 - Clarified KödWork's empty state with one explicit project-targeted task
@@ -14,6 +16,12 @@
   tool cards instead of being silently dropped.
 - Added user- and project-scoped Codex custom-agent TOML profiles to the
   KödHarness inventory without exposing them as KödLocal agents.
+
+### Platform status
+
+- macOS Apple Silicon: stable DMG; Developer ID signed, Apple notarized,
+  stapled, and Gatekeeper verified.
+- Windows x64: not packaged or tested for this release.
 
 ## 1.7.0 - 2026-08-14
 
