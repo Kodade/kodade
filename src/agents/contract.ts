@@ -82,14 +82,23 @@ export type AgentSpawn = {
 export interface AgentStreamParser {
   // Parse one raw stdout line into zero or more normalized events.
   line(raw: string): AgentStreamEvent[];
-  // The process exited. Adapters use this to turn a non-zero exit (or stderr
-  // that reads like an auth failure) into a terminal event, and to guarantee
-  // exactly one `done` per run even when the CLI died mid-stream.
+  // A restored transcript can resume midway through one provider message.
+  // Parsers that need an active message id for raw deltas may seed it here.
+  seedMessageId?(messageId: string): void;
+  // The process exited. Adapters can turn a non-zero exit (or stderr that
+  // reads like an auth failure) into transcript events; the store treats this
+  // native exit callback, rather than a provider frame, as terminal.
   end(code: number | null, stderr: string): AgentStreamEvent[];
 }
+
+export type AgentStreamParserOptions = {
+  // KödChat keeps the native process alive after a provider result so it can
+  // render later frames. Other consumers preserve the CLI's result completion.
+  providerResultIsTerminal?: boolean;
+};
 
 export interface AgentStreamAdapter {
   readonly id: string; // provider id from the catalog
   spawn(request: AgentRunRequest): AgentSpawn;
-  createParser(): AgentStreamParser;
+  createParser(options?: AgentStreamParserOptions): AgentStreamParser;
 }

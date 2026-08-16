@@ -39,6 +39,440 @@ async function openThread(store: ReturnType<typeof setup>["store"], provider = "
 }
 
 describe("a turn", () => {
+  it("keeps a Claude run owned after its result, detaches after silence, and resumes on a later event", async () => {
+    let detach: (() => void) | undefined;
+    const { agent, store } = setup({
+      setTimeout: (fn, ms) => {
+        if (ms === 1) detach = fn;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+      streamDetachMs: 1,
+    });
+    await store.getState().start();
+    await openThread(store);
+    await store.getState().send("t1", "keep working");
+
+    agent.emit("t1#1", JSON.stringify({ type: "result", session_id: "s1" }));
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(1);
+
+    detach?.();
+    expect(store.getState().threads.t1.status).toBe("detached");
+
+    agent.emit(
+      "t1#1",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "later", content: [{ type: "text", text: "Still working." }] },
+      }),
+    );
+    expect(store.getState().threads.t1.status).toBe("working");
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Still working." })]),
+    );
+
+    agent.exit("t1#1", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
+  it("keeps ownership after any provider completion frame until native exit", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await openThread(store, "codex");
+    await store.getState().send("t1", "keep ownership");
+
+    agent.emitLines("t1#1", CODEX_TOOL_TURN);
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(1);
+
+    agent.exit("t1#1", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
+  it("adopts a live native run when reopening its thread without starting another", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(0);
+
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "later", content: [{ type: "text", text: "Recovered." }] },
+      }),
+    );
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Recovered." })]),
+    );
+    agent.exit("t1#4", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
+  it("replays a live-run line received before open-thread reconciliation resolves", async () => {
+    const { agent, storage, store } = setup();
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const opened = store.getState().openThread("t1", "p1", "claude");
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Buffered output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await opened;
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Buffered output." })]),
+    );
+  });
+
+  it("replays a live-run line received before startup reconciliation resolves", async () => {
+    const { agent, store } = setup();
+    await openThread(store);
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Startup output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await started;
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Startup output." })]),
+    );
+  });
+
+  it("keeps an unknown live-run line until its thread opens after startup", async () => {
+    const { agent, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(1));
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Unopened output." }] },
+      }),
+    );
+
+    agent.resolveListLive();
+    await started;
+    agent.deferListLive = false;
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Unopened output." })]),
+    );
+  });
+
+  it("keeps a known live-run line after startup until its thread opens", async () => {
+    const { agent, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    await store.getState().start();
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Known output." }] },
+      }),
+    );
+
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Known output." })]),
+    );
+  });
+
+  it("replays and settles a known unopened run after its native exit", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    await store.getState().start();
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Completed output." }] },
+      }),
+    );
+    agent.exit("t1#4", 1, "native provider failed");
+
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Completed output." }),
+        expect.objectContaining({ kind: "error", message: "native provider failed" }),
+      ]),
+    );
+    expect(store.getState().threads.t1.status).toBe("error");
+    await store.getState().flush("t1");
+    expect(parsePersistedThread(storage.docs.get(chatDocName("t1"))!)?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Completed output." }),
+        expect.objectContaining({ kind: "error", message: "native provider failed" }),
+      ]),
+    );
+  });
+
+  it("closes a persisted in-flight tool card after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "tool",
+            id: "tool-card",
+            call: { tool: "Read", args: { file_path: "note.txt" } },
+            outcome: null,
+            providerCallId: "call-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "call-1", content: "done" }],
+        },
+      }),
+    );
+
+    expect(store.getState().threads.t1.entries).toEqual([
+      expect.objectContaining({ id: "tool-card", outcome: { status: "executed", result: "done" } }),
+    ]);
+  });
+
+  it("replaces a persisted in-flight message after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "message",
+            id: "assistant-card",
+            role: "assistant",
+            text: "Partial",
+            conversationId: 0,
+            providerMessageId: "message-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "message-1", content: [{ type: "text", text: "Complete answer." }] },
+      }),
+    );
+
+    const answers = store
+      .getState()
+      .threads.t1.entries.filter((entry) => entry.kind === "message" && entry.role === "assistant");
+    expect(answers).toEqual([
+      expect.objectContaining({ id: "assistant-card", text: "Complete answer." }),
+    ]);
+  });
+
+  it("updates persisted message and thinking entries from raw deltas after reload", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [
+          {
+            kind: "message",
+            id: "assistant-card",
+            role: "assistant",
+            text: "Partial",
+            conversationId: 0,
+            providerMessageId: "message-1",
+          },
+          {
+            kind: "thinking",
+            id: "thinking-card",
+            text: "Reasoning",
+            providerMessageId: "message-1",
+          },
+        ],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " extended" } },
+      }),
+    );
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "thinking_delta", thinking: " extended" },
+        },
+      }),
+    );
+
+    expect(store.getState().threads.t1.entries).toEqual([
+      expect.objectContaining({ id: "assistant-card", text: "Partial extended" }),
+      expect.objectContaining({ id: "thinking-card", text: "Reasoning extended" }),
+    ]);
+  });
+
+  it("does not adopt a run that exits while its live-run snapshot is in flight", async () => {
+    const { agent, storage, store } = setup();
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const opened = store.getState().openThread("t1", "p1", "claude");
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+
+    agent.exit("t1#4", 1, "native process failed");
+    agent.resolveListLive();
+    await opened;
+
+    expect(store.getState().threads.t1.status).toBe("idle");
+    await store.getState().send("t1", "a new turn is safe");
+    expect(agent.starts).toHaveLength(1);
+  });
+
+  it("does not adopt a run that exits while startup reconciliation is in flight", async () => {
+    const { agent, store } = setup();
+    await openThread(store);
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+
+    agent.exit("t1#4", 1, "native process failed");
+    agent.resolveListLive();
+    await started;
+
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
   it("starts a headless run with the adapter's argv and the prompt on stdin", async () => {
     const { agent, store } = setup();
     await store.getState().start();

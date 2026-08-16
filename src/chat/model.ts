@@ -33,13 +33,23 @@ export type ChatEntry =
       // True while the assistant's text is still arriving. Never persisted —
       // a reloaded transcript is by definition settled.
       streaming?: boolean;
+      // Preserved so later authoritative provider output replaces this bubble.
+      providerMessageId?: string;
     }
-  | { kind: "thinking"; id: string; text: string }
+  | {
+      kind: "thinking";
+      id: string;
+      text: string;
+      // Preserved so raw provider thinking deltas update this entry on reload.
+      providerMessageId?: string;
+    }
   | {
       kind: "tool";
       id: string;
       call: ToolCall;
       outcome: ToolOutcome | null; // null while the tool is still running
+      // Preserved so a later provider result closes this existing tool card.
+      providerCallId?: string;
     }
   | { kind: "plan"; id: string; items: AgentPlanItem[] }
   | {
@@ -51,7 +61,7 @@ export type ChatEntry =
       auth?: boolean;
     };
 
-export type ChatThreadStatus = "idle" | "working" | "error";
+export type ChatThreadStatus = "idle" | "working" | "detached" | "error";
 
 export type ChatThread = {
   id: string; // the SessionMeta id — a thread IS a session of kind "chat"
@@ -195,6 +205,7 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
               role: entry.role,
               text: entry.text,
               conversationId: entry.conversationId,
+              providerMessageId: entry.providerMessageId,
             }
           : entry,
       ),
@@ -263,11 +274,27 @@ function parseEntry(value: unknown, fallbackConversationId = 0): ChatEntry | nul
       entry.conversationId >= 0
         ? entry.conversationId
         : fallbackConversationId;
-    return { kind: "message", id, role, text: entry.text, conversationId };
+    return {
+      kind: "message",
+      id,
+      role,
+      text: entry.text,
+      conversationId,
+      ...(typeof entry.providerMessageId === "string"
+        ? { providerMessageId: entry.providerMessageId }
+        : {}),
+    };
   }
   if (entry.kind === "thinking") {
     return typeof entry.text === "string"
-      ? { kind: "thinking", id, text: entry.text }
+      ? {
+          kind: "thinking",
+          id,
+          text: entry.text,
+          ...(typeof entry.providerMessageId === "string"
+            ? { providerMessageId: entry.providerMessageId }
+            : {}),
+        }
       : null;
   }
   if (entry.kind === "tool") {
@@ -278,6 +305,9 @@ function parseEntry(value: unknown, fallbackConversationId = 0): ChatEntry | nul
       id,
       call: { tool: call.tool, args: (call.args ?? {}) as Record<string, unknown> },
       outcome: (entry.outcome as ToolOutcome | null) ?? null,
+      ...(typeof entry.providerCallId === "string"
+        ? { providerCallId: entry.providerCallId }
+        : {}),
     };
   }
   if (entry.kind === "plan") {

@@ -18,6 +18,7 @@ export const CMD = {
   agentSend: "agent_send",
   agentEnd: "agent_end",
   agentCancel: "agent_cancel",
+  agentListLive: "agent_list_live",
   isDir: "fs_is_dir",
   canonicalize: "fs_canonicalize",
   listDir: "fs_list_dir",
@@ -200,6 +201,10 @@ export type AgentSendArgs = {
 export type AgentCancelArgs = {
   id: string;
 };
+
+// Native process liveness is authoritative: this list survives a webview
+// reload so KödChat can reclaim a still-running provider turn.
+export type AgentLiveRun = { id: string };
 
 // One raw stdout line. Parsing is entirely the adapter's job.
 export type AgentEvent = {
@@ -520,6 +525,7 @@ export interface AgentIpc {
   send(args: AgentSendArgs): Promise<void>;
   end?(args: AgentCancelArgs): Promise<void>;
   cancel(args: AgentCancelArgs): Promise<void>;
+  listLive(): Promise<AgentLiveRun[]>;
   onEvent(handler: (e: AgentEvent) => void): Promise<Unlisten>;
   onExit(handler: (e: AgentExitEvent) => void): Promise<Unlisten>;
 }

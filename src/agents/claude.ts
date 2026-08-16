@@ -17,6 +17,7 @@ import type {
   AgentStreamAdapter,
   AgentStreamEvent,
   AgentStreamParser,
+  AgentStreamParserOptions,
 } from "./contract";
 import {
   buildAgentSpawn,
@@ -38,9 +39,16 @@ import type { ClaudePermissionRequest } from "./claude-input";
 class ClaudeParser implements AgentStreamParser {
   private messageId = "";
   private done = false;
+  private deferredFailure: AgentStreamEvent | null = null;
   // Content-block index → what kind of block it is, so a delta can be routed
   // without re-reading the block's start frame.
   private blocks = new Map<number, "text" | "thinking" | "tool_use">();
+
+  constructor(private readonly providerResultIsTerminal: boolean) {}
+
+  seedMessageId(messageId: string) {
+    this.messageId = messageId;
+  }
 
   line(raw: string): AgentStreamEvent[] {
     const value = parseJsonLine(raw);
@@ -89,7 +97,10 @@ class ClaudeParser implements AgentStreamParser {
   }
 
   end(code: number | null, stderr: string): AgentStreamEvent[] {
-    return endOfRunEvents(this.done, code, stderr);
+    return [
+      ...(this.deferredFailure ? [this.deferredFailure] : []),
+      ...endOfRunEvents(this.done, code, stderr),
+    ];
   }
 
   // `system/init` announces the session id that `--resume` needs next turn.
@@ -204,10 +215,11 @@ class ClaudeParser implements AgentStreamParser {
     return events;
   }
 
-  // The single terminal frame. `is_error` covers refusals, permission denials,
-  // and auth failures alike, so route its message through the shared classifier.
+  // Claude can report a `result` before its process has retired (notably while
+  // delegated work is still active). It is provider output, not process exit;
+  // native exit remains the only terminal signal for KödChat ownership.
   private result(value: Json): AgentStreamEvent[] {
-    this.done = true;
+    this.done = this.providerResultIsTerminal;
     const events: AgentStreamEvent[] = [];
     const sessionId = asString(value.session_id);
     if (sessionId) events.push({ type: "session", sessionId });
@@ -226,14 +238,18 @@ class ClaudeParser implements AgentStreamParser {
     if (value.is_error === true) {
       const message =
         asString(value.result) ?? asString(value.subtype) ?? "the agent reported an error";
-      events.push(failureEvent(message));
+      const failure = failureEvent(message);
+      if (this.providerResultIsTerminal) events.push(failure);
+      else this.deferredFailure = failure;
     }
-    const usage = tokenUsageFromRecord(value.usage);
-    events.push({
-      type: "done",
-      ...(asString(value.stop_reason) ? { finishReason: asString(value.stop_reason)! } : {}),
-      ...(usage ? { usage } : {}),
-    });
+    if (this.providerResultIsTerminal) {
+      const usage = tokenUsageFromRecord(value.usage);
+      events.push({
+        type: "done",
+        ...(asString(value.stop_reason) ? { finishReason: asString(value.stop_reason)! } : {}),
+        ...(usage ? { usage } : {}),
+      });
+    }
     return events;
   }
 }
@@ -246,6 +262,7 @@ export function createClaudeAdapter(
     id: provider.id,
     spawn: (request: AgentRunRequest): AgentSpawn =>
       buildAgentSpawn(provider, stream, request),
-    createParser: () => new ClaudeParser(),
+    createParser: (options?: AgentStreamParserOptions) =>
+      new ClaudeParser(options?.providerResultIsTerminal ?? true),
   };
 }

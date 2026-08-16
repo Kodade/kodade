@@ -6,6 +6,8 @@
   automatic Claude Code and Codex connector reconciliation on mapped projects.
 - Clarified KödWork's empty state with one explicit project-targeted task
   action while keeping populated views focused on projects with actual work.
+- Kept KödChat ownership tied to the native provider process, including clear
+  detached-stream status and recovery when Claude output resumes.
 - Fixed Codex collaboration activity emitted by the CLI to appear in KödChat
   tool cards instead of being silently dropped.
 - Added user- and project-scoped Codex custom-agent TOML profiles to the
