@@ -88,6 +88,38 @@ describe("KodworkSection", () => {
     expect(target?.className).toContain("min-w-0");
   });
 
+  it("keeps target controls on one non-overflowing row in a narrow sidebar", () => {
+    const projects = createStore(() => ({
+      projects: [{ id: "p1", name: "A very long project name", path: "/repo" }],
+      sessions: [],
+      expandedProjects: {},
+      activeProjectId: "p1",
+    })) as unknown as StoreApi<ProjectsState>;
+    const work = createStore(() => ({ tasks: {}, loaded: {} })) as unknown as StoreApi<KodworkState>;
+    const host = document.createElement("div");
+    host.style.width = "180px";
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+
+    act(() =>
+      mounted?.render(
+        <KodworkSection
+          projectsStore={projects}
+          workStore={work}
+          activity={createActivityModule()}
+        />,
+      ),
+    );
+
+    const header = host.querySelector('[data-testid="kodwork-header"]');
+    const controls = host.querySelector('[data-testid="kodwork-controls"]');
+    expect(header?.className).toContain("grid");
+    expect(controls?.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(controls?.querySelectorAll("select, button")).toHaveLength(2);
+    expect(controls?.querySelector("select")?.className).toContain("w-full");
+    expect(controls?.querySelector("button")?.className).toContain("shrink-0");
+  });
+
   it("requires a target-project selection when no project is active", () => {
     const projects = createStore(() => ({
       projects: [{ id: "p1", name: "kodade", path: "/repo" }],

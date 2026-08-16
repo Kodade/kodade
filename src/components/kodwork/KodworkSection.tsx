@@ -92,39 +92,47 @@ export function KodworkSection({
 
   return (
     <section className="mb-4" aria-label="KödWork tasks" data-testid="kodwork-tasks">
-      <div className="flex min-w-0 flex-wrap items-center gap-1 px-1">
-        <h2 className="mr-auto text-[11px] font-semibold tracking-[0.14em] text-text-dim">
+      <div
+        data-testid="kodwork-header"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-1 gap-y-0.5 px-1"
+      >
+        <h2 className="col-span-2 text-[11px] font-semibold tracking-[0.14em] text-text-dim">
           KödWork
         </h2>
-        <select
-          aria-label="Target project"
-          value={targetProjectId}
-          onChange={(event) => setTargetProjectId(event.target.value)}
-          className="min-w-0 max-w-32 truncate rounded bg-surface px-1 py-0.5 text-[10px] text-text-dim focus:outline-none focus:ring-1 focus:ring-accent"
+        <div
+          data-testid="kodwork-controls"
+          className="col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-1"
         >
-          <option value="">Choose project</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.name}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          aria-label="New KödWork task"
-          title={targetProject ? "New KödWork task" : "Choose a project first"}
-          disabled={!targetProject}
-          onClick={() =>
-            targetProject && void newTask(
-              projectsStore,
-              workStore,
-              targetProject.id,
-              targetProject.path,
-            )
-          }
-          className="flex h-5 shrink-0 items-center rounded px-1.5 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent"
-        >
-          <span aria-hidden="true" className="mr-0.5 text-sm leading-none">+</span>
-          New task
-        </button>
+          <select
+            aria-label="Target project"
+            value={targetProjectId}
+            onChange={(event) => setTargetProjectId(event.target.value)}
+            className="min-w-0 w-full truncate rounded bg-surface px-1 py-0.5 text-[10px] text-text-dim focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">Choose project</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>{project.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-label="New KödWork task"
+            title={targetProject ? "New KödWork task" : "Choose a project first"}
+            disabled={!targetProject}
+            onClick={() =>
+              targetProject && void newTask(
+                projectsStore,
+                workStore,
+                targetProject.id,
+                targetProject.path,
+              )
+            }
+            className="flex h-5 shrink-0 items-center rounded px-1.5 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <span aria-hidden="true" className="mr-0.5 text-sm leading-none">+</span>
+            New task
+          </button>
+        </div>
       </div>
       {taskProjects.length === 0 ? (
         <p className="mt-1 px-1 text-[11px] leading-relaxed text-text-dim">
