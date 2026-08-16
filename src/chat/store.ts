@@ -138,6 +138,7 @@ const DEFAULT_PERSIST_DEBOUNCE_MS = 400;
 const DEFAULT_STREAM_DETACH_MS = 15_000;
 const MAX_BUFFERED_NATIVE_LINES = 256;
 const MAX_BUFFERED_NATIVE_RUNS = 32;
+const MAX_COMPLETED_NATIVE_RUNS = 32;
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_MODEL_DISCOVERY_LINES = 2_048;
 const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
@@ -216,6 +217,10 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   const turns = new Map<string, number>();
   const nativeLiveRunIds = new Set<string>();
   const bufferedNativeLines = new Map<string, string[]>();
+  const completedNativeRuns = new Map<
+    string,
+    { lines: string[]; code: number | null; stderr: string }
+  >();
   let liveRunReconciliations = 0;
   // A list snapshot can resolve after its process has exited. Keep that exit
   // fact until a newer snapshot omits the id, so stale data cannot re-adopt it.
@@ -575,6 +580,23 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       replayBufferedLines(threadId, run);
     };
 
+    const replayCompletedRun = (threadId: string) => {
+      const completed = [...completedNativeRuns.entries()].find(
+        ([runId]) => threadIdOfRun(runId) === threadId,
+      );
+      if (!completed) return;
+      const [runId, exit] = completed;
+      bufferedNativeLines.set(runId, exit.lines);
+      adoptLiveRun(threadId, runId);
+      const run = runs.get(threadId);
+      if (!run || run.runId !== runId) return;
+      completedNativeRuns.delete(runId);
+      if (run.parser) {
+        for (const event of run.parser.end(exit.code, exit.stderr)) applyEvent(threadId, run, event);
+      }
+      settle(threadId, run);
+    };
+
     const reconcileLiveRun = async (threadId: string) => {
       liveRunReconciliations++;
       try {
@@ -619,7 +641,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     };
 
     const onExit = (runId: string, code: number | null, stderr: string) => {
-      nativeLiveRunIds.delete(runId);
+      const wasLive = nativeLiveRunIds.delete(runId);
       exitedNativeRunIds.add(runId);
       const discovery = modelDiscoveryRuns.get(runId);
       if (discovery) {
@@ -649,7 +671,17 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       }
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
       const run = runs.get(threadId);
-      if (!run || run.runId !== runId) return;
+      if (!run || run.runId !== runId) {
+        const lines = bufferedNativeLines.get(runId) ?? [];
+        bufferedNativeLines.delete(runId);
+        if (wasLive || lines.length) {
+          if (!completedNativeRuns.has(runId) && completedNativeRuns.size === MAX_COMPLETED_NATIVE_RUNS) {
+            completedNativeRuns.delete(completedNativeRuns.keys().next().value!);
+          }
+          completedNativeRuns.set(runId, { lines, code, stderr });
+        }
+        return;
+      }
       if (run.parser) {
         for (const event of run.parser.end(code, stderr)) applyEvent(threadId, run, event);
       }
@@ -749,6 +781,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           }
         }
         await reconcileLiveRun(threadId);
+        replayCompletedRun(threadId);
       },
 
       setProvider(threadId: string, providerId: string) {

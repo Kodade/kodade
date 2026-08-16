@@ -237,6 +237,36 @@ describe("a turn", () => {
     );
   });
 
+  it("replays and settles a known unopened run after its native exit", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    await store.getState().start();
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "late", content: [{ type: "text", text: "Completed output." }] },
+      }),
+    );
+    agent.exit("t1#4", 1, "native provider failed");
+
+    await openThread(store);
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Completed output." }),
+        expect.objectContaining({ kind: "error", message: "native provider failed" }),
+      ]),
+    );
+    expect(store.getState().threads.t1.status).toBe("error");
+    await store.getState().flush("t1");
+    expect(parsePersistedThread(storage.docs.get(chatDocName("t1"))!)?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Completed output." }),
+        expect.objectContaining({ kind: "error", message: "native provider failed" }),
+      ]),
+    );
+  });
+
   it("closes a persisted in-flight tool card after reload", async () => {
     const { agent, storage, store } = setup();
     agent.liveRunIds = ["t1#4"];
