@@ -54,7 +54,7 @@ function storeWith(numstatOut: string, diffs: Record<string, string> = {}) {
   const git = new MockGit();
   git.responses.set("diff --numstat -z", { stdout: numstatOut, stderr: "" });
   for (const [path, out] of Object.entries(diffs)) {
-    git.responses.set(`diff --no-color -- ${path}`, { stdout: out, stderr: "" });
+    git.responses.set(`diff --no-color HEAD -- ${path}`, { stdout: out, stderr: "" });
   }
   return { git, store: createReviewStore({ git, watch: new MockWatch(), debounceMs: 0 }) };
 }

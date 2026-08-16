@@ -6,6 +6,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { GitIpc } from "../ipc/contract";
 import { parseNumstat } from "../review/parse";
+import { parseUnifiedDiff } from "../review/parse";
 
 export type WorkingTreeSummary = {
   files: number;
@@ -55,7 +56,7 @@ export function createWorkingTreeSummaryStore(
       });
 
       try {
-        const output = await git.run(projectRoot, ["diff", "--numstat", "-z"]);
+        const output = await git.run(projectRoot, ["diff", "--numstat", "-z", "HEAD"]);
         if (currentGeneration !== generation) return;
         const parsed = parseNumstat(output.stdout);
         const summary = parsed.items.reduce<WorkingTreeSummary>(
@@ -66,6 +67,21 @@ export function createWorkingTreeSummaryStore(
           }),
           { files: 0, adds: 0, dels: 0 },
         );
+        const status = await git.run(projectRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+        if (currentGeneration !== generation) return;
+        for (const record of status.stdout.split("\0")) {
+          if (!record.startsWith("? ")) continue;
+          const path = record.slice(2);
+          if (!path || path.startsWith("/") || path.split(/[\\/]/).includes("..")) continue;
+          const untracked = await git.run(projectRoot, ["diff", "--no-index", "--no-color", "--", "/dev/null", path]);
+          if (currentGeneration !== generation) return;
+          const file = parseUnifiedDiff(untracked.stdout).items[0];
+          if (file) {
+            summary.files++;
+            summary.adds += file.adds;
+            summary.dels += file.dels;
+          }
+        }
         set({ summary, loading: false, loaded: true, error: null });
       } catch (error) {
         if (currentGeneration !== generation) return;

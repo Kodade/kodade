@@ -21,7 +21,7 @@ import {
 import type { ChatMessage } from "../inference/backend";
 import type { AgentStreamAdapter, AgentStreamEvent } from "../agents/contract";
 import { adapterFor } from "../agents/registry";
-import type { AgentIpc, StorageIpc, Unlisten } from "../ipc/contract";
+import type { AgentIpc, GitIpc, StorageIpc, Unlisten } from "../ipc/contract";
 import { boundProviderMemory } from "../memory/provider-context";
 import { buildRemoteAgentSpawn } from "../ssh/command";
 import type { RemoteTarget } from "../ssh/model";
@@ -34,6 +34,7 @@ import {
   toPersistedThread,
   type ChatEntry,
   type ChatThread,
+  type ChatReviewTarget,
 } from "./model";
 import {
   OLLAMA_UNAVAILABLE_MESSAGE,
@@ -52,6 +53,8 @@ export type ChatActivityHooks = {
 export type ChatDeps = {
   agent: AgentIpc;
   storage: StorageIpc;
+  // Read-only Git seam used to capture the review baseline before a local run.
+  git?: GitIpc;
   // Resolve a thread's project root at send time (projects are renameable and
   // removable, so this is read fresh rather than copied into the thread).
   projectRoot(projectId: string): string | null;
@@ -122,6 +125,7 @@ export type ChatState = {
   // The thread's thinking level (null = the CLI's default effort).
   setThinking(threadId: string, thinking: string | null): void;
   setSpeed(threadId: string, speed: ChatSpeed): void;
+  setReviewTarget(threadId: string, target: ChatReviewTarget): void;
   refreshOllama(): Promise<void>;
   refreshProviderModels(providerId: string, projectId?: string): Promise<void>;
   // Send one user message and run a turn. Resolves once the run has STARTED —
@@ -245,6 +249,40 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   let writeChain: Promise<void> = Promise.resolve();
 
   const store = createStore<ChatState>((set, get) => {
+    const captureReviewTarget = async (threadId: string, projectRoot: string) => {
+      const existing = get().threads[threadId]?.reviewTarget;
+      if (existing || !deps.git) return;
+      let baselineSha: string | null = null;
+      let branch: string | null = null;
+      try {
+        const head = await deps.git.run(projectRoot, ["rev-parse", "--verify", "HEAD"]);
+        baselineSha = head.stdout.trim() || null;
+      } catch {
+        // Non-Git folders remain usable chats; Review will show its normal error.
+      }
+      try {
+        const current = await deps.git.run(projectRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+        branch = current.stdout.trim() || null;
+      } catch {
+        // Detached HEAD and non-Git folders have no branch provenance.
+      }
+      patch(threadId, (thread) =>
+        thread.reviewTarget
+          ? thread
+          : {
+              ...thread,
+              reviewTarget: {
+                threadId,
+                executionRoot: projectRoot,
+                baselineSha,
+                branch,
+                sharedCheckout: true,
+                pullRequest: null,
+                selectedWorktreeRoot: null,
+              },
+            },
+      );
+    };
     const persistNow = (threadId: string): Promise<void> => {
       const thread = get().threads[threadId];
       if (!thread) return Promise.resolve();
@@ -773,6 +811,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               speed: supportsSpeed(doc.providerId, doc.speed)
                 ? doc.speed
                 : DEFAULT_CHAT_SPEED,
+              reviewTarget: doc.reviewTarget,
               entries: doc.entries,
             }));
             if (doc.providerId === "ollama") void get().refreshOllama();
@@ -851,6 +890,11 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             ? { ...thread, speed }
             : thread,
         );
+        persistDebounced(threadId);
+      },
+
+      setReviewTarget(threadId: string, target: ChatReviewTarget) {
+        patch(threadId, (thread) => ({ ...thread, reviewTarget: target }));
         persistDebounced(threadId);
       },
 
@@ -1104,6 +1148,11 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         const remoteTarget = deps.remoteTarget?.(thread.projectId) ?? null;
         const projectRoot = localRoot;
         if (projectRoot === null && remoteTarget === null) return;
+        // Capture before spawning: the review baseline is the checkout state
+        // the agent actually received, never a moving default branch later on.
+        if (projectRoot) await captureReviewTarget(threadId, projectRoot);
+        const currentThread = get().threads[threadId];
+        if (!currentThread || runs.has(threadId)) return;
         const cwd = remoteTarget ? "" : projectRoot!;
 
         const turn = (turns.get(threadId) ?? 0) + 1;
@@ -1115,7 +1164,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           messageEntries: new Map(),
           thinkingEntries: new Map(),
           toolEntries: new Map(),
-          conversationId: thread.conversationId,
+          conversationId: currentThread.conversationId,
           turn,
         };
         runs.set(threadId, run);
@@ -1123,13 +1172,13 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         armDetachTimer(threadId, run);
 
         // The first message names the thread; read that BEFORE appending it.
-        const firstMessage = !thread.entries.some((entry) => entry.kind === "message");
+        const firstMessage = !currentThread.entries.some((entry) => entry.kind === "message");
         appendEntry(threadId, {
           kind: "message",
           id: newId(),
           role: "user",
           text: prompt,
-          conversationId: thread.conversationId,
+          conversationId: currentThread.conversationId,
         });
         patch(threadId, (current) => ({
           ...current,
@@ -1137,18 +1186,18 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           needsLogin: false,
           title: firstMessage ? titleFromMessage(prompt) : current.title,
         }));
-        deps.activity?.attention?.(thread.projectId, threadId, null);
-        deps.activity?.streamed?.(thread.projectId, threadId);
+        deps.activity?.attention?.(currentThread.projectId, threadId, null);
+        deps.activity?.streamed?.(currentThread.projectId, threadId);
         void persistNow(threadId);
 
         const spawn = adapter.spawn({
           prompt: promptWithMemory(prompt, projectMemory),
           cwd: remoteTarget?.path ?? projectRoot!,
-          resumeId: thread.resumeId,
-          model: thread.model,
-          access: thread.access,
-          thinking: thread.thinking,
-          speed: thread.speed,
+          resumeId: currentThread.resumeId,
+          model: currentThread.model,
+          access: currentThread.access,
+          thinking: currentThread.thinking,
+          speed: currentThread.speed,
         });
         const process = remoteTarget
           ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)

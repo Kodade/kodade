@@ -3,7 +3,7 @@
 // the exact git argv shapes run (MockGit records every call) so the allowlist
 // contract with Rust can't drift silently.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockGit } from "../ipc/mock";
 import type { FsChangedEvent, GhOutput, GitIpc, GitOutput, GithubIpc, Unlisten } from "../ipc/contract";
 import { createReviewStore } from "./review";
@@ -105,6 +105,119 @@ function makeStore(git: MockGit, watch = new MockWatch(), opts: { maxDiffBytes?:
 }
 
 describe("createReviewStore", () => {
+  it("keeps the execution checkout selected when one alternate worktree exists", async () => {
+    const git = new MockGit();
+    git.responses.set("worktree list --porcelain", { stdout: "worktree /repo\nHEAD a\n\nworktree /repo/delegated\nHEAD b\n", stderr: "" });
+    const store = makeStore(git);
+    const target = { threadId: "t1", executionRoot: ROOT, baselineSha: "base", branch: "main", sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null };
+    await store.getState().openChatReview(target);
+    expect(store.getState().projectRoot).toBe(ROOT);
+    expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([null, "/repo/delegated"]);
+  });
+
+  it("does not duplicate a persisted selected worktree when reopening Review", async () => {
+    const git = new MockGit();
+    git.responses.set("worktree list --porcelain", { stdout: "worktree /repo\nHEAD a\n\nworktree /repo/delegated\nHEAD b\n", stderr: "" });
+    const store = makeStore(git);
+    await store.getState().openChatReview({ threadId: "t1", executionRoot: ROOT, baselineSha: "base", branch: "main", sharedCheckout: false, pullRequest: null, selectedWorktreeRoot: "/repo/delegated" });
+    expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([]);
+  });
+
+  it("does not let delayed worktree discovery replace a newer selected target", async () => {
+    const git = new DelayableGit();
+    git.delay("worktree list --porcelain");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    const first = { threadId: "first", executionRoot: "/first", baselineSha: null, branch: null, sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null };
+    const newer = { threadId: "newer", executionRoot: "/newer", baselineSha: null, branch: null, sharedCheckout: false, pullRequest: null, selectedWorktreeRoot: "/newer/work" };
+    const opening = store.getState().openChatReview(first);
+    await Promise.resolve();
+    await store.getState().selectChatTarget(newer);
+    git.resolveDelayed({ stdout: "worktree /first\n", stderr: "" });
+    await opening;
+    expect(store.getState().chatTarget?.threadId).toBe("newer");
+    expect(store.getState().projectRoot).toBe("/newer/work");
+  });
+
+  it("does not let delayed chat discovery replace project-wide review", async () => {
+    const git = new DelayableGit();
+    git.delay("worktree list --porcelain");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    const opening = store.getState().openChatReview({ threadId: "t", executionRoot: "/chat", baselineSha: null, branch: null, sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null });
+    await Promise.resolve();
+    await store.getState().openWorktree("/project");
+    git.resolveDelayed({ stdout: "worktree /chat\n", stderr: "" });
+    await opening;
+    expect(store.getState().chatTarget).toBeNull();
+    expect(store.getState().projectRoot).toBe("/project");
+  });
+
+  it("does not let delayed chat discovery replace an explicit branch or PR scope", async () => {
+    for (const scope of [{ kind: "branch" as const, base: "main" }, { kind: "pr" as const, number: 7 }]) {
+      const git = new DelayableGit();
+      git.delay("worktree list --porcelain");
+      const store = createReviewStore({ git, watch: new MockWatch() });
+      store.setState({ projectRoot: ROOT });
+      const opening = store.getState().openChatReview({ threadId: "t", executionRoot: "/chat", baselineSha: null, branch: null, sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null });
+      await Promise.resolve();
+      await store.getState().setScope(scope);
+      git.resolveDelayed({ stdout: "worktree /chat\n", stderr: "" });
+      await opening;
+      expect(store.getState().scope).toEqual(scope);
+    }
+  });
+
+  it("discovers and persists the pull request associated with a chat checkout", async () => {
+    const git = new MockGit();
+    const github = new MockGithub();
+    github.responses.set("pr view --json", {
+      stdout: JSON.stringify({
+        number: 42,
+        title: "Chat work",
+        author: { login: "keith" },
+        state: "OPEN",
+        url: "https://github.com/Kodade/kodade/pull/42",
+        statusCheckRollup: [],
+      }),
+      stderr: "",
+    });
+    const selected: unknown[] = [];
+    const store = createReviewStore({
+      git,
+      github,
+      watch: new MockWatch(),
+      onChatTargetSelected: (target) => selected.push(target),
+    });
+    const target = {
+      threadId: "t1",
+      executionRoot: ROOT,
+      baselineSha: "base",
+      branch: "feature/chat",
+      sharedCheckout: true,
+      pullRequest: null,
+      selectedWorktreeRoot: null,
+    };
+
+    await store.getState().openChatReview(target);
+
+    expect(store.getState().chatTarget?.pullRequest).toBe(42);
+    expect(selected.at(-1)).toMatchObject({ pullRequest: 42 });
+    expect(github.calls[0]).toEqual([
+      "pr",
+      "view",
+      "--json",
+      "number,title,author,state,url,statusCheckRollup",
+    ]);
+  });
+
+  it("uses a chat's captured baseline for branch review", async () => {
+    const git = new MockGit();
+    git.responses.set("merge-base base HEAD", { stdout: "base\n", stderr: "" });
+    git.responses.set("rev-parse --abbrev-ref HEAD", { stdout: "feature\n", stderr: "" });
+    const store = makeStore(git);
+    store.setState({ projectRoot: ROOT, chatTarget: { threadId: "t1", executionRoot: ROOT, baselineSha: "base", branch: "feature", sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null } });
+    await store.getState().setScope({ kind: "branch", base: null });
+    expect(store.getState().branchBase).toBe("base");
+  });
   it("builds the working-tree file list from numstat and runs exactly one allowlisted shape", async () => {
     const git = new MockGit();
     git.responses.set(
@@ -123,7 +236,63 @@ describe("createReviewStore", () => {
     expect(state.files.map((f) => f.path)).toEqual(["src/a.ts", "docs/README.md"]);
     expect(state.totals).toEqual({ files: 2, adds: 13, dels: 2 });
     // The list load runs the plain working-tree numstat and nothing else.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
+  });
+
+  it("includes staged and untracked files exactly once", async () => {
+    const git = new MockGit();
+    git.responses.set("diff --numstat -z HEAD", {
+      stdout: numstat([["2", "1", "src/staged.ts"]]),
+      stderr: "",
+    });
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "? src/new.ts\0",
+      stderr: "",
+    });
+    git.responses.set("diff --no-index --no-color -- /dev/null src/new.ts", {
+      stdout: fileDiff("src/new.ts", "export const added = true;"),
+      stderr: "",
+    });
+    const store = makeStore(git);
+
+    await store.getState().load(ROOT);
+
+    expect(store.getState().files.map((file) => file.path)).toEqual([
+      "src/staged.ts",
+      "src/new.ts",
+    ]);
+    expect(store.getState().totals.files).toBe(2);
+  });
+
+  it("drops stale untracked reads after selecting another review target", async () => {
+    const git = new DelayableGit();
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "? stale.ts\0",
+      stderr: "",
+    });
+    git.delay("diff --no-index --no-color -- /dev/null stale.ts");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+
+    const staleLoad = store.getState().load(ROOT);
+    await vi.waitFor(() =>
+      expect(
+        git.calls.some(
+          (args) =>
+            args.join(" ") ===
+            "diff --no-index --no-color -- /dev/null stale.ts",
+        ),
+      ).toBe(true),
+    );
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "",
+      stderr: "",
+    });
+    await store.getState().load("/other");
+    git.resolveDelayed({ stdout: fileDiff("stale.ts"), stderr: "" });
+    await staleLoad;
+
+    expect(store.getState().projectRoot).toBe("/other");
+    expect(store.getState().files).toEqual([]);
   });
 
   it("treats a clean working tree (empty stdout) as zero files, not an error", async () => {
@@ -151,12 +320,12 @@ describe("createReviewStore", () => {
   it("lazily loads a file's diff on first expand via the per-file allowlisted shape", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["10", "2", "src/a.ts"]]), stderr: "" });
-    git.responses.set("diff --no-color -- src/a.ts", { stdout: fileDiff("src/a.ts"), stderr: "" });
+    git.responses.set("diff --no-color HEAD -- src/a.ts", { stdout: fileDiff("src/a.ts"), stderr: "" });
     const store = makeStore(git);
 
     await store.getState().load(ROOT);
     // No per-file diff runs until a row is expanded.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
 
     await store.getState().toggleFile("src/a.ts");
     const file = store.getState().files.find((f) => f.path === "src/a.ts")!;
@@ -164,15 +333,16 @@ describe("createReviewStore", () => {
     expect(file.diffStatus).toBe("loaded");
     expect(file.diff?.hunks[0].lines.some((l) => l.kind === "add")).toBe(true);
     expect(git.calls).toEqual([
-      ["diff", "--numstat", "-z"],
-      ["diff", "--no-color", "--", "src/a.ts"],
+      ["diff", "--numstat", "-z", "HEAD"],
+      ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+      ["diff", "--no-color", "HEAD", "--", "src/a.ts"],
     ]);
 
     // Collapsing then re-expanding does not refetch the cached diff.
     await store.getState().toggleFile("src/a.ts");
     expect(store.getState().files[0].expanded).toBe(false);
     await store.getState().toggleFile("src/a.ts");
-    expect(git.calls).toHaveLength(2);
+    expect(git.calls).toHaveLength(3);
   });
 
   it("renders a binary file as a stat-only row and never runs a per-file diff for it", async () => {
@@ -188,13 +358,13 @@ describe("createReviewStore", () => {
     await store.getState().toggleFile("img.png");
     expect(store.getState().files[0].diffStatus).toBe("binary");
     // Only the numstat ran — no diff for the binary file.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
   });
 
   it("flips an oversized per-file diff to a stat-only tooLarge state", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["9000", "0", "big.ts"]]), stderr: "" });
-    git.responses.set("diff --no-color -- big.ts", { stdout: "x".repeat(2000), stderr: "" });
+    git.responses.set("diff --no-color HEAD -- big.ts", { stdout: "x".repeat(2000), stderr: "" });
     const store = makeStore(git, new MockWatch(), { maxDiffBytes: 1000 });
 
     await store.getState().load(ROOT);
@@ -308,7 +478,8 @@ describe("createReviewStore", () => {
       totals: { files: 1, adds: 4, dels: 1 },
     });
     expect(calls).toEqual([
-      { root: "/current", args: ["diff", "--numstat", "-z"] },
+      { root: "/current", args: ["diff", "--numstat", "-z", "HEAD"] },
+      { root: "/current", args: ["status", "--porcelain=v2", "-z", "--untracked-files=all"] },
     ]);
   });
 });
@@ -354,7 +525,7 @@ describe("createReviewStore — branch scope (M12d)", () => {
     await store.getState().toggleFile("src/a.ts");
     expect(store.getState().files[0].diffStatus).toBe("loaded");
 
-    expect(git.calls.slice(1)).toEqual([
+    expect(git.calls.slice(2)).toEqual([
       ["rev-parse", "--verify", "main"],
       ["merge-base", "main", "HEAD"],
       ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -377,8 +548,8 @@ describe("createReviewStore — branch scope (M12d)", () => {
     const state = store.getState();
     expect(state.error).toBeNull();
     expect(state.branchBase).toBe("main");
-    expect(git.calls[1]).toEqual(["rev-parse", "--verify", "origin/main"]);
-    expect(git.calls[2]).toEqual(["rev-parse", "--verify", "main"]);
+    expect(git.calls[2]).toEqual(["rev-parse", "--verify", "origin/main"]);
+    expect(git.calls[3]).toEqual(["rev-parse", "--verify", "main"]);
   });
 
   it("surfaces an inline error when no default-branch candidate verifies", async () => {

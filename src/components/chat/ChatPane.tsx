@@ -122,7 +122,7 @@ export function ChatPane({
   // cannot disturb whichever branch/PR scope the user left open in KödPR.
   useEffect(() => {
     if (!thread || thread.status !== "idle" || thread.entries.length === 0) return;
-    const root = filesStore.getState().rootPath;
+    const root = thread.reviewTarget?.selectedWorktreeRoot ?? thread.reviewTarget?.executionRoot ?? filesStore.getState().rootPath;
     if (!root) return;
     void workingTree.getState().load(root);
   }, [workingTree, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
@@ -130,7 +130,7 @@ export function ChatPane({
   const showWorkingTreeSummary =
     !!thread &&
     thread.status === "idle" &&
-    summaryProjectRoot === filesStore.getState().rootPath &&
+    summaryProjectRoot === (thread?.reviewTarget?.selectedWorktreeRoot ?? thread?.reviewTarget?.executionRoot ?? filesStore.getState().rootPath) &&
     summaryLoaded &&
     !summaryLoading &&
     !summaryError &&
@@ -159,6 +159,14 @@ export function ChatPane({
   }, [threadId]);
 
   const title = thread ? `KödChat — ${thread.title}` : "KödChat";
+
+  const openChatReview = () => {
+    const root = filesStore.getState().rootPath;
+    if (!root || !thread) return;
+    if (thread.reviewTarget) void review.getState().openChatReview(thread.reviewTarget);
+    else void review.getState().openWorktree(root);
+    filesStore.getState().openReviewTab();
+  };
 
   const toggleTerminal = () => {
     if (!activeProjectId || !threadId) return;
@@ -223,13 +231,18 @@ export function ChatPane({
               {showWorkingTreeSummary && (
                 <EditedFilesCard
                   summary={workingTreeSummary}
-                  onReview={() => {
-                    const root = filesStore.getState().rootPath;
-                    if (!root) return;
-                    void review.getState().openWorktree(root);
-                    filesStore.getState().openReviewTab();
-                  }}
+                  onReview={openChatReview}
                 />
+              )}
+              {thread.reviewTarget && !showWorkingTreeSummary && (
+                <button
+                  type="button"
+                  data-testid="chat-review-target"
+                  onClick={openChatReview}
+                  className="mx-3 mb-2 self-start rounded border border-border px-2 py-1 text-xs text-text-dim hover:bg-surface-hover"
+                >
+                  Review this chat’s work
+                </button>
               )}
               <ChatComposer
                 providers={providerList}

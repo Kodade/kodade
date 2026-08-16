@@ -63,6 +63,18 @@ export type ChatEntry =
 
 export type ChatThreadStatus = "idle" | "working" | "detached" | "error";
 
+// The checkout identity a KödChat run started from. It belongs to the
+// transcript because one project can have several chats and worktrees.
+export type ChatReviewTarget = {
+  threadId: string;
+  executionRoot: string;
+  baselineSha: string | null;
+  branch: string | null;
+  sharedCheckout: boolean;
+  pullRequest: number | null;
+  selectedWorktreeRoot: string | null;
+};
+
 export type ChatThread = {
   id: string; // the SessionMeta id — a thread IS a session of kind "chat"
   projectId: string;
@@ -88,6 +100,8 @@ export type ChatThread = {
   // Set when the last run failed on authentication, so the pane can keep
   // offering the login terminal after the run settles.
   needsLogin: boolean;
+  // Optional so transcripts written before chat-owned Review remain readable.
+  reviewTarget?: ChatReviewTarget;
   updatedAt: number;
 };
 
@@ -107,6 +121,7 @@ export type PersistedChatThread = {
   access: ChatAccessLevel;
   thinking: string | null;
   speed: ChatSpeed;
+  reviewTarget?: ChatReviewTarget;
   entries: ChatEntry[];
   updatedAt: number;
 };
@@ -194,6 +209,7 @@ export function toPersistedThread(thread: ChatThread): PersistedChatThread {
     access: thread.access,
     thinking: thread.thinking,
     speed: thread.speed,
+    ...(thread.reviewTarget ? { reviewTarget: thread.reviewTarget } : {}),
     // Runtime-only streaming state never reaches disk.
     entries: thread.entries
       .slice(-MAX_THREAD_ENTRIES)
@@ -255,8 +271,30 @@ export function parsePersistedThread(raw: string): PersistedChatThread | null {
     thinking: typeof doc.thinking === "string" ? doc.thinking : null,
     // Documents predating speed tiers retain normal provider behavior.
     speed: doc.speed === "fast" ? "fast" : DEFAULT_CHAT_SPEED,
+    reviewTarget: parseReviewTarget(doc.reviewTarget, doc.id),
     entries: entries.slice(-MAX_THREAD_ENTRIES),
     updatedAt: typeof doc.updatedAt === "number" ? doc.updatedAt : 0,
+  };
+}
+
+function parseReviewTarget(value: unknown, fallbackThreadId: string): ChatReviewTarget | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const target = value as Record<string, unknown>;
+  if (typeof target.executionRoot !== "string" || target.executionRoot.length === 0) {
+    return undefined;
+  }
+  return {
+    executionRoot: target.executionRoot,
+    threadId: typeof target.threadId === "string" ? target.threadId : fallbackThreadId,
+    baselineSha: typeof target.baselineSha === "string" ? target.baselineSha : null,
+    branch: typeof target.branch === "string" ? target.branch : null,
+    sharedCheckout: target.sharedCheckout !== false,
+    pullRequest:
+      typeof target.pullRequest === "number" && Number.isSafeInteger(target.pullRequest)
+        ? target.pullRequest
+        : null,
+    selectedWorktreeRoot:
+      typeof target.selectedWorktreeRoot === "string" ? target.selectedWorktreeRoot : null,
   };
 }
 

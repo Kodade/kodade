@@ -38,12 +38,18 @@ fn validate_args(args: &[String]) -> Result<(), String> {
                 ("--json", LIST_FIELDS),
             ],
         ),
-        // KödPR PR-review reads (M12). Each takes exactly one PR number (digits
-        // only), so an argument can never smuggle a flag or a second positional.
+        // KödPR PR-review reads (M12). A numbered view reads an explicitly
+        // selected PR; the no-number shape asks gh to resolve the current
+        // checkout's PR for chat-target association. Both keep one exact JSON
+        // field set and accept no arbitrary positionals or flags.
         ("pr", "view") => {
-            let (number, flags) = split_pr_number(rest)?;
-            let _ = number;
-            validate_flags(flags, &[("--json", PR_VIEW_FIELDS)])
+            if rest.first().is_some_and(|arg| arg == "--json") {
+                validate_flags(rest, &[("--json", PR_VIEW_FIELDS)])
+            } else {
+                let (number, flags) = split_pr_number(rest)?;
+                let _ = number;
+                validate_flags(flags, &[("--json", PR_VIEW_FIELDS)])
+            }
         }
         ("pr", "diff") | ("pr", "checks") => {
             let (number, flags) = split_pr_number(rest)?;
@@ -164,6 +170,12 @@ mod tests {
                 "pr",
                 "view",
                 "42",
+                "--json",
+                "number,title,author,state,url,statusCheckRollup",
+            ],
+            vec![
+                "pr",
+                "view",
                 "--json",
                 "number,title,author,state,url,statusCheckRollup",
             ],
