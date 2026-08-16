@@ -114,7 +114,11 @@ export function ReviewPane({
         <header className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-sm text-text">review · {activeProject?.name ?? "KödChat"}</h1>
-            <p className="mt-1 text-xs text-text-dim">{reviewLabel(state.chatTarget) ?? subtitle(scope, headBranch, branchBase)}</p>
+            <p className="mt-1 text-xs text-text-dim">
+              {[reviewLabel(state.chatTarget), subtitle(scope, headBranch, branchBase)]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
           </div>
           {/* Scope picker: the branch pill only renders when entitled — a
               locked feature is hidden, not shown disabled (HarnessPane's

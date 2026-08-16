@@ -3,7 +3,7 @@
 // only the process is fake.
 
 import { describe, expect, it, vi } from "vitest";
-import { MockAgentIpc, MockStorage } from "../ipc/mock";
+import { MockAgentIpc, MockGit, MockStorage } from "../ipc/mock";
 import { CLAUDE_TOOL_TURN, CODEX_TOOL_TURN } from "../agents/fixtures";
 import type { ChatMessage } from "../inference/backend";
 import { chatDocName, parsePersistedThread, titleFromMessage } from "./model";
@@ -1281,6 +1281,43 @@ describe("transcript persistence", () => {
     expect(reopened.getState().threads.t1.entries).toEqual(doc.entries);
     expect(reopened.getState().threads.t1.title).toBe("read note.txt");
     expect(reopened.getState().threads.t1.resumeId).toBe(doc.resumeId);
+  });
+
+  it("captures and restores the chat review baseline across navigation and restart", async () => {
+    const git = new MockGit();
+    git.responses.set("rev-parse --verify HEAD", {
+      stdout: "0123456789abcdef\n",
+      stderr: "",
+    });
+    git.responses.set("rev-parse --abbrev-ref HEAD", {
+      stdout: "feature/chat-review\n",
+      stderr: "",
+    });
+    const { agent, storage, store } = setup({ git });
+    await store.getState().start();
+    await openThread(store);
+    await store.getState().send("t1", "make reviewable changes");
+    agent.exit("t1#1", 0);
+    await store.getState().flush("t1");
+
+    expect(store.getState().threads.t1.reviewTarget).toMatchObject({
+      threadId: "t1",
+      executionRoot: "/repo",
+      baselineSha: "0123456789abcdef",
+      branch: "feature/chat-review",
+      sharedCheckout: true,
+    });
+
+    const reopened = createChatStore({
+      agent: new MockAgentIpc(),
+      storage,
+      git,
+      projectRoot: () => "/repo",
+    });
+    await reopened.getState().openThread("t1", "p1", "claude");
+    expect(reopened.getState().threads.t1.reviewTarget).toEqual(
+      store.getState().threads.t1.reviewTarget,
+    );
   });
 
   it("round-trips the thread's thinking level through its document", async () => {

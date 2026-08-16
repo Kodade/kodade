@@ -234,6 +234,23 @@ function prDiffArgs(n: number): string[] {
 function prViewArgs(n: number): string[] {
   return ["pr", "view", String(n), "--json", "number,title,author,state,url,statusCheckRollup"];
 }
+const CURRENT_PR_VIEW_ARGS = [
+  "pr",
+  "view",
+  "--json",
+  "number,title,author,state,url,statusCheckRollup",
+];
+
+function parsePullRequestNumber(raw: string): number | null {
+  try {
+    const value = JSON.parse(raw) as { number?: unknown };
+    return typeof value.number === "number" && Number.isSafeInteger(value.number) && value.number > 0
+      ? value.number
+      : null;
+  } catch {
+    return null;
+  }
+}
 function prChecksArgs(n: number): string[] {
   return ["pr", "checks", String(n)];
 }
@@ -405,6 +422,22 @@ export function createReviewStore(deps: ReviewDeps) {
     // Swap `comments` to a scope's stashed list (called after load resolves the
     // scope identity, same seam `reviewed` uses).
     const loadComments = () => set({ comments: commentStash.get(commentKey()) ?? [] });
+
+    const discoverPullRequest = async (
+      target: ChatReviewTarget,
+    ): Promise<ChatReviewTarget> => {
+      if (target.pullRequest || !deps.github) return target;
+      const root = target.selectedWorktreeRoot ?? target.executionRoot;
+      try {
+        const out = await deps.github.run(root, CURRENT_PR_VIEW_ARGS);
+        const number = parsePullRequestNumber(out.stdout);
+        return number ? { ...target, pullRequest: number } : target;
+      } catch {
+        // Local chat work commonly exists before its PR. Discovery is
+        // best-effort and cannot turn a valid working-tree review into an error.
+        return target;
+      }
+    };
     // Write the current scope's comment list to both state and the stash.
     const setComments = (next: ReviewCommentEntry[]) => {
       commentStash.set(commentKey(), next);
@@ -675,7 +708,7 @@ export function createReviewStore(deps: ReviewDeps) {
         } catch {
           // The subsequent load surfaces the actual Git error inline.
         }
-        const selected = target;
+        const selected = await discoverPullRequest(target);
         set({
           scope: { kind: "worktree" },
           projectRoot: selected.selectedWorktreeRoot ?? selected.executionRoot,
@@ -690,9 +723,10 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async selectChatTarget(target) {
-        set({ chatTarget: target, chatTargetChoices: [], scope: { kind: "worktree" } });
-        deps.onChatTargetSelected?.(target);
-        await get().load(target.selectedWorktreeRoot ?? target.executionRoot);
+        const selected = await discoverPullRequest(target);
+        set({ chatTarget: selected, chatTargetChoices: [], scope: { kind: "worktree" } });
+        deps.onChatTargetSelected?.(selected);
+        await get().load(selected.selectedWorktreeRoot ?? selected.executionRoot);
       },
 
       associateChatPullRequest(number) {

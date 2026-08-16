@@ -3,7 +3,7 @@
 // the exact git argv shapes run (MockGit records every call) so the allowlist
 // contract with Rust can't drift silently.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockGit } from "../ipc/mock";
 import type { FsChangedEvent, GhOutput, GitIpc, GitOutput, GithubIpc, Unlisten } from "../ipc/contract";
 import { createReviewStore } from "./review";
@@ -115,6 +115,49 @@ describe("createReviewStore", () => {
     expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([null, "/repo/delegated"]);
   });
 
+  it("discovers and persists the pull request associated with a chat checkout", async () => {
+    const git = new MockGit();
+    const github = new MockGithub();
+    github.responses.set("pr view --json", {
+      stdout: JSON.stringify({
+        number: 42,
+        title: "Chat work",
+        author: { login: "keith" },
+        state: "OPEN",
+        url: "https://github.com/Kodade/kodade/pull/42",
+        statusCheckRollup: [],
+      }),
+      stderr: "",
+    });
+    const selected: unknown[] = [];
+    const store = createReviewStore({
+      git,
+      github,
+      watch: new MockWatch(),
+      onChatTargetSelected: (target) => selected.push(target),
+    });
+    const target = {
+      threadId: "t1",
+      executionRoot: ROOT,
+      baselineSha: "base",
+      branch: "feature/chat",
+      sharedCheckout: true,
+      pullRequest: null,
+      selectedWorktreeRoot: null,
+    };
+
+    await store.getState().openChatReview(target);
+
+    expect(store.getState().chatTarget?.pullRequest).toBe(42);
+    expect(selected.at(-1)).toMatchObject({ pullRequest: 42 });
+    expect(github.calls[0]).toEqual([
+      "pr",
+      "view",
+      "--json",
+      "number,title,author,state,url,statusCheckRollup",
+    ]);
+  });
+
   it("uses a chat's captured baseline for branch review", async () => {
     const git = new MockGit();
     git.responses.set("merge-base base HEAD", { stdout: "base\n", stderr: "" });
@@ -143,6 +186,62 @@ describe("createReviewStore", () => {
     expect(state.totals).toEqual({ files: 2, adds: 13, dels: 2 });
     // The list load runs the plain working-tree numstat and nothing else.
     expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
+  });
+
+  it("includes staged and untracked files exactly once", async () => {
+    const git = new MockGit();
+    git.responses.set("diff --numstat -z HEAD", {
+      stdout: numstat([["2", "1", "src/staged.ts"]]),
+      stderr: "",
+    });
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "? src/new.ts\0",
+      stderr: "",
+    });
+    git.responses.set("diff --no-index --no-color -- /dev/null src/new.ts", {
+      stdout: fileDiff("src/new.ts", "export const added = true;"),
+      stderr: "",
+    });
+    const store = makeStore(git);
+
+    await store.getState().load(ROOT);
+
+    expect(store.getState().files.map((file) => file.path)).toEqual([
+      "src/staged.ts",
+      "src/new.ts",
+    ]);
+    expect(store.getState().totals.files).toBe(2);
+  });
+
+  it("drops stale untracked reads after selecting another review target", async () => {
+    const git = new DelayableGit();
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "? stale.ts\0",
+      stderr: "",
+    });
+    git.delay("diff --no-index --no-color -- /dev/null stale.ts");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+
+    const staleLoad = store.getState().load(ROOT);
+    await vi.waitFor(() =>
+      expect(
+        git.calls.some(
+          (args) =>
+            args.join(" ") ===
+            "diff --no-index --no-color -- /dev/null stale.ts",
+        ),
+      ).toBe(true),
+    );
+    git.responses.set("status --porcelain=v2 -z --untracked-files=all", {
+      stdout: "",
+      stderr: "",
+    });
+    await store.getState().load("/other");
+    git.resolveDelayed({ stdout: fileDiff("stale.ts"), stderr: "" });
+    await staleLoad;
+
+    expect(store.getState().projectRoot).toBe("/other");
+    expect(store.getState().files).toEqual([]);
   });
 
   it("treats a clean working tree (empty stdout) as zero files, not an error", async () => {

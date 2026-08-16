@@ -579,7 +579,7 @@ describe("ChatPane", () => {
       scope: { kind: "worktree" },
       projectRoot: "/repos/alpha",
     });
-    expect(summaryGit.calls.filter((args) => args.join(" ") === "diff --numstat -z")).toHaveLength(1);
+    expect(summaryGit.calls.filter((args) => args.join(" ") === "diff --numstat -z HEAD")).toHaveLength(1);
     expect(card.querySelector('[data-testid="chat-additions"]')?.className).toContain(
       "var(--kd-success)",
     );
@@ -633,7 +633,7 @@ describe("ChatPane", () => {
     });
     for (let i = 0; i < 8; i++) await act(async () => await Promise.resolve());
     expect(host.querySelector('[data-testid="chat-edited-files"]')).toBeNull();
-    expect(git.calls.filter((args) => args.join(" ") === "diff --numstat -z")).toHaveLength(2);
+    expect(git.calls.filter((args) => args.join(" ") === "diff --numstat -z HEAD")).toHaveLength(2);
   });
 
   it("offers a login terminal on an auth failure", async () => {

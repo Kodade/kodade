@@ -811,6 +811,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
               speed: supportsSpeed(doc.providerId, doc.speed)
                 ? doc.speed
                 : DEFAULT_CHAT_SPEED,
+              reviewTarget: doc.reviewTarget,
               entries: doc.entries,
             }));
             if (doc.providerId === "ollama") void get().refreshOllama();
