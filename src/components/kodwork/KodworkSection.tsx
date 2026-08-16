@@ -7,6 +7,7 @@
 // session (the kodwork store feeds it metadata-only facts), falling back to
 // the task's own state for sessions it hasn't seen yet.
 
+import { useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
@@ -60,8 +61,17 @@ export function KodworkSection({
   const expanded = useStore(projectsStore, (s) => s.expandedProjects);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
   const tasks = useStore(workStore, (s) => s.tasks);
+  const [targetProjectId, setTargetProjectId] = useState(activeProjectId ?? "");
 
   if (projects.length === 0) return null;
+
+  const targetProject = projects.find((project) => project.id === targetProjectId);
+  const taskProjects = projects.flatMap((project) => {
+    const workSessions = sessions.filter(
+      (session) => session.projectId === project.id && isWorkSession(session),
+    );
+    return workSessions.length > 0 ? [{ project, workSessions }] : [];
+  });
 
   // Attention/status projection for grouping. Re-derived on task/session
   // changes — every group transition coincides with a store update.
@@ -74,77 +84,99 @@ export function KodworkSection({
 
   return (
     <section className="mb-4" aria-label="KödWork tasks" data-testid="kodwork-tasks">
-      <h2 className="px-1 text-[11px] font-semibold tracking-[0.14em] text-text-dim">
-        KödWork
-      </h2>
-      <div className="mt-1 space-y-0.5">
-        {projects.map((project) => {
-          const workSessions = sessions.filter(
-            (session) => session.projectId === project.id && isWorkSession(session),
-          );
-          const open = expanded[project.id] ?? project.id === activeProjectId;
-          const usage = projectTokenUsage(tasks, project.id).totalTokens;
-          return (
-            <div key={project.id} data-kodwork-project={project.id}>
-              <div className="group flex items-center gap-0.5 rounded px-1 hover:bg-surface-hover">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  aria-label={`${open ? "Collapse" : "Expand"} ${project.name} tasks`}
-                  onClick={() =>
-                    projectsStore.getState().toggleProjectExpanded(project.id)
-                  }
-                  className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-text-dim hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
-                >
-                  <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-                </button>
-                <span className="min-w-0 flex-1 truncate py-1 text-left text-xs text-text-dim">
-                  {project.name}
-                  <span className="ml-1.5 tabular-nums text-[10px]">
-                    {workSessions.length || ""}
-                  </span>
-                  {usage > 0 && <span className="ml-1.5 tabular-nums text-[10px]">{usage.toLocaleString()} tokens</span>}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`New task in ${project.name}`}
-                  title="New KödWork task"
-                  onClick={() =>
-                    void newTask(projectsStore, workStore, project.id, project.path)
-                  }
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
-                >
-                  <span aria-hidden="true" className="text-sm leading-none">
-                    +
-                  </span>
-                </button>
-              </div>
-              {open && workSessions.length > 0 && (
-                <TaskGroups
-                  sessions={workSessions}
-                  tasks={tasks}
-                  projectedGroup={projectedGroup}
-                  onOpen={(taskId) =>
-                    void openTask(
-                      projectsStore,
-                      workStore,
-                      project.id,
-                      project.path,
-                      taskId,
-                    )
-                  }
-                  onClose={(taskId) => {
-                    // Closing drops the session and (via app wiring) its task
-                    // document; the tab goes with it.
-                    filesStore.getState().closeTab({ kind: "kodwork", taskId });
-                    void projectsStore.getState().closeSession(taskId);
-                  }}
-                />
-              )}
-            </div>
-          );
-        })}
+      <div className="flex min-w-0 flex-wrap items-center gap-1 px-1">
+        <h2 className="mr-auto text-[11px] font-semibold tracking-[0.14em] text-text-dim">
+          KödWork
+        </h2>
+        <select
+          aria-label="Target project"
+          value={targetProjectId}
+          onChange={(event) => setTargetProjectId(event.target.value)}
+          className="min-w-0 max-w-32 truncate rounded bg-surface px-1 py-0.5 text-[10px] text-text-dim focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          <option value="">Choose project</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          aria-label="New KödWork task"
+          title={targetProject ? "New KödWork task" : "Choose a project first"}
+          disabled={!targetProject}
+          onClick={() =>
+            targetProject && void newTask(
+              projectsStore,
+              workStore,
+              targetProject.id,
+              targetProject.path,
+            )
+          }
+          className="flex h-5 shrink-0 items-center rounded px-1.5 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          <span aria-hidden="true" className="mr-0.5 text-sm leading-none">+</span>
+          New task
+        </button>
       </div>
+      {taskProjects.length === 0 ? (
+        <p className="mt-1 px-1 text-[11px] leading-relaxed text-text-dim">
+          KödWork runs outcome-based background tasks with your installed CLI. Describe
+          what should be true; progress and results stay here for review.
+        </p>
+      ) : (
+        <div className="mt-1 space-y-0.5">
+          {taskProjects.map(({ project, workSessions }) => {
+            const open = expanded[project.id] ?? project.id === activeProjectId;
+            const usage = projectTokenUsage(tasks, project.id).totalTokens;
+            return (
+              <div key={project.id} data-kodwork-project={project.id}>
+                <div className="group flex items-center gap-0.5 rounded px-1 hover:bg-surface-hover">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-label={`${open ? "Collapse" : "Expand"} ${project.name} tasks`}
+                    onClick={() =>
+                      projectsStore.getState().toggleProjectExpanded(project.id)
+                    }
+                    className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-text-dim hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+                  >
+                    <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+                  </button>
+                  <span className="min-w-0 flex-1 truncate py-1 text-left text-xs text-text-dim">
+                    {project.name}
+                    <span className="ml-1.5 tabular-nums text-[10px]">
+                      {workSessions.length || ""}
+                    </span>
+                    {usage > 0 && <span className="ml-1.5 tabular-nums text-[10px]">{usage.toLocaleString()} tokens</span>}
+                  </span>
+                </div>
+                {open && workSessions.length > 0 && (
+                  <TaskGroups
+                    sessions={workSessions}
+                    tasks={tasks}
+                    projectedGroup={projectedGroup}
+                    onOpen={(taskId) =>
+                      void openTask(
+                        projectsStore,
+                        workStore,
+                        project.id,
+                        project.path,
+                        taskId,
+                      )
+                    }
+                    onClose={(taskId) => {
+                      // Closing drops the session and (via app wiring) its task
+                      // document; the tab goes with it.
+                      filesStore.getState().closeTab({ kind: "kodwork", taskId });
+                      void projectsStore.getState().closeSession(taskId);
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -283,6 +315,9 @@ async function newTask(
   await workStore.getState().openTask(taskId, projectId);
   if (await whenRootIs(projectPath)) {
     filesStore.getState().openKodworkTab(taskId);
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLTextAreaElement>('[data-voice-target="kodwork-outcome"]')?.focus(),
+    );
   }
 }
 
