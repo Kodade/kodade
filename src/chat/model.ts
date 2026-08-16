@@ -51,7 +51,7 @@ export type ChatEntry =
       auth?: boolean;
     };
 
-export type ChatThreadStatus = "idle" | "working" | "error";
+export type ChatThreadStatus = "idle" | "working" | "detached" | "error";
 
 export type ChatThread = {
   id: string; // the SessionMeta id — a thread IS a session of kind "chat"

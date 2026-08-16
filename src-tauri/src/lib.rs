@@ -109,6 +109,7 @@ pub fn run() {
             commands::agent_send,
             commands::agent_end,
             commands::agent_cancel,
+            commands::agent_list_live,
             commands::kodwork_ledger_begin,
             commands::kodwork_ledger_finish,
             commands::kodwork_ledger_accept,

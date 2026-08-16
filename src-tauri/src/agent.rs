@@ -237,6 +237,12 @@ impl AgentManager {
         self.runs.lock().unwrap().contains_key(id)
     }
 
+    // A snapshot is enough for webview reconciliation: a run stays present
+    // until its waiter has reaped the process and emitted its exit callback.
+    pub fn live_ids(&self) -> Vec<String> {
+        self.runs.lock().unwrap().keys().cloned().collect()
+    }
+
     // Reap the child, drain both readers, drop the run, then report the exit.
     fn spawn_waiter(
         &self,
@@ -524,6 +530,30 @@ mod tests {
         assert_eq!(id, "run-cancel");
         // Cancelling a finished run is a no-op, never an error.
         assert!(manager.cancel("run-cancel").is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn live_ids_remain_authoritative_until_the_process_exits() {
+        let manager = AgentManager::new();
+        let (on_line, on_exit, _lines, exits) = sinks();
+        manager
+            .start(
+                AgentSpawn {
+                    id: "run-live".into(),
+                    cwd: "/tmp".into(),
+                    bin: "sleep".into(),
+                    args: vec!["30".into()],
+                    stdin: Some(String::new()),
+                },
+                on_line,
+                on_exit,
+            )
+            .unwrap();
+        assert_eq!(manager.live_ids(), vec!["run-live"]);
+        manager.cancel("run-live").unwrap();
+        exits.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(manager.live_ids().is_empty());
     }
 
     #[test]

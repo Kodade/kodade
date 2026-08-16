@@ -14,6 +14,7 @@ import {
   type AgentEvent,
   type AgentExitEvent,
   type AgentIpc,
+  type AgentLiveRun,
   type AgentSendArgs,
   type AgentStartArgs,
   type ConfigEnv,
@@ -163,6 +164,7 @@ export const tauriAgent: AgentIpc = {
   send: (args: AgentSendArgs) => invoke<void>(CMD.agentSend, { ...args }),
   end: (args: AgentCancelArgs) => invoke<void>(CMD.agentEnd, { ...args }),
   cancel: (args: AgentCancelArgs) => invoke<void>(CMD.agentCancel, { ...args }),
+  listLive: () => invoke<AgentLiveRun[]>(CMD.agentListLive),
   async onEvent(handler: (e: AgentEvent) => void): Promise<Unlisten> {
     return listen<AgentEvent>(EVENT.agentEvent, (evt) => handler(evt.payload));
   },

@@ -39,6 +39,85 @@ async function openThread(store: ReturnType<typeof setup>["store"], provider = "
 }
 
 describe("a turn", () => {
+  it("keeps a Claude run owned after its result, detaches after silence, and resumes on a later event", async () => {
+    let detach: (() => void) | undefined;
+    const { agent, store } = setup({
+      setTimeout: (fn, ms) => {
+        if (ms === 1) detach = fn;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: () => undefined,
+      streamDetachMs: 1,
+    });
+    await store.getState().start();
+    await openThread(store);
+    await store.getState().send("t1", "keep working");
+
+    agent.emit("t1#1", JSON.stringify({ type: "result", session_id: "s1" }));
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(1);
+
+    detach?.();
+    expect(store.getState().threads.t1.status).toBe("detached");
+
+    agent.emit(
+      "t1#1",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "later", content: [{ type: "text", text: "Still working." }] },
+      }),
+    );
+    expect(store.getState().threads.t1.status).toBe("working");
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Still working." })]),
+    );
+
+    agent.exit("t1#1", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
+  it("adopts a live native run when reopening its thread without starting another", async () => {
+    const { agent, storage, store } = setup();
+    agent.liveRunIds = ["t1#4"];
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    await openThread(store);
+
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "must not duplicate");
+    expect(agent.starts).toHaveLength(0);
+
+    agent.emit(
+      "t1#4",
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "later", content: [{ type: "text", text: "Recovered." }] },
+      }),
+    );
+    expect(store.getState().threads.t1.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "Recovered." })]),
+    );
+    agent.exit("t1#4", 0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
   it("starts a headless run with the adapter's argv and the prompt on stdin", async () => {
     const { agent, store } = setup();
     await store.getState().start();

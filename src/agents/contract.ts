@@ -82,9 +82,9 @@ export type AgentSpawn = {
 export interface AgentStreamParser {
   // Parse one raw stdout line into zero or more normalized events.
   line(raw: string): AgentStreamEvent[];
-  // The process exited. Adapters use this to turn a non-zero exit (or stderr
-  // that reads like an auth failure) into a terminal event, and to guarantee
-  // exactly one `done` per run even when the CLI died mid-stream.
+  // The process exited. Adapters can turn a non-zero exit (or stderr that
+  // reads like an auth failure) into transcript events; the store treats this
+  // native exit callback, rather than a provider frame, as terminal.
   end(code: number | null, stderr: string): AgentStreamEvent[];
 }
 

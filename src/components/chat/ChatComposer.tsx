@@ -34,6 +34,7 @@ export function ChatComposer({
   attachments,
   draft,
   working,
+  detached = false,
   disabled,
   ollama,
   providerModels,
@@ -58,6 +59,7 @@ export function ChatComposer({
   attachments: string[];
   draft: string;
   working: boolean;
+  detached?: boolean;
   disabled?: boolean;
   ollama?: {
     status: "idle" | "loading" | "ready" | "unavailable";
@@ -224,7 +226,7 @@ export function ChatComposer({
                 aria-hidden="true"
                 className="kd-dot-pulse h-1.5 w-1.5 rounded-full bg-accent"
               />
-              Working…
+              {detached ? "Stream detached — provider still working" : "Working…"}
             </span>
           )}
           <div className="flex-1" />

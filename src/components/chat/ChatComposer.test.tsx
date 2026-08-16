@@ -65,6 +65,16 @@ afterEach(() => {
 });
 
 describe("ChatComposer layout", () => {
+  it("keeps Stop available while naming a detached provider stream", () => {
+    const { host, root } = mount({ working: true, detached: true });
+    mounted = root;
+    expect(host.querySelector('[data-testid="chat-working"]')?.textContent).toContain(
+      "Stream detached — provider still working",
+    );
+    expect(host.querySelector('button[aria-label="Stop"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Send"]')).toBeNull();
+  });
+
   it("renders the run-control pills below the input surface, not inside it", () => {
     const { host, root } = mount();
     mounted = root;

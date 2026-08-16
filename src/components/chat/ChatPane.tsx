@@ -246,7 +246,8 @@ export function ChatPane({
                 }
                 attachments={attachments}
                 draft={drafts[thread.id] ?? ""}
-                working={thread.status === "working"}
+                working={thread.status === "working" || thread.status === "detached"}
+                detached={thread.status === "detached"}
                 onProviderChange={(id) =>
                   chatThreadsStore.getState().setProvider(thread.id, id)
                 }

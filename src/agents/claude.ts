@@ -30,7 +30,6 @@ import {
   asRecord,
   asString,
   planEvent,
-  tokenUsageFromRecord,
   type Json,
 } from "./normalize";
 import type { ClaudePermissionRequest } from "./claude-input";
@@ -38,6 +37,7 @@ import type { ClaudePermissionRequest } from "./claude-input";
 class ClaudeParser implements AgentStreamParser {
   private messageId = "";
   private done = false;
+  private deferredFailure: AgentStreamEvent | null = null;
   // Content-block index → what kind of block it is, so a delta can be routed
   // without re-reading the block's start frame.
   private blocks = new Map<number, "text" | "thinking" | "tool_use">();
@@ -89,7 +89,10 @@ class ClaudeParser implements AgentStreamParser {
   }
 
   end(code: number | null, stderr: string): AgentStreamEvent[] {
-    return endOfRunEvents(this.done, code, stderr);
+    return [
+      ...(this.deferredFailure ? [this.deferredFailure] : []),
+      ...endOfRunEvents(this.done, code, stderr),
+    ];
   }
 
   // `system/init` announces the session id that `--resume` needs next turn.
@@ -204,8 +207,9 @@ class ClaudeParser implements AgentStreamParser {
     return events;
   }
 
-  // The single terminal frame. `is_error` covers refusals, permission denials,
-  // and auth failures alike, so route its message through the shared classifier.
+  // Claude can report a `result` before its process has retired (notably while
+  // delegated work is still active). It is provider output, not process exit;
+  // native exit remains the only terminal signal for KödChat ownership.
   private result(value: Json): AgentStreamEvent[] {
     this.done = true;
     const events: AgentStreamEvent[] = [];
@@ -226,14 +230,8 @@ class ClaudeParser implements AgentStreamParser {
     if (value.is_error === true) {
       const message =
         asString(value.result) ?? asString(value.subtype) ?? "the agent reported an error";
-      events.push(failureEvent(message));
+      this.deferredFailure = failureEvent(message);
     }
-    const usage = tokenUsageFromRecord(value.usage);
-    events.push({
-      type: "done",
-      ...(asString(value.stop_reason) ? { finishReason: asString(value.stop_reason)! } : {}),
-      ...(usage ? { usage } : {}),
-    });
     return events;
   }
 }

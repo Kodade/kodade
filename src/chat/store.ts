@@ -74,6 +74,9 @@ export type ChatDeps = {
   persistDebounceMs?: number;
   setTimeout?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
+  // A live native process with no delivered provider events is still working;
+  // after this bounded interval the UI says so explicitly.
+  streamDetachMs?: number;
   // A plugin-backed model command must never leave the picker loading forever.
   modelDiscoveryTimeoutMs?: number;
   modelDiscoverySetTimeout?: (
@@ -132,6 +135,7 @@ export type ChatState = {
 };
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 400;
+const DEFAULT_STREAM_DETACH_MS = 15_000;
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_MODEL_DISCOVERY_LINES = 2_048;
 const MAX_MODEL_DISCOVERY_LINE_LENGTH = 512;
@@ -182,6 +186,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   const setTimer = deps.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimeout ?? ((handle) => clearTimeout(handle));
   const debounceMs = deps.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE_MS;
+  const streamDetachMs = deps.streamDetachMs ?? DEFAULT_STREAM_DETACH_MS;
   const modelDiscoveryTimeoutMs =
     deps.modelDiscoveryTimeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const setModelDiscoveryTimer =
@@ -202,10 +207,12 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     toolEntries: Map<string, string>;
     conversationId: number;
     turn: number;
+    detachTimer?: ReturnType<typeof setTimeout>;
   };
   const runs = new Map<string, Run>();
   const runByRunId = new Map<string, string>(); // runId → threadId
   const turns = new Map<string, number>();
+  const nativeLiveRunIds = new Set<string>();
   type ModelDiscoveryRun = {
     providerId: string;
     catalogKey: string;
@@ -275,6 +282,29 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         ...thread,
         entries: [...thread.entries, entry].slice(-MAX_THREAD_ENTRIES),
       }));
+    };
+
+    const clearDetachTimer = (run: Run) => {
+      if (!run.detachTimer) return;
+      clearTimer(run.detachTimer);
+      run.detachTimer = undefined;
+    };
+
+    const armDetachTimer = (threadId: string, run: Run) => {
+      clearDetachTimer(run);
+      run.detachTimer = setTimer(() => {
+        if (runs.get(threadId)?.runId !== run.runId) return;
+        patch(threadId, (thread) =>
+          thread.status === "working" ? { ...thread, status: "detached" } : thread,
+        );
+      }, streamDetachMs);
+    };
+
+    const resumeStream = (threadId: string, run: Run) => {
+      armDetachTimer(threadId, run);
+      patch(threadId, (thread) =>
+        thread.status === "detached" ? { ...thread, status: "working" } : thread,
+      );
     };
 
     const replaceEntry = (
@@ -417,6 +447,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     // Close out a run: freeze streaming entries, clear the run, persist.
     const settle = (threadId: string, run: Run) => {
       if (runs.get(threadId)?.runId !== run.runId) return;
+      clearDetachTimer(run);
       runs.delete(threadId);
       runByRunId.delete(run.runId);
       patch(threadId, (thread) => ({
@@ -445,6 +476,40 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       void persistNow(threadId);
     };
 
+    const adoptLiveRun = (threadId: string, runId: string) => {
+      const thread = get().threads[threadId];
+      if (!thread || runs.has(threadId) || threadIdOfRun(runId) !== threadId) return;
+      const adapter = adapters(thread.providerId);
+      if (!adapter) return;
+      const turn = Number(runId.slice(runId.lastIndexOf("#") + 1));
+      const run: Run = {
+        runId,
+        parser: adapter.createParser(),
+        messageEntries: new Map(),
+        thinkingEntries: new Map(),
+        toolEntries: new Map(),
+        conversationId: thread.conversationId,
+        turn: Number.isSafeInteger(turn) && turn >= 0 ? turn : 0,
+      };
+      runs.set(threadId, run);
+      runByRunId.set(runId, threadId);
+      turns.set(threadId, Math.max(turns.get(threadId) ?? 0, run.turn));
+      patch(threadId, (current) => ({ ...current, status: "working", needsLogin: false }));
+      armDetachTimer(threadId, run);
+    };
+
+    const reconcileLiveRun = async (threadId: string) => {
+      try {
+        const liveRuns = await deps.agent.listLive();
+        nativeLiveRunIds.clear();
+        for (const { id } of liveRuns) nativeLiveRunIds.add(id);
+      } catch (error) {
+        console.error(`kodade: KödChat live-run reconciliation failed (${threadId}):`, error);
+      }
+      const liveRun = [...nativeLiveRunIds].find((id) => threadIdOfRun(id) === threadId);
+      if (liveRun) adoptLiveRun(threadId, liveRun);
+    };
+
     const onLine = (runId: string, line: string) => {
       const discovery = modelDiscoveryRuns.get(runId);
       if (discovery) {
@@ -454,14 +519,17 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         return;
       }
       const threadId = runByRunId.get(runId) ?? threadIdOfRun(runId);
+      if (!runs.has(threadId) && nativeLiveRunIds.has(runId)) adoptLiveRun(threadId, runId);
       const run = runs.get(threadId);
       if (!run || run.runId !== runId) return; // a stale/cancelled turn
       if (!run.parser) return;
+      resumeStream(threadId, run);
       for (const event of run.parser.line(line)) applyEvent(threadId, run, event);
       persistDebounced(threadId);
     };
 
     const onExit = (runId: string, code: number | null, stderr: string) => {
+      nativeLiveRunIds.delete(runId);
       const discovery = modelDiscoveryRuns.get(runId);
       if (discovery) {
         modelDiscoveryRuns.delete(runId);
@@ -510,6 +578,17 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         const offExit = await deps.agent.onExit((event) =>
           onExit(event.id, event.code, event.stderr),
         );
+        try {
+          const liveRuns = await deps.agent.listLive();
+          nativeLiveRunIds.clear();
+          for (const { id } of liveRuns) nativeLiveRunIds.add(id);
+          for (const threadId of Object.keys(get().threads)) {
+            const liveRun = liveRuns.find((run) => threadIdOfRun(run.id) === threadId);
+            if (liveRun) adoptLiveRun(threadId, liveRun.id);
+          }
+        } catch (error) {
+          console.error("kodade: KödChat live-run reconciliation failed:", error);
+        }
         return () => {
           offEvent();
           offExit();
@@ -536,30 +615,32 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           raw = await deps.storage.readDoc(chatDocName(threadId));
         } catch (error) {
           console.error(`kodade: KödChat transcript read failed (${threadId}):`, error);
-          return;
         }
-        if (!raw) return;
-        const doc = parsePersistedThread(raw);
-        if (!doc) return;
-        const remoteDynamicModels =
-          !!remote && !!providerFor(doc.providerId)?.stream?.modelDiscovery;
-        patch(threadId, (thread) => ({
-          ...thread,
-          providerId: doc.providerId,
-          title: doc.title,
-          resumeId: doc.resumeId,
-          conversationId: doc.conversationId,
-          model: remoteDynamicModels ? null : doc.model,
-          access: doc.access,
-          thinking: doc.thinking,
-          speed: supportsSpeed(doc.providerId, doc.speed)
-            ? doc.speed
-            : DEFAULT_CHAT_SPEED,
-          entries: doc.entries,
-        }));
-        if (doc.providerId === "ollama") void get().refreshOllama();
-        else if (providerFor(doc.providerId)?.stream?.modelDiscovery)
-          void get().refreshProviderModels(doc.providerId, projectId);
+        if (raw) {
+          const doc = parsePersistedThread(raw);
+          if (doc) {
+            const remoteDynamicModels =
+              !!remote && !!providerFor(doc.providerId)?.stream?.modelDiscovery;
+            patch(threadId, (thread) => ({
+              ...thread,
+              providerId: doc.providerId,
+              title: doc.title,
+              resumeId: doc.resumeId,
+              conversationId: doc.conversationId,
+              model: remoteDynamicModels ? null : doc.model,
+              access: doc.access,
+              thinking: doc.thinking,
+              speed: supportsSpeed(doc.providerId, doc.speed)
+                ? doc.speed
+                : DEFAULT_CHAT_SPEED,
+              entries: doc.entries,
+            }));
+            if (doc.providerId === "ollama") void get().refreshOllama();
+            else if (providerFor(doc.providerId)?.stream?.modelDiscovery)
+              void get().refreshProviderModels(doc.providerId, projectId);
+          }
+        }
+        await reconcileLiveRun(threadId);
       },
 
       setProvider(threadId: string, providerId: string) {
@@ -840,6 +921,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           };
           runs.set(threadId, run);
           runByRunId.set(runId, threadId);
+          armDetachTimer(threadId, run);
           const firstMessage = !current.entries.some((entry) => entry.kind === "message");
           appendEntry(threadId, {
             kind: "message",
@@ -897,6 +979,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         };
         runs.set(threadId, run);
         runByRunId.set(runId, threadId);
+        armDetachTimer(threadId, run);
 
         // The first message names the thread; read that BEFORE appending it.
         const firstMessage = !thread.entries.some((entry) => entry.kind === "message");

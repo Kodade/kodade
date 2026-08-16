@@ -80,14 +80,14 @@ describe("claude dialect", () => {
     });
   });
 
-  it("ends with exactly one done carrying usage", () => {
-    const done = events.filter((e) => e.type === "done");
-    expect(done).toHaveLength(1);
-    expect(done[0]).toEqual({
-      type: "done",
-      finishReason: "end_turn",
-      usage: { promptTokens: 18, completionTokens: 152, totalTokens: 170 },
-    });
+  it("does not treat a provider result as process completion", () => {
+    const adapter = adapterFor("claude");
+    if (!adapter) throw new Error("Claude adapter missing");
+    const parser = adapter.createParser();
+    const result = CLAUDE_TOOL_TURN.flatMap((line) => parser.line(line));
+    const done = result.filter((e) => e.type === "done");
+    expect(done).toHaveLength(0);
+    expect(parser.end(0, "").filter((e) => e.type === "done")).toHaveLength(0);
   });
 
   it("maps TodoWrite onto a plan block", () => {
@@ -134,7 +134,7 @@ describe("claude dialect", () => {
     expect(events.find((e) => e.type === "auth-error")).toMatchObject({
       type: "auth-error",
     });
-    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(0);
   });
 });
 

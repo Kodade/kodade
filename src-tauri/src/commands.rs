@@ -902,6 +902,11 @@ struct AgentExit {
     stderr: String,
 }
 
+#[derive(Clone, Serialize)]
+struct AgentLiveRun {
+    id: String,
+}
+
 // Start a headless agent run. `bin` is resolved through the login shell so the
 // CLI inherits the user's real PATH — and therefore its own credentials.
 #[tauri::command]
@@ -916,11 +921,36 @@ pub fn agent_start(
 ) -> Result<(), String> {
     let line_app = app.clone();
     let on_line = Arc::new(move |id: String, line: String| {
-        let _ = line_app.emit(EVENT_AGENT_EVENT, AgentEvent { id, line });
+        let line_bytes = line.len();
+        if let Err(error) = line_app.emit(
+            EVENT_AGENT_EVENT,
+            AgentEvent {
+                id: id.clone(),
+                line,
+            },
+        ) {
+            // No provider output is logged: run id and byte count are enough to
+            // diagnose a broken event bridge without exposing chat content.
+            eprintln!(
+                "kodade: agent event delivery failed run_id={id} line_bytes={line_bytes}: {error}"
+            );
+        }
     });
     let exit_app = app.clone();
     let on_exit = Arc::new(move |id: String, code: Option<i32>, stderr: String| {
-        let _ = exit_app.emit(EVENT_AGENT_EXIT, AgentExit { id, code, stderr });
+        let stderr_bytes = stderr.len();
+        if let Err(error) = exit_app.emit(
+            EVENT_AGENT_EXIT,
+            AgentExit {
+                id: id.clone(),
+                code,
+                stderr,
+            },
+        ) {
+            eprintln!(
+                "kodade: agent exit delivery failed run_id={id} stderr_bytes={stderr_bytes}: {error}"
+            );
+        }
     });
     manager.start(
         AgentSpawn {
@@ -995,6 +1025,17 @@ pub fn kodwork_ledger_restore(
 #[tauri::command]
 pub fn agent_cancel(manager: State<'_, AgentManager>, id: String) -> Result<(), String> {
     manager.cancel(&id)
+}
+
+// Process liveness is the authority when a webview reloads or a provider
+// prematurely emits a terminal-looking frame.
+#[tauri::command]
+pub fn agent_list_live(manager: State<'_, AgentManager>) -> Vec<AgentLiveRun> {
+    manager
+        .live_ids()
+        .into_iter()
+        .map(|id| AgentLiveRun { id })
+        .collect()
 }
 
 // --- KödLocal daemon control plane ---
