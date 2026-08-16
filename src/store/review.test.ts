@@ -123,7 +123,7 @@ describe("createReviewStore", () => {
     expect(state.files.map((f) => f.path)).toEqual(["src/a.ts", "docs/README.md"]);
     expect(state.totals).toEqual({ files: 2, adds: 13, dels: 2 });
     // The list load runs the plain working-tree numstat and nothing else.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
   });
 
   it("treats a clean working tree (empty stdout) as zero files, not an error", async () => {
@@ -151,12 +151,12 @@ describe("createReviewStore", () => {
   it("lazily loads a file's diff on first expand via the per-file allowlisted shape", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["10", "2", "src/a.ts"]]), stderr: "" });
-    git.responses.set("diff --no-color -- src/a.ts", { stdout: fileDiff("src/a.ts"), stderr: "" });
+    git.responses.set("diff --no-color HEAD -- src/a.ts", { stdout: fileDiff("src/a.ts"), stderr: "" });
     const store = makeStore(git);
 
     await store.getState().load(ROOT);
     // No per-file diff runs until a row is expanded.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
 
     await store.getState().toggleFile("src/a.ts");
     const file = store.getState().files.find((f) => f.path === "src/a.ts")!;
@@ -164,15 +164,16 @@ describe("createReviewStore", () => {
     expect(file.diffStatus).toBe("loaded");
     expect(file.diff?.hunks[0].lines.some((l) => l.kind === "add")).toBe(true);
     expect(git.calls).toEqual([
-      ["diff", "--numstat", "-z"],
-      ["diff", "--no-color", "--", "src/a.ts"],
+      ["diff", "--numstat", "-z", "HEAD"],
+      ["status", "--porcelain=v2", "-z"],
+      ["diff", "--no-color", "HEAD", "--", "src/a.ts"],
     ]);
 
     // Collapsing then re-expanding does not refetch the cached diff.
     await store.getState().toggleFile("src/a.ts");
     expect(store.getState().files[0].expanded).toBe(false);
     await store.getState().toggleFile("src/a.ts");
-    expect(git.calls).toHaveLength(2);
+    expect(git.calls).toHaveLength(3);
   });
 
   it("renders a binary file as a stat-only row and never runs a per-file diff for it", async () => {
@@ -188,13 +189,13 @@ describe("createReviewStore", () => {
     await store.getState().toggleFile("img.png");
     expect(store.getState().files[0].diffStatus).toBe("binary");
     // Only the numstat ran — no diff for the binary file.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
   });
 
   it("flips an oversized per-file diff to a stat-only tooLarge state", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["9000", "0", "big.ts"]]), stderr: "" });
-    git.responses.set("diff --no-color -- big.ts", { stdout: "x".repeat(2000), stderr: "" });
+    git.responses.set("diff --no-color HEAD -- big.ts", { stdout: "x".repeat(2000), stderr: "" });
     const store = makeStore(git, new MockWatch(), { maxDiffBytes: 1000 });
 
     await store.getState().load(ROOT);
@@ -308,7 +309,8 @@ describe("createReviewStore", () => {
       totals: { files: 1, adds: 4, dels: 1 },
     });
     expect(calls).toEqual([
-      { root: "/current", args: ["diff", "--numstat", "-z"] },
+      { root: "/current", args: ["diff", "--numstat", "-z", "HEAD"] },
+      { root: "/current", args: ["status", "--porcelain=v2", "-z"] },
     ]);
   });
 });
@@ -354,7 +356,7 @@ describe("createReviewStore — branch scope (M12d)", () => {
     await store.getState().toggleFile("src/a.ts");
     expect(store.getState().files[0].diffStatus).toBe("loaded");
 
-    expect(git.calls.slice(1)).toEqual([
+    expect(git.calls.slice(2)).toEqual([
       ["rev-parse", "--verify", "main"],
       ["merge-base", "main", "HEAD"],
       ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -377,8 +379,8 @@ describe("createReviewStore — branch scope (M12d)", () => {
     const state = store.getState();
     expect(state.error).toBeNull();
     expect(state.branchBase).toBe("main");
-    expect(git.calls[1]).toEqual(["rev-parse", "--verify", "origin/main"]);
-    expect(git.calls[2]).toEqual(["rev-parse", "--verify", "main"]);
+    expect(git.calls[2]).toEqual(["rev-parse", "--verify", "origin/main"]);
+    expect(git.calls[3]).toEqual(["rev-parse", "--verify", "main"]);
   });
 
   it("surfaces an inline error when no default-branch candidate verifies", async () => {

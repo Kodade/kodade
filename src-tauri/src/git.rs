@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::exec::{run_exec, ExecEnvironment, ProcOutput};
+use crate::exec::{run_exec, run_exec_allowing_exit_code, ExecEnvironment, ProcOutput};
 use crate::shell::ShellEnvironment;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -79,6 +79,14 @@ fn validate_diff(rest: &[String]) -> Result<(), String> {
             validate_diff_range(range)?;
             validate_path(path)
         }
+        [no_index, no_color, sep, empty, path]
+            if no_index == "--no-index"
+                && no_color == "--no-color"
+                && sep == "--"
+                && empty == "/dev/null" =>
+        {
+            validate_path(path)
+        }
         _ => Err("git diff shape is not allowed".to_string()),
     }
 }
@@ -96,6 +104,9 @@ fn validate_log(rest: &[String]) -> Result<(), String> {
 
 // A `<base>...HEAD` diff range: a validated base ref plus the literal `...HEAD`.
 fn validate_diff_range(range: &str) -> Result<(), String> {
+    if range == "HEAD" {
+        return Ok(());
+    }
     let base = range
         .strip_suffix("...HEAD")
         .ok_or_else(|| format!("git diff range must be <base>...HEAD: {range}"))?;
@@ -209,15 +220,28 @@ pub fn run_git(
     // git was resolved once through the login-shell PATH and the argv already
     // crossed the allowlist above, so the shared runner execs it directly with
     // no shell in between.
+    let no_index = matches!(args.as_slice(), [subcommand, flag, ..] if subcommand == "diff" && flag == "--no-index");
     let args = hardened_args(&args);
-    let out = run_exec(
-        "git",
-        binary,
-        project_root,
-        &args,
-        GIT_TIMEOUT,
-        ExecEnvironment::Git,
-    )?;
+    let out = if no_index {
+        run_exec_allowing_exit_code(
+            "git",
+            binary,
+            project_root,
+            &args,
+            GIT_TIMEOUT,
+            ExecEnvironment::Git,
+            1,
+        )?
+    } else {
+        run_exec(
+            "git",
+            binary,
+            project_root,
+            &args,
+            GIT_TIMEOUT,
+            ExecEnvironment::Git,
+        )?
+    };
     Ok(to_output(out))
 }
 
@@ -256,6 +280,14 @@ mod tests {
             vec!["diff", "--numstat", "-z", "main...HEAD"],
             vec!["diff", "--no-color", "--", "src/lib.rs"],
             vec!["diff", "--no-color", "main...HEAD", "--", "src/a/b.ts"],
+            vec![
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--",
+                "/dev/null",
+                "src/new.ts",
+            ],
             vec!["log", "--max-count=50", LOG_FORMAT],
             vec!["log", "--max-count=50", LOG_FORMAT, "main..HEAD"],
         ] {
@@ -278,6 +310,7 @@ mod tests {
             // Code-execution / option-injection vectors.
             vec!["-c", "core.pager=sh -c whoami", "status"],
             vec!["diff", "--no-color", "--ext-diff", "--", "x"],
+            vec!["diff", "--no-index", "--no-color", "--", "/tmp/other", "x"],
             vec!["log", "--max-count=50", LOG_FORMAT, "--upload-pack=sh"],
             // rev-parse with a ref that could act as a flag.
             vec!["rev-parse", "--verify", "-main"],

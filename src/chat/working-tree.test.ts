@@ -36,7 +36,7 @@ describe("working-tree summary store", () => {
     await loading;
 
     expect(store.getState().summary).toEqual({ files: 2, adds: 5, dels: 1 });
-    expect(git.calls.map((call) => call.root)).toEqual(["/repos/other", "/repos/alpha"]);
+    expect(git.calls.map((call) => call.root)).toEqual(["/repos/other", "/repos/other", "/repos/alpha", "/repos/alpha"]);
   });
 
   it("clears a prior summary when the current root is not a git repository", async () => {

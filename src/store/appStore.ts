@@ -442,6 +442,7 @@ export const reviewStore = createReviewStore({
     save: (projectRoot, scopeKey, paths) =>
       appStore.getState().setReviewChecks(projectRoot, scopeKey, paths),
   },
+  onChatTargetSelected: (target) => chatStore.getState().setReviewTarget(target.threadId, target),
 });
 export const memoryStore = createMemoryStore({
   ipc: tauriMemory,
@@ -600,6 +601,7 @@ export const ollamaChatRuntime = createOllamaChatRuntime();
 export const chatStore = createChatStore({
   agent: tauriAgent,
   storage: tauriStorage,
+  git: tauriGit,
   projectRoot: (projectId) =>
     appStore.getState().projects.find((project) => project.id === projectId)
       ?.path ?? null,

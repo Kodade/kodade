@@ -226,7 +226,8 @@ export function ChatPane({
                   onReview={() => {
                     const root = filesStore.getState().rootPath;
                     if (!root) return;
-                    void review.getState().openWorktree(root);
+                    if (thread.reviewTarget) void review.getState().openChatReview(thread.reviewTarget);
+                    else void review.getState().openWorktree(root);
                     filesStore.getState().openReviewTab();
                   }}
                 />

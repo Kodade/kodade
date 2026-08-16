@@ -115,6 +115,49 @@ pub fn run_exec(
     timeout: Duration,
     environment: ExecEnvironment,
 ) -> Result<ProcOutput, String> {
+    run_exec_with_allowed_exit_code(
+        label,
+        executable,
+        project_root,
+        args,
+        timeout,
+        environment,
+        None,
+    )
+}
+
+// `git diff --no-index` uses exit status 1 to report that two inputs differ.
+// Keep that one documented read-only case explicit; every normal caller still
+// gets the existing non-zero-is-an-error behavior above.
+pub fn run_exec_allowing_exit_code(
+    label: &'static str,
+    executable: &Path,
+    project_root: &Path,
+    args: &[String],
+    timeout: Duration,
+    environment: ExecEnvironment,
+    allowed_exit_code: i32,
+) -> Result<ProcOutput, String> {
+    run_exec_with_allowed_exit_code(
+        label,
+        executable,
+        project_root,
+        args,
+        timeout,
+        environment,
+        Some(allowed_exit_code),
+    )
+}
+
+fn run_exec_with_allowed_exit_code(
+    label: &'static str,
+    executable: &Path,
+    project_root: &Path,
+    args: &[String],
+    timeout: Duration,
+    environment: ExecEnvironment,
+    allowed_exit_code: Option<i32>,
+) -> Result<ProcOutput, String> {
     let mut cmd = Command::new(executable);
     cmd.args(args)
         .current_dir(project_root)
@@ -175,7 +218,7 @@ pub fn run_exec(
     if exceeded.load(Ordering::Relaxed) {
         return Err(format!("{label} output exceeded 1 MiB"));
     }
-    if !status.success() {
+    if !status.success() && status.code() != allowed_exit_code {
         let detail = out.stderr.trim();
         if status.code() == Some(127) {
             return Err(format!("{label} is not installed: {detail}"));

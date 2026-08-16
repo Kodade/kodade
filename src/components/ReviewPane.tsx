@@ -49,11 +49,13 @@ export function ReviewPane({
   // for a debounced refresh. Reset when there's no project so a stale list can't
   // linger under a different one.
   useEffect(() => {
-    if (!activeProject) {
+    if (!activeProject && !state.chatTarget) {
       store.getState().reset();
       return;
     }
-    void store.getState().load(activeProject.path);
+    const root = state.chatTarget?.selectedWorktreeRoot ?? state.chatTarget?.executionRoot ?? activeProject?.path;
+    if (!root) return;
+    void store.getState().load(root);
     let unlisten: (() => void) | null = null;
     let stopped = false;
     void store
@@ -67,7 +69,7 @@ export function ReviewPane({
       stopped = true;
       unlisten?.();
     };
-  }, [store, activeProject?.id, activeProject?.path]);
+  }, [store, activeProject?.id, activeProject?.path, state.chatTarget?.executionRoot, state.chatTarget?.selectedWorktreeRoot]);
 
   const { files, totals, loading, loaded, error, scope, branchBase, headBranch, reviewed, comments, prView, prChecks } = state;
 
@@ -102,7 +104,7 @@ export function ReviewPane({
     };
   };
 
-  if (!activeProject) {
+  if (!activeProject && !state.chatTarget) {
     return <Centered>select a project to review its changes</Centered>;
   }
 
@@ -111,8 +113,8 @@ export function ReviewPane({
       <div className="mx-auto flex max-w-4xl flex-col gap-4">
         <header className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-sm text-text">review · {activeProject.name}</h1>
-            <p className="mt-1 text-xs text-text-dim">{subtitle(scope, headBranch, branchBase)}</p>
+            <h1 className="text-sm text-text">review · {activeProject?.name ?? "KödChat"}</h1>
+            <p className="mt-1 text-xs text-text-dim">{reviewLabel(state.chatTarget) ?? subtitle(scope, headBranch, branchBase)}</p>
           </div>
           {/* Scope picker: the branch pill only renders when entitled — a
               locked feature is hidden, not shown disabled (HarnessPane's
@@ -127,6 +129,24 @@ export function ReviewPane({
             onOpenPrPicker={() => void store.getState().loadPrList()}
           />
         </header>
+
+        {state.chatTargetChoices.length > 0 && (
+          <div className="rounded border border-border bg-surface p-2 text-xs text-text-dim" data-chat-review-targets>
+            <p>Multiple KödChat worktrees are available. Choose one to review.</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {state.chatTargetChoices.map((target) => (
+                <button
+                  key={target.selectedWorktreeRoot ?? target.executionRoot}
+                  type="button"
+                  onClick={() => void store.getState().selectChatTarget(target)}
+                  className="rounded border border-border px-2 py-1 hover:bg-surface-hover"
+                >
+                  {target.selectedWorktreeRoot ?? target.executionRoot}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {scope.kind === "pr" && !error && (prView || prChecks) && (
           <PrHeaderStrip prView={prView} prChecks={prChecks} />
@@ -227,6 +247,14 @@ function subtitle(scope: ReviewScope, headBranch: string | null, branchBase: str
   if (scope.kind === "pr") return scope.title ? `#${scope.number} · ${scope.title}` : `pull request #${scope.number}`;
   if (headBranch && branchBase) return `${headBranch} vs ${branchBase}`;
   return "branch · resolving base…";
+}
+
+function reviewLabel(target: import("../chat/model").ChatReviewTarget | null): string | null {
+  if (!target) return null;
+  if (target.selectedWorktreeRoot) return "KödChat worktree · changes owned by this chat";
+  return target.sharedCheckout
+    ? "KödChat shared checkout · changes owned by this chat"
+    : "KödChat worktree · changes owned by this chat";
 }
 
 // The PR header strip: title/state from `pr view` and a one-line checks summary

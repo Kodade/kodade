@@ -15,6 +15,7 @@
 // M12e ("pr" via gh) is the next widening.
 
 import { createStore } from "zustand/vanilla";
+import type { ChatReviewTarget } from "../chat/model";
 import type { FsChangedEvent, GitIpc, GithubIpc, Unlisten } from "../ipc/contract";
 import { parseNumstat, parseUnifiedDiff } from "../review/parse";
 import { type FileDiff, type ReviewComment, filePath } from "../review/model";
@@ -76,6 +77,7 @@ export type ReviewFile = {
   diffStatus: FileDiffStatus;
   diffError: string | null;
   diffBytes: number | null; // raw diff size, for the "tooLarge" stat row
+  untracked?: boolean;
 };
 
 export type ReviewTotals = { files: number; adds: number; dels: number };
@@ -83,6 +85,8 @@ export type ReviewTotals = { files: number; adds: number; dels: number };
 export type ReviewState = {
   scope: ReviewScope;
   projectRoot: string | null;
+  chatTarget: ChatReviewTarget | null;
+  chatTargetChoices: ChatReviewTarget[];
   files: ReviewFile[];
   totals: ReviewTotals;
   loading: boolean; // the numstat list load is in flight
@@ -141,6 +145,8 @@ export type ReviewState = {
   // Deliberately open the requested project's working-tree review. Unlike
   // setScope(), this never reloads the previously selected project's root.
   openWorktree(projectRoot: string): Promise<void>;
+  openChatReview(target: ChatReviewTarget): Promise<void>;
+  selectChatTarget(target: ChatReviewTarget): Promise<void>;
   // Switch scope (worktree <-> branch) and reload the current project under it.
   setScope(scope: ReviewScope): Promise<void>;
   // Expand/collapse a row. On first expand of a non-binary file, lazily loads
@@ -186,6 +192,7 @@ export type ReviewDeps = {
   // Reviewed-checkmarks persistence (Pro). Absent = in-memory only (tests that
   // don't care about persistence), same convention as other optional deps here.
   reviewChecks?: ReviewChecksDeps;
+  onChatTargetSelected?(target: ChatReviewTarget): void;
 };
 
 const DEFAULT_MAX_DIFF_BYTES = 500 * 1024;
@@ -283,14 +290,16 @@ async function resolveBranchRange(
 // diff (`diff --numstat -z`); branch prepends the resolved "<base>...HEAD" range.
 function numstatArgs(scope: ReviewScope, range: string | null): string[] {
   if (scope.kind === "branch" && range) return ["diff", "--numstat", "-z", range];
-  return ["diff", "--numstat", "-z"];
+  // HEAD includes staged and unstaged tracked content in one pass, avoiding a
+  // duplicate row when a path has both kinds of edits.
+  return ["diff", "--numstat", "-z", "HEAD"];
 }
 
 // Allowlisted git argv for one file's diff under a scope. Worktree = the plain
 // working-tree per-file diff; branch inserts the resolved "<base>...HEAD" range.
 function fileDiffArgs(scope: ReviewScope, range: string | null, path: string): string[] {
   if (scope.kind === "branch" && range) return ["diff", "--no-color", range, "--", path];
-  return ["diff", "--no-color", "--", path];
+  return ["diff", "--no-color", "HEAD", "--", path];
 }
 
 function byteLength(text: string): number {
@@ -348,6 +357,27 @@ function totalsOf(files: ReviewFile[]): ReviewTotals {
     dels += f.dels ?? 0;
   }
   return { files: files.length, adds, dels };
+}
+
+function worktreeRoots(porcelain: string): string[] {
+  return porcelain
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length))
+    .filter(Boolean);
+}
+
+function untrackedPaths(porcelain: string): string[] {
+  return porcelain
+    .split("\0")
+    .filter((record) => record.startsWith("? "))
+    .map((record) => record.slice(2))
+    .filter((path) => path.length > 0);
+}
+
+function isSafeRelativePath(path: string): boolean {
+  return !path.startsWith("/") && !path.startsWith("\\") && !path.startsWith(":") &&
+    !path.split(/[\\/]/).includes("..");
 }
 
 export function createReviewStore(deps: ReviewDeps) {
@@ -497,6 +527,8 @@ export function createReviewStore(deps: ReviewDeps) {
     return {
       scope: { kind: "worktree" },
       projectRoot: null,
+      chatTarget: null,
+      chatTargetChoices: [],
       files: [],
       totals: { files: 0, adds: 0, dels: 0 },
       loading: false,
@@ -548,10 +580,28 @@ export function createReviewStore(deps: ReviewDeps) {
           const out = await deps.git.run(projectRoot, numstatArgs(scope, currentRange));
           if (gen !== generation) return; // superseded by a newer load
           const parsed = parseNumstat(out.stdout);
+          const extraWarnings: string[] = [];
+          const untracked: ReviewFile[] = [];
+          if (scope.kind === "worktree") {
+            const status = await deps.git.run(projectRoot, ["status", "--porcelain=v2", "-z"]);
+            for (const path of untrackedPaths(status.stdout)) {
+              if (!isSafeRelativePath(path)) {
+                extraWarnings.push(`ignored unsafe untracked path: ${JSON.stringify(path)}`);
+                continue;
+              }
+              const diff = await deps.git.run(projectRoot, ["diff", "--no-index", "--no-color", "--", "/dev/null", path]);
+              const parsedDiff = parseUnifiedDiff(diff.stdout).items[0];
+              if (!parsedDiff) {
+                extraWarnings.push(`could not read untracked file: ${JSON.stringify(path)}`);
+                continue;
+              }
+              untracked.push({ ...toReviewFileFromDiff(parsedDiff), path, untracked: true });
+            }
+          }
           // Preserve expanded/loaded diff state across a refresh for files that
           // are still present, so an fs-watch tick doesn't collapse open rows.
           const prev = new Map(get().files.map((f) => [f.path, f]));
-          const files = parsed.items.map((entry) => {
+          const files = [...parsed.items.map((entry) => {
             const next = toReviewFile(entry);
             const old = prev.get(next.path);
             if (old?.expanded) {
@@ -559,7 +609,7 @@ export function createReviewStore(deps: ReviewDeps) {
               return { ...next, expanded: true, diffStatus: "idle" as FileDiffStatus };
             }
             return next;
-          });
+          }), ...untracked];
           // Reviewed checkmarks belong to this exact (projectRoot, scope)
           // identity — reload them fresh rather than carrying stale entries
           // over from whatever scope was active before.
@@ -568,7 +618,7 @@ export function createReviewStore(deps: ReviewDeps) {
           set({
             files,
             totals: totalsOf(files),
-            warnings: parsed.warnings,
+            warnings: [...parsed.warnings, ...extraWarnings],
             loading: false,
             loaded: true,
             branchBase,
@@ -603,8 +653,43 @@ export function createReviewStore(deps: ReviewDeps) {
           branchBase: null,
           headBranch: null,
           error: null,
+          chatTarget: null,
+          chatTargetChoices: [],
         });
         await get().load(projectRoot);
+      },
+
+      async openChatReview(target) {
+        let choices = [target];
+        try {
+          const out = await deps.git.run(target.executionRoot, ["worktree", "list", "--porcelain"]);
+          const roots = worktreeRoots(out.stdout).filter((root) => root !== target.executionRoot);
+          choices = [target, ...roots.map((root) => ({
+            ...target,
+            selectedWorktreeRoot: root,
+            sharedCheckout: false,
+          }))];
+        } catch {
+          // The subsequent load surfaces the actual Git error inline.
+        }
+        const selected = choices.length === 2 ? choices[1] : target;
+        set({
+          scope: { kind: "worktree" },
+          projectRoot: selected.selectedWorktreeRoot ?? selected.executionRoot,
+          branchBase: null,
+          headBranch: null,
+          error: null,
+          chatTarget: selected,
+          chatTargetChoices: choices.length > 2 ? choices : [],
+        });
+        deps.onChatTargetSelected?.(selected);
+        await get().load(selected.selectedWorktreeRoot ?? selected.executionRoot);
+      },
+
+      async selectChatTarget(target) {
+        set({ chatTarget: target, chatTargetChoices: [], scope: { kind: "worktree" } });
+        deps.onChatTargetSelected?.(target);
+        await get().load(target.selectedWorktreeRoot ?? target.executionRoot);
       },
 
       async setScope(scope) {
@@ -716,6 +801,8 @@ export function createReviewStore(deps: ReviewDeps) {
         }
         set({
           projectRoot: null,
+          chatTarget: null,
+          chatTargetChoices: [],
           files: [],
           totals: { files: 0, adds: 0, dels: 0 },
           loading: false,
