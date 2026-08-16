@@ -404,6 +404,7 @@ export function createReviewStore(deps: ReviewDeps) {
   // Monotonic generation guard (the github/harness stores' pattern): a slower
   // stale list load can never clobber a newer one's result.
   let generation = 0;
+  let targetGeneration = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   // The current branch scope's resolved "<sha>...HEAD" range, kept out of
   // public state (it's an implementation detail of the argv helpers, not
@@ -696,9 +697,11 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async openChatReview(target) {
+        const targetGen = ++targetGeneration;
         let choices = [target];
         try {
           const out = await deps.git.run(target.executionRoot, ["worktree", "list", "--porcelain"]);
+          if (targetGen !== targetGeneration) return;
           const roots = worktreeRoots(out.stdout).filter((root) => root !== target.executionRoot);
           choices = [target, ...roots.map((root) => ({
             ...target,
@@ -706,9 +709,11 @@ export function createReviewStore(deps: ReviewDeps) {
             sharedCheckout: false,
           }))];
         } catch {
+          if (targetGen !== targetGeneration) return;
           // The subsequent load surfaces the actual Git error inline.
         }
         const selected = await discoverPullRequest(target);
+        if (targetGen !== targetGeneration) return;
         set({
           scope: { kind: "worktree" },
           projectRoot: selected.selectedWorktreeRoot ?? selected.executionRoot,
@@ -723,13 +728,16 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async selectChatTarget(target) {
+        const targetGen = ++targetGeneration;
         const selected = await discoverPullRequest(target);
+        if (targetGen !== targetGeneration) return;
         set({ chatTarget: selected, chatTargetChoices: [], scope: { kind: "worktree" } });
         deps.onChatTargetSelected?.(selected);
         await get().load(selected.selectedWorktreeRoot ?? selected.executionRoot);
       },
 
       associateChatPullRequest(number) {
+        ++targetGeneration;
         const target = get().chatTarget;
         if (!target || !Number.isSafeInteger(number) || number < 1) return;
         const next = { ...target, pullRequest: number };
@@ -841,6 +849,7 @@ export function createReviewStore(deps: ReviewDeps) {
 
       reset() {
         generation++; // orphan any in-flight load
+        targetGeneration++;
         currentRange = null;
         commentStash.clear();
         if (debounceTimer) {

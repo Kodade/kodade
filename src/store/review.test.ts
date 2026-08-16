@@ -115,6 +115,21 @@ describe("createReviewStore", () => {
     expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([null, "/repo/delegated"]);
   });
 
+  it("does not let delayed worktree discovery replace a newer selected target", async () => {
+    const git = new DelayableGit();
+    git.delay("worktree list --porcelain");
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    const first = { threadId: "first", executionRoot: "/first", baselineSha: null, branch: null, sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null };
+    const newer = { threadId: "newer", executionRoot: "/newer", baselineSha: null, branch: null, sharedCheckout: false, pullRequest: null, selectedWorktreeRoot: "/newer/work" };
+    const opening = store.getState().openChatReview(first);
+    await Promise.resolve();
+    await store.getState().selectChatTarget(newer);
+    git.resolveDelayed({ stdout: "worktree /first\n", stderr: "" });
+    await opening;
+    expect(store.getState().chatTarget?.threadId).toBe("newer");
+    expect(store.getState().projectRoot).toBe("/newer/work");
+  });
+
   it("discovers and persists the pull request associated with a chat checkout", async () => {
     const git = new MockGit();
     const github = new MockGithub();

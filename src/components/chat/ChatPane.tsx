@@ -122,7 +122,7 @@ export function ChatPane({
   // cannot disturb whichever branch/PR scope the user left open in KödPR.
   useEffect(() => {
     if (!thread || thread.status !== "idle" || thread.entries.length === 0) return;
-    const root = filesStore.getState().rootPath;
+    const root = thread.reviewTarget?.selectedWorktreeRoot ?? thread.reviewTarget?.executionRoot ?? filesStore.getState().rootPath;
     if (!root) return;
     void workingTree.getState().load(root);
   }, [workingTree, thread?.entries.length, thread?.id, thread?.status, thread?.updatedAt]);
@@ -130,7 +130,7 @@ export function ChatPane({
   const showWorkingTreeSummary =
     !!thread &&
     thread.status === "idle" &&
-    summaryProjectRoot === filesStore.getState().rootPath &&
+    summaryProjectRoot === (thread?.reviewTarget?.selectedWorktreeRoot ?? thread?.reviewTarget?.executionRoot ?? filesStore.getState().rootPath) &&
     summaryLoaded &&
     !summaryLoading &&
     !summaryError &&
