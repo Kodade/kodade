@@ -87,7 +87,7 @@ describe("claude dialect", () => {
     const result = CLAUDE_TOOL_TURN.flatMap((line) => parser.line(line));
     const done = result.filter((e) => e.type === "done");
     expect(done).toHaveLength(0);
-    expect(parser.end(0, "").filter((e) => e.type === "done")).toHaveLength(0);
+    expect(parser.end(0, "").filter((e) => e.type === "done")).toHaveLength(1);
   });
 
   it("maps TodoWrite onto a plan block", () => {
@@ -134,7 +134,21 @@ describe("claude dialect", () => {
     expect(events.find((e) => e.type === "auth-error")).toMatchObject({
       type: "auth-error",
     });
-    expect(events.filter((e) => e.type === "done")).toHaveLength(0);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+
+  it("preserves a nonzero native exit failure after a result frame", () => {
+    const events = drain(
+      "claude",
+      [JSON.stringify({ type: "result", session_id: "s1" })],
+      1,
+      "native provider process failed",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "error", message: "native provider process failed" }),
+      ]),
+    );
   });
 });
 

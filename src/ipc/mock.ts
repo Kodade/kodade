@@ -357,9 +357,12 @@ export class MockAgentIpc implements AgentIpc {
   // When set, start() rejects with this error (CLI missing, duplicate id...).
   failStartWith: unknown = null;
   liveRunIds: string[] = [];
+  deferListLive = false;
+  listLiveCalls = 0;
 
   private eventHandlers = new Set<(e: AgentEvent) => void>();
   private exitHandlers = new Set<(e: AgentExitEvent) => void>();
+  private listLiveResolvers: (() => void)[] = [];
 
   start(args: AgentStartArgs): Promise<void> {
     this.starts.push(args);
@@ -379,7 +382,10 @@ export class MockAgentIpc implements AgentIpc {
     return Promise.resolve();
   }
   listLive(): Promise<AgentLiveRun[]> {
-    return Promise.resolve(this.liveRunIds.map((id) => ({ id })));
+    this.listLiveCalls++;
+    const snapshot = this.liveRunIds.map((id) => ({ id }));
+    if (!this.deferListLive) return Promise.resolve(snapshot);
+    return new Promise((resolve) => this.listLiveResolvers.push(() => resolve(snapshot)));
   }
   async onEvent(handler: (e: AgentEvent) => void): Promise<Unlisten> {
     this.eventHandlers.add(handler);
@@ -400,6 +406,9 @@ export class MockAgentIpc implements AgentIpc {
   }
   exit(id: string, code: number | null = 0, stderr = ""): void {
     for (const handler of this.exitHandlers) handler({ id, code, stderr });
+  }
+  resolveListLive() {
+    this.listLiveResolvers.shift()?.();
   }
 }
 

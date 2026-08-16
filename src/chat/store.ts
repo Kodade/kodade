@@ -213,6 +213,9 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   const runByRunId = new Map<string, string>(); // runId → threadId
   const turns = new Map<string, number>();
   const nativeLiveRunIds = new Set<string>();
+  // A list snapshot can resolve after its process has exited. Keep that exit
+  // fact until a newer snapshot omits the id, so stale data cannot re-adopt it.
+  const exitedNativeRunIds = new Set<string>();
   type ModelDiscoveryRun = {
     providerId: string;
     catalogKey: string;
@@ -503,8 +506,14 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     const reconcileLiveRun = async (threadId: string) => {
       try {
         const liveRuns = await deps.agent.listLive();
+        const snapshotIds = new Set(liveRuns.map((run) => run.id));
+        for (const runId of exitedNativeRunIds) {
+          if (!snapshotIds.has(runId)) exitedNativeRunIds.delete(runId);
+        }
         nativeLiveRunIds.clear();
-        for (const { id } of liveRuns) nativeLiveRunIds.add(id);
+        for (const { id } of liveRuns) {
+          if (!exitedNativeRunIds.has(id)) nativeLiveRunIds.add(id);
+        }
       } catch (error) {
         console.error(`kodade: KödChat live-run reconciliation failed (${threadId}):`, error);
       }
@@ -532,6 +541,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
 
     const onExit = (runId: string, code: number | null, stderr: string) => {
       nativeLiveRunIds.delete(runId);
+      exitedNativeRunIds.add(runId);
       const discovery = modelDiscoveryRuns.get(runId);
       if (discovery) {
         modelDiscoveryRuns.delete(runId);
@@ -582,11 +592,17 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         );
         try {
           const liveRuns = await deps.agent.listLive();
+          const snapshotIds = new Set(liveRuns.map((run) => run.id));
+          for (const runId of exitedNativeRunIds) {
+            if (!snapshotIds.has(runId)) exitedNativeRunIds.delete(runId);
+          }
           nativeLiveRunIds.clear();
-          for (const { id } of liveRuns) nativeLiveRunIds.add(id);
+          for (const { id } of liveRuns) {
+            if (!exitedNativeRunIds.has(id)) nativeLiveRunIds.add(id);
+          }
           for (const threadId of Object.keys(get().threads)) {
-            const liveRun = liveRuns.find((run) => threadIdOfRun(run.id) === threadId);
-            if (liveRun) adoptLiveRun(threadId, liveRun.id);
+            const liveRun = [...nativeLiveRunIds].find((id) => threadIdOfRun(id) === threadId);
+            if (liveRun) adoptLiveRun(threadId, liveRun);
           }
         } catch (error) {
           console.error("kodade: KödChat live-run reconciliation failed:", error);

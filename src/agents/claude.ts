@@ -36,7 +36,6 @@ import type { ClaudePermissionRequest } from "./claude-input";
 
 class ClaudeParser implements AgentStreamParser {
   private messageId = "";
-  private done = false;
   private deferredFailure: AgentStreamEvent | null = null;
   // Content-block index → what kind of block it is, so a delta can be routed
   // without re-reading the block's start frame.
@@ -91,7 +90,7 @@ class ClaudeParser implements AgentStreamParser {
   end(code: number | null, stderr: string): AgentStreamEvent[] {
     return [
       ...(this.deferredFailure ? [this.deferredFailure] : []),
-      ...endOfRunEvents(this.done, code, stderr),
+      ...endOfRunEvents(false, code, stderr),
     ];
   }
 
@@ -211,7 +210,6 @@ class ClaudeParser implements AgentStreamParser {
   // delegated work is still active). It is provider output, not process exit;
   // native exit remains the only terminal signal for KödChat ownership.
   private result(value: Json): AgentStreamEvent[] {
-    this.done = true;
     const events: AgentStreamEvent[] = [];
     const sessionId = asString(value.session_id);
     if (sessionId) events.push({ type: "session", sessionId });

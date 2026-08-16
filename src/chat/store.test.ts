@@ -133,6 +133,56 @@ describe("a turn", () => {
     agent.exit("t1#4", 0);
     expect(store.getState().threads.t1.status).toBe("idle");
   });
+
+  it("does not adopt a run that exits while its live-run snapshot is in flight", async () => {
+    const { agent, storage, store } = setup();
+    storage.docs.set(
+      chatDocName("t1"),
+      JSON.stringify({
+        version: 1,
+        id: "t1",
+        projectId: "p1",
+        providerId: "claude",
+        title: "Existing chat",
+        resumeId: "s1",
+        conversationId: 0,
+        model: null,
+        access: "standard",
+        thinking: null,
+        speed: "default",
+        entries: [],
+        updatedAt: 1,
+      }),
+    );
+    await store.getState().start();
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const opened = store.getState().openThread("t1", "p1", "claude");
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+
+    agent.exit("t1#4", 1, "native process failed");
+    agent.resolveListLive();
+    await opened;
+
+    expect(store.getState().threads.t1.status).toBe("idle");
+    await store.getState().send("t1", "a new turn is safe");
+    expect(agent.starts).toHaveLength(1);
+  });
+
+  it("does not adopt a run that exits while startup reconciliation is in flight", async () => {
+    const { agent, store } = setup();
+    await openThread(store);
+    agent.liveRunIds = ["t1#4"];
+    agent.deferListLive = true;
+    const started = store.getState().start();
+    await vi.waitFor(() => expect(agent.listLiveCalls).toBe(2));
+
+    agent.exit("t1#4", 1, "native process failed");
+    agent.resolveListLive();
+    await started;
+
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
   it("starts a headless run with the adapter's argv and the prompt on stdin", async () => {
     const { agent, store } = setup();
     await store.getState().start();
