@@ -8,6 +8,8 @@
   action while keeping populated views focused on projects with actual work.
 - Kept KödChat ownership tied to the native provider process, including clear
   detached-stream status and recovery when Claude output resumes.
+- Fixed KödPR to retain each KödChat's checkout, baseline, and explicit
+  worktree/PR review target instead of silently reviewing an unrelated root.
 - Fixed Codex collaboration activity emitted by the CLI to appear in KödChat
   tool cards instead of being silently dropped.
 - Added user- and project-scoped Codex custom-agent TOML profiles to the

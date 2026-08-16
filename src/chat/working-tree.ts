@@ -67,12 +67,14 @@ export function createWorkingTreeSummaryStore(
           }),
           { files: 0, adds: 0, dels: 0 },
         );
-        const status = await git.run(projectRoot, ["status", "--porcelain=v2", "-z"]);
+        const status = await git.run(projectRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+        if (currentGeneration !== generation) return;
         for (const record of status.stdout.split("\0")) {
           if (!record.startsWith("? ")) continue;
           const path = record.slice(2);
           if (!path || path.startsWith("/") || path.split(/[\\/]/).includes("..")) continue;
           const untracked = await git.run(projectRoot, ["diff", "--no-index", "--no-color", "--", "/dev/null", path]);
+          if (currentGeneration !== generation) return;
           const file = parseUnifiedDiff(untracked.stdout).items[0];
           if (file) {
             summary.files++;

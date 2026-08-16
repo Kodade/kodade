@@ -105,6 +105,25 @@ function makeStore(git: MockGit, watch = new MockWatch(), opts: { maxDiffBytes?:
 }
 
 describe("createReviewStore", () => {
+  it("keeps the execution checkout selected when one alternate worktree exists", async () => {
+    const git = new MockGit();
+    git.responses.set("worktree list --porcelain", { stdout: "worktree /repo\nHEAD a\n\nworktree /repo/delegated\nHEAD b\n", stderr: "" });
+    const store = makeStore(git);
+    const target = { threadId: "t1", executionRoot: ROOT, baselineSha: "base", branch: "main", sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null };
+    await store.getState().openChatReview(target);
+    expect(store.getState().projectRoot).toBe(ROOT);
+    expect(store.getState().chatTargetChoices.map((choice) => choice.selectedWorktreeRoot)).toEqual([null, "/repo/delegated"]);
+  });
+
+  it("uses a chat's captured baseline for branch review", async () => {
+    const git = new MockGit();
+    git.responses.set("merge-base base HEAD", { stdout: "base\n", stderr: "" });
+    git.responses.set("rev-parse --abbrev-ref HEAD", { stdout: "feature\n", stderr: "" });
+    const store = makeStore(git);
+    store.setState({ projectRoot: ROOT, chatTarget: { threadId: "t1", executionRoot: ROOT, baselineSha: "base", branch: "feature", sharedCheckout: true, pullRequest: null, selectedWorktreeRoot: null } });
+    await store.getState().setScope({ kind: "branch", base: null });
+    expect(store.getState().branchBase).toBe("base");
+  });
   it("builds the working-tree file list from numstat and runs exactly one allowlisted shape", async () => {
     const git = new MockGit();
     git.responses.set(
@@ -123,7 +142,7 @@ describe("createReviewStore", () => {
     expect(state.files.map((f) => f.path)).toEqual(["src/a.ts", "docs/README.md"]);
     expect(state.totals).toEqual({ files: 2, adds: 13, dels: 2 });
     // The list load runs the plain working-tree numstat and nothing else.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
   });
 
   it("treats a clean working tree (empty stdout) as zero files, not an error", async () => {
@@ -156,7 +175,7 @@ describe("createReviewStore", () => {
 
     await store.getState().load(ROOT);
     // No per-file diff runs until a row is expanded.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
 
     await store.getState().toggleFile("src/a.ts");
     const file = store.getState().files.find((f) => f.path === "src/a.ts")!;
@@ -165,7 +184,7 @@ describe("createReviewStore", () => {
     expect(file.diff?.hunks[0].lines.some((l) => l.kind === "add")).toBe(true);
     expect(git.calls).toEqual([
       ["diff", "--numstat", "-z", "HEAD"],
-      ["status", "--porcelain=v2", "-z"],
+      ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
       ["diff", "--no-color", "HEAD", "--", "src/a.ts"],
     ]);
 
@@ -189,7 +208,7 @@ describe("createReviewStore", () => {
     await store.getState().toggleFile("img.png");
     expect(store.getState().files[0].diffStatus).toBe("binary");
     // Only the numstat ran — no diff for the binary file.
-    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z"]]);
+    expect(git.calls).toEqual([["diff", "--numstat", "-z", "HEAD"], ["status", "--porcelain=v2", "-z", "--untracked-files=all"]]);
   });
 
   it("flips an oversized per-file diff to a stat-only tooLarge state", async () => {
@@ -310,7 +329,7 @@ describe("createReviewStore", () => {
     });
     expect(calls).toEqual([
       { root: "/current", args: ["diff", "--numstat", "-z", "HEAD"] },
-      { root: "/current", args: ["status", "--porcelain=v2", "-z"] },
+      { root: "/current", args: ["status", "--porcelain=v2", "-z", "--untracked-files=all"] },
     ]);
   });
 });

@@ -147,6 +147,7 @@ export type ReviewState = {
   openWorktree(projectRoot: string): Promise<void>;
   openChatReview(target: ChatReviewTarget): Promise<void>;
   selectChatTarget(target: ChatReviewTarget): Promise<void>;
+  associateChatPullRequest(number: number): void;
   // Switch scope (worktree <-> branch) and reload the current project under it.
   setScope(scope: ReviewScope): Promise<void>;
   // Expand/collapse a row. On first expand of a non-binary file, lazily loads
@@ -583,13 +584,15 @@ export function createReviewStore(deps: ReviewDeps) {
           const extraWarnings: string[] = [];
           const untracked: ReviewFile[] = [];
           if (scope.kind === "worktree") {
-            const status = await deps.git.run(projectRoot, ["status", "--porcelain=v2", "-z"]);
+            const status = await deps.git.run(projectRoot, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+            if (gen !== generation || get().projectRoot !== projectRoot) return;
             for (const path of untrackedPaths(status.stdout)) {
               if (!isSafeRelativePath(path)) {
                 extraWarnings.push(`ignored unsafe untracked path: ${JSON.stringify(path)}`);
                 continue;
               }
               const diff = await deps.git.run(projectRoot, ["diff", "--no-index", "--no-color", "--", "/dev/null", path]);
+              if (gen !== generation || get().projectRoot !== projectRoot) return;
               const parsedDiff = parseUnifiedDiff(diff.stdout).items[0];
               if (!parsedDiff) {
                 extraWarnings.push(`could not read untracked file: ${JSON.stringify(path)}`);
@@ -672,7 +675,7 @@ export function createReviewStore(deps: ReviewDeps) {
         } catch {
           // The subsequent load surfaces the actual Git error inline.
         }
-        const selected = choices.length === 2 ? choices[1] : target;
+        const selected = target;
         set({
           scope: { kind: "worktree" },
           projectRoot: selected.selectedWorktreeRoot ?? selected.executionRoot,
@@ -680,7 +683,7 @@ export function createReviewStore(deps: ReviewDeps) {
           headBranch: null,
           error: null,
           chatTarget: selected,
-          chatTargetChoices: choices.length > 2 ? choices : [],
+          chatTargetChoices: choices.length > 1 ? choices : [],
         });
         deps.onChatTargetSelected?.(selected);
         await get().load(selected.selectedWorktreeRoot ?? selected.executionRoot);
@@ -692,7 +695,18 @@ export function createReviewStore(deps: ReviewDeps) {
         await get().load(target.selectedWorktreeRoot ?? target.executionRoot);
       },
 
+      associateChatPullRequest(number) {
+        const target = get().chatTarget;
+        if (!target || !Number.isSafeInteger(number) || number < 1) return;
+        const next = { ...target, pullRequest: number };
+        set({ chatTarget: next });
+        deps.onChatTargetSelected?.(next);
+      },
+
       async setScope(scope) {
+        if (scope.kind === "branch" && get().chatTarget?.baselineSha) {
+          scope = { kind: "branch", base: get().chatTarget!.baselineSha };
+        }
         set({ scope, branchBase: null, headBranch: null, error: null });
         const root = get().projectRoot;
         if (root) await get().load(root);

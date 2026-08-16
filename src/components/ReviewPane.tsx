@@ -148,6 +148,16 @@ export function ReviewPane({
           </div>
         )}
 
+        {state.chatTarget?.pullRequest && (
+          <button
+            type="button"
+            onClick={() => void store.getState().setScope({ kind: "pr", number: state.chatTarget!.pullRequest! })}
+            className="self-start rounded border border-border px-2 py-1 text-xs text-text-dim hover:bg-surface-hover"
+          >
+            review KödChat PR #{state.chatTarget.pullRequest}
+          </button>
+        )}
+
         {scope.kind === "pr" && !error && (prView || prChecks) && (
           <PrHeaderStrip prView={prView} prChecks={prChecks} />
         )}

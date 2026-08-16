@@ -48,7 +48,17 @@ fn validate_args(args: &[String]) -> Result<(), String> {
     };
 
     match subcommand.as_str() {
-        "status" => exact(rest, &["--porcelain=v2", "-z"]),
+        "status" => match rest {
+            [porcelain, zero] if porcelain == "--porcelain=v2" && zero == "-z" => Ok(()),
+            [porcelain, zero, untracked]
+                if porcelain == "--porcelain=v2"
+                    && zero == "-z"
+                    && untracked == "--untracked-files=all" =>
+            {
+                Ok(())
+            }
+            _ => Err("git status shape is not allowed".to_string()),
+        },
         "rev-parse" => match rest {
             [flag, head] if flag == "--abbrev-ref" && head == "HEAD" => Ok(()),
             [flag, reference] if flag == "--verify" => validate_ref(reference),
@@ -270,6 +280,7 @@ mod tests {
     fn allows_only_the_exact_read_only_command_shapes() {
         for args in [
             vec!["status", "--porcelain=v2", "-z"],
+            vec!["status", "--porcelain=v2", "-z", "--untracked-files=all"],
             vec!["rev-parse", "--abbrev-ref", "HEAD"],
             vec!["rev-parse", "--verify", "main"],
             vec!["rev-parse", "--verify", "origin/feature/m12-kodpr"],
