@@ -1,15 +1,14 @@
-// The v2 tabbed shell frame (issue #62, slice a).
+// The v2 tabbed shell frame (issue #62).
 //
-// Sidebar on the left, a keep-alive tab host on the right. The Code tab holds
-// today's full workspace unchanged — the same Group, Panels, and panes the v1
-// shell renders — so switching tabs never unmounts a live terminal or editor.
-// Agents and Editor are placeholders in this slice: they make the switcher real
-// while their content lands later.
+// Sidebar on the left, a keep-alive tab host on the right. Code holds the
+// chat/terminal split (CodeTab); Editor holds the editor beside the workspace
+// files; Agents is still a placeholder. Tab content mounts once and is only
+// ever hidden, so switching tabs never unmounts a live terminal or editor.
 //
 // This whole component is gated twice: the `shell` release feature must be
 // compiled in AND the user must have switched the shell on.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   Group,
   Panel,
@@ -22,9 +21,8 @@ import { useStore } from "zustand";
 import { EditorPane } from "../EditorPane";
 import { Pane } from "../Pane";
 import { WorkspaceFilesPane } from "../WorkspaceFilesPane";
-import { ChatPane } from "../chat/ChatPane";
-import { sizesToRestoredLayout, type PanelId } from "../layout";
 import { appStore } from "../../store/appStore";
+import { CodeTab } from "./CodeTab";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
 import { WorkspacesSidebar } from "./WorkspacesSidebar";
 import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
@@ -33,43 +31,40 @@ import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
 const SEP =
   "w-px cursor-col-resize bg-border transition-colors data-[active]:bg-accent hover:bg-accent";
 
-// The panes the Code tab's Group owns. The sidebar is NOT one of them: in v2 it
-// lives outside the tab host so it survives tab switches.
-const CODE_PANEL_IDS: readonly PanelId[] = ["terminal", "editor", "files"];
-
 export function ShellV2() {
   const shellLayout = useStore(appStore, (s) => s.shellLayout);
-  const savedLayout = useStore(appStore, (s) => s.layout);
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
-  const groupRef = useRef<GroupImperativeHandle | null>(null);
   const filesRef = usePanelRef();
+  const editorGroupRef = useRef<GroupImperativeHandle | null>(null);
 
-  // v1 pane sizes, minus the sidebar, renormalized to the tab area. Read-only
-  // in this slice: the v2 shell does not write back to the v1 array, so
-  // switching the shell off restores exactly the sizes the user had. v2's own
-  // persisted geometry (shellLayout.code / .editor) lands with the pane work.
-  const codeLayout = useMemo(
-    () => codeGroupLayout(savedLayout, filesCollapsed ? [] : ["files"]),
-    [savedLayout, filesCollapsed],
-  );
+  // Editor geometry is read-only in this slice: the split renders at the saved
+  // ratio, and writing it back lands with the Editor tab's own work.
+  const filesPct = shellLayout.editor.filesPct;
+  const editorLayout: Layout = {
+    editor: round2(100 - filesPct),
+    files: filesPct,
+  };
 
-  // Reapply sizes when the files pane leaves its 44px rail — same hazard and
-  // same next-frame reassert as the v1 shell (a rail's old fixed constraint is
-  // reconciled after this parent effect, which can otherwise strand the pane).
+  // Reapply the editor split when the files pane leaves its 44px rail — the
+  // same hazard and the same next-frame reassert the v1 shell documents: the
+  // rail's old fixed constraint is reconciled AFTER this parent effect, so the
+  // first call is clamped and the pane can stay stranded at 44px.
   //
-  // activeTab is a dependency because the Code tab mounts LAZILY: booting with
-  // Agents or Editor active leaves groupRef null, and without this the effect
-  // would never run again to size the Group once Code is first shown.
+  // activeTab is a dependency because the Editor tab mounts LAZILY: booting on
+  // another tab leaves editorGroupRef null, and without this the effect would
+  // never run again to size the Group once Editor is first shown.
   useEffect(() => {
-    groupRef.current?.setLayout(codeLayout);
+    editorGroupRef.current?.setLayout(editorLayout);
     if (filesCollapsed) return;
     const frame = requestAnimationFrame(() => {
-      groupRef.current?.setLayout(codeLayout);
-      filesRef.current?.resize(`${codeLayout.files}%`);
+      editorGroupRef.current?.setLayout(editorLayout);
+      filesRef.current?.resize(`${filesPct}%`);
     });
     return () => cancelAnimationFrame(frame);
-  }, [codeLayout, filesCollapsed, shellLayout.activeTab]);
+    // editorLayout is derived from filesPct alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesPct, filesCollapsed, shellLayout.activeTab]);
 
   // Tab SELECTION lives in the title bar (the pill group); this component only
   // renders whatever `shellLayout.activeTab` currently says.
@@ -85,23 +80,17 @@ export function ShellV2() {
     },
     {
       id: "code",
+      render: (active) => <CodeTab active={active} />,
+    },
+    {
+      id: "editor",
       render: () => (
         <Group
-          groupRef={groupRef}
+          groupRef={editorGroupRef}
           className="min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
-          // The saved sizes, not the first-run defaults: a lazily mounted Code
-          // tab must come up already correct, not resize on its first frame.
-          defaultLayout={codeLayout}
+          defaultLayout={editorLayout}
         >
-          {/* KödChat is the primary agent surface (issue #163); the terminal
-              opens as a split inside this pane, so the session registry keeps
-              owning its xterm hosts. The panel id stays "terminal" because
-              persisted layouts are keyed by it. */}
-          <Panel id="terminal" minSize="20%">
-            <ChatPane />
-          </Panel>
-          <Separator className={SEP} />
-          <Panel id="editor" minSize="12%" collapsible={false}>
+          <Panel id="editor" minSize="20%" collapsible={false}>
             <EditorPane />
           </Panel>
           <Separator
@@ -122,15 +111,6 @@ export function ShellV2() {
             <WorkspaceFilesPane />
           </Panel>
         </Group>
-      ),
-    },
-    {
-      id: "editor",
-      render: () => (
-        <Placeholder
-          title="editor"
-          line="The full-window editor arrives here in a later update."
-        />
       ),
     },
   ];
@@ -169,21 +149,6 @@ function Placeholder({ title, line }: { title: string; line: string }) {
       </div>
     </Pane>
   );
-}
-
-// v1 geometry for the Code tab's Group. The sidebar's share is removed and the
-// three remaining panes are renormalized to the tab area they now fill.
-function codeGroupLayout(
-  sizes: number[] | undefined,
-  expandIds: readonly PanelId[],
-): Layout {
-  const full = sizesToRestoredLayout(sizes, expandIds);
-  const total = CODE_PANEL_IDS.reduce((sum, id) => sum + full[id], 0);
-  const layout: Layout = {};
-  CODE_PANEL_IDS.forEach((id) => {
-    layout[id] = total > 0 ? round2((full[id] / total) * 100) : 100 / 3;
-  });
-  return layout;
 }
 
 function round2(value: number): number {

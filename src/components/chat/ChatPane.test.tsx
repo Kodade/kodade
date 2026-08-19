@@ -111,6 +111,13 @@ function makeWorkingTreeStore(git = new MockGit()) {
 async function mount({
   review = makeReviewStore(),
   workingTree = makeWorkingTreeStore(),
+  showTerminalToggle = true,
+  onTerminalRequest,
+}: {
+  review?: ReturnType<typeof makeReviewStore>;
+  workingTree?: ReturnType<typeof makeWorkingTreeStore>;
+  showTerminalToggle?: boolean;
+  onTerminalRequest?: () => void;
 } = {}) {
   const storage = new MockStorage();
   const agent = new MockAgentIpc();
@@ -155,6 +162,8 @@ async function mount({
         terminalRegistry={terminalRegistry}
         review={review}
         workingTree={workingTree}
+        showTerminalToggle={showTerminalToggle}
+        onTerminalRequest={onTerminalRequest}
       />,
     );
   });
@@ -673,6 +682,33 @@ describe("ChatPane", () => {
     expect(host.querySelector('[data-testid="chat-error-card"]')).toBeNull();
   });
 
+  // The login escape hatch must still work when the host owns the terminal:
+  // the split never renders there, so the pane asks instead of opening one.
+  it("asks its host for a terminal on an auth failure when the toggle is suppressed", async () => {
+    const onTerminalRequest = vi.fn();
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } =
+      await mount({ showTerminalToggle: false, onTerminalRequest });
+    mounted = root;
+
+    await act(async () => {
+      const threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(threadId, projectId, "claude");
+      await chatThreadsStore.getState().send(threadId, "hello");
+      agent.exit(agent.starts[0].id, 1, "Invalid API key · Please run /login");
+    });
+
+    const login = [
+      ...host.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="chat-auth-card"] button',
+      ),
+    ].find((button) => button.textContent?.includes("log in"))!;
+    await act(async () => login.click());
+
+    expect(onTerminalRequest).toHaveBeenCalledTimes(1);
+    // And still no second terminal surface inside the chat.
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
+  });
+
   it("switches provider and picks a codex model through the styled menus", async () => {
     const { host, root, projectsStore, chatThreadsStore, projectId } = await mount();
     mounted = root;
@@ -705,6 +741,17 @@ describe("ChatPane", () => {
     await act(async () => modelTrigger.click());
     await act(async () => optionByLabel("GPT-5.6-Sol")?.click());
     expect(chatThreadsStore.getState().threads[threadId].model).toBe("gpt-5.6-sol");
+  });
+
+  // The v2 shell's Code tab (#62) puts a terminal window beside this pane, so
+  // the in-pane split would be a second, competing terminal surface.
+  it("suppresses its terminal toggle when the host owns the terminal", async () => {
+    const { host, root } = await mount({ showTerminalToggle: false });
+    mounted = root;
+
+    expect(host.querySelector('button[aria-label="Show terminal"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Hide terminal"]')).toBeNull();
+    expect(host.querySelector('[data-testid="chat-terminal-split"]')).toBeNull();
   });
 
   it("opens one thread-owned terminal without leaving the chat or adding a workspace card", async () => {
