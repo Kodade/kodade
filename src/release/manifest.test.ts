@@ -8,6 +8,7 @@ describe("release manifest", () => {
       voice: false,
       ssh: false,
       work: true,
+      shell: false,
     });
   });
 
@@ -17,6 +18,7 @@ describe("release manifest", () => {
       voice: true,
       ssh: true,
       work: true,
+      shell: true,
     });
   });
 });

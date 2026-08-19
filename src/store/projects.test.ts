@@ -14,6 +14,7 @@ import {
   type PersistedDoc,
 } from "./projects";
 import { remoteProjectId } from "../ssh/model";
+import { defaultShellLayout } from "../components/shell/shell-layout";
 
 // Fake registry that records opens/closes (the store never sees xterm).
 function fakeRegistry() {
@@ -3001,5 +3002,141 @@ describe("KödWork tasks are sessions without a PTY (#43)", () => {
     const polled = foreground.foreground.mock.calls.map((call) => call[0]);
     expect(polled).toContain(terminalId);
     expect(polled).not.toContain(taskId);
+  });
+});
+
+describe("v2 shell state (#62)", () => {
+  it("hydrates a persisted v2 shell document", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shell: {
+        version: 2,
+        activeTab: "editor",
+        sidebarPct: 22,
+        code: { mode: "chat", chatPct: 70, expanded: null },
+        editor: { filesPct: 40, panels: { github: true, review: false } },
+      },
+      shellV2: true,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellLayout).toMatchObject({
+      activeTab: "editor",
+      sidebarPct: 22,
+      code: { mode: "chat", chatPct: 70 },
+    });
+    expect(store.getState().shellV2Enabled).toBe(true);
+  });
+
+  it("falls back to the v1 pane array so the first v2 boot keeps the sidebar width", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      layout: [22, 32, 16, 30],
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellLayout.sidebarPct).toBe(22);
+    // Absent shellV2 leaves the v2 shell switched off.
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  it("defaults the v2 shell layout when the document has neither field", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: "yes" as unknown as boolean,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellLayout.activeTab).toBe("code");
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  it("persists a new shell layout and rejects a malformed one", async () => {
+    const { store, storage } = makeStore();
+    const next = { ...store.getState().shellLayout, activeTab: "agents" as const };
+    store.getState().setShellLayout(next);
+    await store.getState().flushPersistence();
+
+    expect(store.getState().shellLayout.activeTab).toBe("agents");
+    expect((JSON.parse(storage.doc!) as PersistedDoc).shell).toMatchObject({
+      version: 2,
+      activeTab: "agents",
+    });
+
+    store
+      .getState()
+      .setShellLayout({ ...next, sidebarPct: 999 } as never);
+    expect(store.getState().shellLayout.activeTab).toBe("agents");
+    expect(store.getState().shellLayout.sidebarPct).toBe(next.sidebarPct);
+  });
+
+  it("leaves the v1 layout authoritative until the v2 shell is actually used", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      layout: [22, 32, 16, 30],
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+    store.getState().setLayout([18, 36, 16, 30]);
+    await store.getState().flushPersistence();
+
+    // No `shell` field yet: a v1-only session must not freeze a derived shell
+    // document, or later sidebar resizes would never reach the first v2 boot.
+    expect(JSON.parse(storage.doc!)).not.toHaveProperty("shell");
+
+    store.getState().setShellV2Enabled(true);
+    await store.getState().flushPersistence();
+    expect((JSON.parse(storage.doc!) as PersistedDoc).shell).toMatchObject({
+      version: 2,
+    });
+
+    // Sticky: switching back to the v1 shell keeps the remembered v2 layout.
+    store.getState().setShellV2Enabled(false);
+    await store.getState().flushPersistence();
+    const doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.shell).toMatchObject({ version: 2 });
+    expect(doc.shellV2).toBe(false);
+  });
+
+  it("keeps persisting a shell document that was already on disk", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shell: { ...defaultShellLayout(), activeTab: "agents" },
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+    store.getState().setTheme("dark");
+    await store.getState().flushPersistence();
+
+    expect((JSON.parse(storage.doc!) as PersistedDoc).shell).toMatchObject({
+      activeTab: "agents",
+    });
+  });
+
+  it("persists the v2 shell toggle", async () => {
+    const { store, storage } = makeStore();
+    store.getState().setShellV2Enabled(true);
+    await store.getState().flushPersistence();
+
+    expect(store.getState().shellV2Enabled).toBe(true);
+    expect((JSON.parse(storage.doc!) as PersistedDoc).shellV2).toBe(true);
   });
 });

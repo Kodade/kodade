@@ -32,10 +32,18 @@ export function KeepAliveTabs({
   tabs,
   activeId,
   className = "",
+  panelId,
+  labelledBy,
 }: {
   tabs: KeepAliveTab[];
   activeId: string;
   className?: string;
+  // Optional and additive: pair each panel with the tab button that controls
+  // it. Callers that render their own tablist elsewhere (the v2 shell puts its
+  // pills in the title bar) supply the id conventions; callers that don't get
+  // exactly the markup this component always emitted.
+  panelId?: (id: string) => string;
+  labelledBy?: (id: string) => string;
 }) {
   // Ids that have ever been active, in the order they first mounted. Lazy
   // mount: a tab nobody visited costs nothing. Ids are pruned when their tab
@@ -73,6 +81,8 @@ export function KeepAliveTabs({
           <div
             key={tab.id}
             role="tabpanel"
+            id={panelId?.(tab.id)}
+            aria-labelledby={labelledBy?.(tab.id)}
             data-tab-id={tab.id}
             data-tab-active={String(active)}
             className="min-h-0 flex-1"
