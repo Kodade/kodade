@@ -14,6 +14,7 @@ describe("compiled public surface", () => {
       false,
       false,
       true,
+      false,
     ]);
   });
 
@@ -22,6 +23,10 @@ describe("compiled public surface", () => {
     expect(RELEASE_MANIFEST.features.local).toBe(false);
     expect(RELEASE_MANIFEST.features.ssh).toBe(false);
     expect(RELEASE_MANIFEST.features.work).toBe(true);
+  });
+
+  it("compiles without the v2 tabbed shell (#62)", () => {
+    expect(RELEASE_MANIFEST.features.shell).toBe(false);
   });
 
   it("restores persisted KödWork task tabs", () => {

@@ -22,6 +22,7 @@ import {
   type PanelId,
 } from "./components/layout";
 import { SettingsPage } from "./components/settings/SettingsPage";
+import { ShellV2 } from "./components/shell/ShellV2";
 import { appStore, initApp, sshStore } from "./store/appStore";
 import { settingsViewStore } from "./store/settingsView";
 import { listenForSshFocusRefresh } from "./ssh/refresh";
@@ -54,6 +55,13 @@ export default function App() {
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
   const settingsOpen = useStore(settingsViewStore, (s) => s.section !== null);
+  // v2 tabbed shell (issue #62): compiled out of public builds and off by
+  // default in development, so the shipping shell below is untouched. Flipping
+  // this toggle DOES reparent the terminal hosts (the registry re-adopts them
+  // into the new tree) — acceptable for a development-only switch, and the
+  // reason the tab host itself never unmounts a tab.
+  const shellV2Enabled = useStore(appStore, (s) => s.shellV2Enabled);
+  const shellV2 = RELEASE_MANIFEST.features.shell && shellV2Enabled;
   const groupRef = useRef<GroupImperativeHandle | null>(null);
   const sidebarRef = usePanelRef();
   const filesRef = usePanelRef();
@@ -105,6 +113,9 @@ export default function App() {
           className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
           inert={settingsOpen}
         >
+          {shellV2 ? (
+            <ShellV2 />
+          ) : (
           <Group
             groupRef={groupRef}
             className="min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
@@ -158,6 +169,7 @@ export default function App() {
               <WorkspaceFilesPane />
             </Panel>
           </Group>
+          )}
         </div>
         {settingsOpen && <SettingsPage className="absolute inset-0 z-20" />}
       </div>

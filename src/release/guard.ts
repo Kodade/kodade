@@ -10,6 +10,9 @@ const FEATURE_NAMES: Record<DevelopmentFeature, string> = {
   voice: "KödWhisper",
   ssh: "KödSSH",
   work: "KödWork",
+  // UI-only feature: it has no IPC group of its own, but the registry stays
+  // exhaustive so a future guarded call reads correctly.
+  shell: "Ködade v2 shell",
 };
 
 export function unavailableFeatureError(feature: DevelopmentFeature): Error {

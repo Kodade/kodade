@@ -25,7 +25,12 @@ const memoryState = createStore(() => ({ loading: false, error: null, clearError
 vi.mock("../store/appStore", () => ({
   filesStore: filesState,
   memoryStore: memoryState,
-  appStore: createStore(() => ({})),
+  // Enough app state for the title bar's v2 shell reads (#62); the shell is
+  // off here, so only the toggle button is affected.
+  appStore: createStore(() => ({
+    shellV2Enabled: false,
+    shellLayout: { activeTab: "code" },
+  })),
 }));
 
 const { TitleBar } = await import("./TitleBar");

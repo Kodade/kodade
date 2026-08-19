@@ -9,6 +9,8 @@ vi.mock("./store/appStore", async () => {
       layout: [14, 40, 16, 30],
       sidebarMode: "full",
       filesCollapsed: false,
+      // On, to prove the compiled-out feature still wins (#62).
+      shellV2Enabled: true,
       setLayout: vi.fn(),
     })),
     initApp: vi.fn(() => Promise.resolve()),
@@ -29,6 +31,16 @@ vi.mock("./components/settings/SettingsPage", () => ({
   SettingsPage: () => <div>settings</div>,
 }));
 vi.mock("./ssh/refresh", () => ({ listenForSshFocusRefresh: vi.fn() }));
+// Public manifest: the v2 shell (#62) is not compiled into this build.
+vi.mock("./release/manifest", () => ({
+  RELEASE_MANIFEST: {
+    profile: "public",
+    features: { local: false, voice: false, ssh: false, work: true, shell: false },
+  },
+}));
+vi.mock("./components/shell/ShellV2", () => ({
+  ShellV2: () => <div data-shell-v2 />,
+}));
 
 vi.mock("react-resizable-panels", async () => {
   const React = await import("react");
@@ -106,5 +118,16 @@ describe("workspace pane shell", () => {
         .querySelector('[data-panel="files"]')
         ?.getAttribute("data-min-size"),
     ).toBe("10%");
+  });
+
+  it("keeps the v2 shell out of a build that does not carry the feature", () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<App />));
+
+    // The persisted toggle is on, but the manifest is authoritative.
+    expect(container.querySelector("[data-shell-v2]")).toBeNull();
+    expect(container.querySelector('[data-panel="sidebar"]')).not.toBeNull();
   });
 });

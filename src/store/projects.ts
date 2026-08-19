@@ -21,6 +21,12 @@ import {
 } from "../projects/colors";
 import { chatProviderIds } from "../agents/registry";
 import {
+  defaultShellLayout,
+  isShellLayout,
+  migrateShellLayout,
+  type ShellLayout,
+} from "../components/shell/shell-layout";
+import {
   DEFAULT_VOICE_PREFERENCES,
   normalizeVoicePreferences,
   type VoicePreferences,
@@ -252,6 +258,15 @@ export type PersistedDoc = {
   // Remote SSH sessions are skipped instead of respawning as local shells
   // (#121).
   sessions?: Record<string, PersistedSession[]>;
+  // Optional and additive (still STORAGE_VERSION 1): the v2 tabbed shell's
+  // layout document (issue #62). Typed as unknown because migrateShellLayout
+  // owns the validation and tolerates any shape, including the legacy v1
+  // `layout` array it falls back to on a user's first v2 boot.
+  shell?: unknown;
+  // Optional and additive (still STORAGE_VERSION 1): whether the v2 shell is
+  // switched on. Development builds only — the manifest gates the surface, so
+  // a `true` here does nothing in a public build. Absent/invalid = false.
+  shellV2?: boolean;
 };
 
 // One review-scope's reviewed-path set plus a write timestamp, used only to
@@ -293,6 +308,11 @@ export type ProjectsState = {
   activeProjectId: string | null;
   activeSessionByProject: Record<string, string>;
   layout: PaneSizes | undefined; // app-level pane sizes shared by every project/chat
+  // v2 tabbed shell (issue #62): its own layout document, and whether the shell
+  // is switched on at all. Both are inert unless the build carries the `shell`
+  // development feature.
+  shellLayout: ShellLayout;
+  shellV2Enabled: boolean;
   theme: string; // app-level theme selection ("system" or a theme id)
   chatProvider: string; // provider id new KödChat threads start on
   sidebarMode: SidebarMode; // full project/session list, or compact icon rail
@@ -344,6 +364,12 @@ export type ProjectsState = {
   cycleSession(direction: 1 | -1): void;
   cycleProject(direction: 1 | -1): Promise<void>;
   setLayout(sizes: PaneSizes): void;
+  // Record the v2 shell's layout (active tab, splits) and persist debounced.
+  // Rejects a document isShellLayout doesn't accept.
+  setShellLayout(next: ShellLayout): void;
+  // Turn the v2 shell on/off. Development-only affordance; the release
+  // manifest still decides whether the shell exists in this build.
+  setShellV2Enabled(enabled: boolean): void;
   setTheme(theme: string): void;
   // Record which provider new KödChat threads start on. Existing threads keep
   // whatever provider they were created with.
@@ -428,6 +454,29 @@ function isPaneSizes(v: unknown): v is PaneSizes {
     return false;
   const sum = v.reduce((a, b) => a + b, 0);
   return sum >= 90 && sum <= 110;
+}
+
+// Structural equality for two v2 shell layouts, used only for cheap "did
+// anything actually change?" checks.
+//
+// Field-compared rather than stringified: JSON.stringify is key-ORDER
+// sensitive, and while every layout in practice originates from
+// defaultShellLayout/migrateShellLayout (or a spread of one, which preserves
+// order), that is an invariant a caller could quietly break by rebuilding the
+// object literal by hand. A false "changed" would cost an extra disk write; a
+// field compare can't be fooled at all.
+function sameShellLayout(a: ShellLayout, b: ShellLayout): boolean {
+  return (
+    a.version === b.version &&
+    a.activeTab === b.activeTab &&
+    a.sidebarPct === b.sidebarPct &&
+    a.code.mode === b.code.mode &&
+    a.code.chatPct === b.code.chatPct &&
+    a.code.expanded === b.code.expanded &&
+    a.editor.filesPct === b.editor.filesPct &&
+    a.editor.panels.github === b.editor.panels.github &&
+    a.editor.panels.review === b.editor.panels.review
+  );
 }
 
 // A valid open-tabs entry: an array of non-empty encoded strings. Garbage is
@@ -664,6 +713,16 @@ export function createProjectsStore(deps: StoreDeps) {
     // write snapshots state when it RUNS, so the last write is the newest.
     let writeChain: Promise<void> = Promise.resolve();
 
+    // Whether the persisted document should carry a `shell` field yet (#62).
+    // Until the user actually touches the v2 shell, the v1 `layout` array stays
+    // the single source of geometry: writing a derived `shell` on every save
+    // would freeze the sidebar width at whatever it was on the first boot of
+    // ANY build, and later v1 resizes would never reach the real first v2 boot.
+    // Set when the document already had a `shell`, and when the user enables
+    // the shell or moves it. Sticky once set — switching v2 back off must not
+    // discard the layout it remembered.
+    let shellLayoutPersisted = false;
+
     // Persisted session identities not yet revived (hydrated from disk, waiting
     // for their project's first ensureSession). Consumed one-shot per boot;
     // persist() keeps unconsumed entries in the doc so a background project's
@@ -688,6 +747,8 @@ export function createProjectsStore(deps: StoreDeps) {
           reviewChecks,
           voiceVocabulary,
           remoteTargets,
+          shellLayout,
+          shellV2Enabled,
         } = get();
         // Session identities per project: live (non-exited) sessions once a
         // project's saved set has been revived, the saved set until then.
@@ -721,6 +782,8 @@ export function createProjectsStore(deps: StoreDeps) {
           voiceVocabulary,
           remoteTargets,
           sessions: sessionsDoc,
+          ...(shellLayoutPersisted ? { shell: shellLayout } : {}),
+          shellV2: shellV2Enabled,
         };
         try {
           await deps.storage.write(JSON.stringify(doc));
@@ -931,6 +994,8 @@ export function createProjectsStore(deps: StoreDeps) {
       activeProjectId: null,
       activeSessionByProject: {},
       layout: undefined,
+      shellLayout: defaultShellLayout(), // v2 shell geometry (issue #62)
+      shellV2Enabled: false, // v2 shell stays off until it is switched on
       theme: "system", // system-following by default (resolved by the theme store)
       chatProvider: DEFAULT_CHAT_PROVIDER,
       sidebarMode: "full",
@@ -1169,6 +1234,23 @@ export function createProjectsStore(deps: StoreDeps) {
               const memoryAgentAccess = s.memoryAgentAccess.enabled
                 ? s.memoryAgentAccess
                 : persistedMemoryAgentAccess;
+              // v2 shell (issue #62). A doc without a `shell` field falls back
+              // to the v1 pane array, so an existing user's first v2 boot keeps
+              // the sidebar width they already chose. A change made in this
+              // session outranks the stale document, like theme/sidebar above.
+              const docShellLayout = migrateShellLayout(doc.shell ?? doc.layout);
+              if (doc.shell !== undefined) shellLayoutPersisted = true;
+              const shellLayout = sameShellLayout(
+                s.shellLayout,
+                defaultShellLayout(),
+              )
+                ? docShellLayout
+                : s.shellLayout;
+              // Monotonic: an enable made before the read landed survives it.
+              // The mirror case (disabling v2 pre-hydration, then hydrating a
+              // doc that had it on) re-enables — accepted, because this is a
+              // development-only toggle one click away from being flipped back.
+              const shellV2Enabled = s.shellV2Enabled || doc.shellV2 === true;
               const activeProjectId = s.activeProjectId ?? activeFromDoc;
               // Union runtime (pre-hydration) pins with persisted ones, runtime
               // winning on a key collision, so a pin made before the read landed
@@ -1202,6 +1284,8 @@ export function createProjectsStore(deps: StoreDeps) {
                 reviewChecks,
                 voiceVocabulary,
                 remoteTargets,
+                shellLayout,
+                shellV2Enabled,
               };
             });
             for (const project of get().projects) {
@@ -1729,6 +1813,29 @@ export function createProjectsStore(deps: StoreDeps) {
         if (!isPaneSizes(sizes)) return;
         set({ layout: sizes });
         persistDebounced();
+      },
+
+      // Record the v2 shell's layout (issue #62) and persist debounced, like
+      // setLayout — tab switches and split drags come in bursts. A malformed
+      // document is rejected outright rather than partially applied.
+      setShellLayout(next: ShellLayout) {
+        if (!isShellLayout(next)) return;
+        if (sameShellLayout(get().shellLayout, next)) return;
+        // The user has moved the v2 shell: its document is authoritative now.
+        shellLayoutPersisted = true;
+        set({ shellLayout: next });
+        persistDebounced();
+      },
+
+      // Switch the v2 shell on/off (development builds only).
+      setShellV2Enabled(shellV2Enabled: boolean) {
+        if (get().shellV2Enabled === shellV2Enabled) return;
+        // Turning the shell ON hands it ownership of its own geometry; the v1
+        // layout stops being the fallback from here on.
+        if (shellV2Enabled) shellLayoutPersisted = true;
+        set({ shellV2Enabled });
+        // Same rule as theme/sidebar: never persist before hydration settles.
+        void persistAfterHydration();
       },
 
       // Persist the app-level theme selection ("system" or a theme id). The

@@ -3,7 +3,12 @@
 // with persisted state, a shortcut, or an entitlement.
 
 export type ReleaseProfile = "public" | "development";
-export type DevelopmentFeature = "local" | "voice" | "ssh" | "work";
+export type DevelopmentFeature =
+  | "local"
+  | "voice"
+  | "ssh"
+  | "work"
+  | "shell";
 
 export type ReleaseManifest = {
   readonly profile: ReleaseProfile;
@@ -22,6 +27,9 @@ export function releaseManifestFor(profile: ReleaseProfile): ReleaseManifest {
       // this manifest so older persisted layouts still fail closed on builds
       // that explicitly disable it, without tying it to unrelated dev tools.
       work: true,
+      // The v2 tabbed shell (issue #62) is still being built. Unlike `work` it
+      // is a plain development feature: public builds compile without it.
+      shell: enabled,
     }),
   });
 }
