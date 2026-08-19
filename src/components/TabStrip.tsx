@@ -185,7 +185,11 @@ function Tab({
       onAuxClick={(e) => {
         if (e.button === 1) close(e);
       }}
-      className={`group flex h-full cursor-pointer items-center gap-1.5 border-r border-border px-3 text-xs whitespace-nowrap ${
+      // Same flush, full-height box as before — only the fill is softened. The
+      // top corners round so the active tab reads as a card lifting off the
+      // strip instead of a hard rectangle; the bottom stays square where it
+      // meets the editor.
+      className={`group flex h-full cursor-pointer items-center gap-1.5 rounded-t-md border-r border-border px-3 text-xs whitespace-nowrap ${
         active
           ? "bg-bg text-text"
           : "text-text-dim hover:bg-surface-hover/50 hover:text-text"
@@ -218,7 +222,7 @@ function Tab({
         type="button"
         aria-label={`close ${label}`}
         onClick={close}
-        className={`ml-1 shrink-0 rounded px-1 leading-none text-text-dim hover:bg-surface-hover hover:text-text ${
+        className={`ml-1 shrink-0 rounded-full px-1 leading-none text-text-dim hover:bg-surface-hover hover:text-text ${
           active
             ? "opacity-100"
             : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"

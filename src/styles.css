@@ -14,14 +14,39 @@
      accent-text   -> --kd-accent-text
    Fallbacks keep the app legible before the first applyCssVars() (Ködade Dark). */
 @theme {
-  --color-bg: var(--kd-bg, #26282d);
-  --color-surface: var(--kd-surface, #1e2024);
-  --color-surface-hover: var(--kd-surface-hover, #343841);
-  --color-border: var(--kd-border, #363a42);
-  --color-text: var(--kd-text, #bfc5da);
-  --color-text-dim: var(--kd-text-dim, #8b91a7);
+  --color-bg: var(--kd-bg, #2a2825);
+  --color-surface: var(--kd-surface, #232120);
+  --color-surface-hover: var(--kd-surface-hover, #38352f);
+  --color-border: var(--kd-border, #3a3733);
+  --color-text: var(--kd-text, #d6d2c9);
+  --color-text-dim: var(--kd-text-dim, #a5a096);
   --color-accent: var(--kd-accent, #E7A33B);
-  --color-accent-text: var(--kd-accent-text, #1e2024);
+  --color-accent-text: var(--kd-accent-text, #232120);
+
+  /* Shape scale. Tailwind v4 derives `rounded-sm|md|lg|xl|full` from the
+     --radius-* namespace and bare `rounded` from --radius, so overriding these
+     re-skins every corner in the app from one place. Set by applier.ts's
+     CHROME_VARS (see src/themes/schema.ts ChromeTokens); the fallbacks are the
+     Ködade scale so pre-JS frames already look right.
+       --kd-radius-sm -> rounded / rounded-sm  (chips, dense controls)
+       --kd-radius-md -> rounded-md            (buttons, inputs, rows)
+       --kd-radius-lg -> rounded-lg            (cards, popovers)
+       --kd-radius-xl -> rounded-xl            (dialogs, large panels)
+     `rounded-full` stays Tailwind's static calc(infinity * 1px) — a pill has no
+     theme-tunable value, so there is deliberately no --radius-full here. */
+  --radius: var(--kd-radius-sm, 6px);
+  --radius-sm: var(--kd-radius-sm, 6px);
+  --radius-md: var(--kd-radius-md, 8px);
+  --radius-lg: var(--kd-radius-lg, 10px);
+  --radius-xl: var(--kd-radius-xl, 12px);
+
+  /* One extra type step below Tailwind's `text-xs`, newly introduced here to
+     give the chrome's repeated 10px metadata labels a name. Adoption is
+     incremental: the existing `text-[10px]` call sites are unchanged and get
+     converted as their components are otherwise touched. Deliberately
+     font-size-only (no `--text-2xs--line-height`) so `text-2xs` is a drop-in
+     for `text-[10px]`, which inherits its line-height rather than setting one. */
+  --text-2xs: 10px;
 }
 
 /* Session status-dot pulse (DESIGN.md §4.6): a subtle breathing glow on the
@@ -85,13 +110,13 @@
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.87c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.82a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.77c0 .27.18.58.69.48A10 10 0 0 0 12 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.87c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.82a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.77c0 .27.18.58.69.48A10 10 0 0 0 12 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.markdown-view .markdown-image-link { @apply inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-xs no-underline; }
+.markdown-view .markdown-image-link { @apply inline-flex items-center rounded-md border border-border bg-surface px-2 py-1 text-xs no-underline; }
 .markdown-view ul { @apply my-4 list-disc pl-6; }
 .markdown-view ol { @apply my-4 list-decimal pl-6; }
 .markdown-view li > ul,
 .markdown-view li > ol { @apply my-1; }
-.markdown-view code { @apply rounded bg-surface px-1 py-0.5 font-mono text-[0.85em] text-text; }
-.markdown-view pre { @apply my-4 overflow-x-auto rounded border border-border bg-surface p-4; }
+.markdown-view code { @apply rounded-sm bg-surface px-1 py-0.5 font-mono text-[0.85em] text-text; }
+.markdown-view pre { @apply my-4 overflow-x-auto rounded-lg border border-border bg-surface p-4; }
 .markdown-view pre code { @apply bg-transparent p-0; }
 .markdown-view blockquote { @apply my-4 border-l-2 border-border pl-4 text-text-dim; }
 .markdown-view hr { @apply my-8 border-0 border-t border-border; }
@@ -102,16 +127,17 @@
 /* KödMem uses the same low-contrast editor chrome, with a small repeated
    vocabulary for actions and metadata labels. */
 .memory-action {
-  @apply rounded border border-border bg-bg px-2 py-1 text-[11px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50;
+  @apply rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-text-dim hover:bg-surface-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50;
 }
 .memory-heading {
-  @apply text-[10px] font-semibold tracking-[0.15em] text-text-dim uppercase;
+  @apply text-2xs font-semibold tracking-[0.15em] text-text-dim uppercase;
 }
 .memory-kicker {
   @apply text-[9px] font-semibold tracking-[0.14em] text-text-dim uppercase;
 }
+/* A metadata chip, so it reads as a pill rather than a mini card. */
 .memory-kind {
-  @apply rounded border border-border px-1.5 py-0.5 text-[9px] tracking-wide text-text-dim uppercase;
+  @apply rounded-full border border-border px-1.5 py-0.5 text-[9px] tracking-wide text-text-dim uppercase;
 }
 
 /* Image transparency gets a quiet, theme-derived checkerboard — no hardcoded color. */
@@ -146,13 +172,13 @@
    standard trade-off; the applier's inline :root vars override these.) */
 @media (prefers-color-scheme: light) {
   :root {
-    --kd-bg: #f4f4f6;
-    --kd-surface: #eaebee;
-    --kd-surface-hover: #dfe0e6;
-    --kd-border: #cfd0da;
-    --kd-text: #3d4259;
-    --kd-text-dim: #5f6478;
+    --kd-bg: #faf9f5;
+    --kd-surface: #f2f0ea;
+    --kd-surface-hover: #e7e4dc;
+    --kd-border: #ddd9cf;
+    --kd-text: #3f3b34;
+    --kd-text-dim: #6b665c;
     --kd-accent: #9D5729;
-    --kd-accent-text: #f7f7f9;
+    --kd-accent-text: #faf9f5;
   }
 }

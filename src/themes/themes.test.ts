@@ -5,8 +5,9 @@
 
 import { describe, expect, it } from "vitest";
 import { THEMES, THEMES_BY_ID, SYSTEM_DARK_THEME, SYSTEM_LIGHT_THEME } from "./index";
-import { ANSI_KEYS, SYNTAX_KEYS, TERMINAL_KEYS, UI_KEYS } from "./schema";
+import { ANSI_KEYS, CHROME_KEYS, SYNTAX_KEYS, TERMINAL_KEYS, UI_KEYS } from "./schema";
 import {
+  CHROME_VARS,
   CSS_VARS,
   applyCssVars,
   toXtermTheme,
@@ -17,6 +18,7 @@ import { tags as t } from "@lezer/highlight";
 import { KODADE_AMBER, KODADE_AMBER_ON_LIGHT } from "./brand";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
+const PX = /^\d+px$/;
 
 describe("theme registry", () => {
   it("ships exactly Light and Dark with unique ids (picker adds System)", () => {
@@ -62,6 +64,10 @@ describe.each(THEMES)("theme tokens: $id", (theme) => {
     for (const key of UI_KEYS) expect(theme.ui[key]).toMatch(HEX);
   });
 
+  it("fills every chrome shape token with a px length", () => {
+    for (const key of CHROME_KEYS) expect(theme.chrome[key]).toMatch(PX);
+  });
+
   it("fills every terminal special + all 16 ANSI colors with hex", () => {
     for (const key of TERMINAL_KEYS) expect(theme.terminal[key]).toMatch(HEX);
     for (const key of ANSI_KEYS) expect(theme.terminal.ansi[key]).toMatch(HEX);
@@ -82,6 +88,15 @@ describe("applyCssVars", () => {
     }
     // color-scheme follows the appearance so native controls/scrollbars match.
     expect(el.style.getPropertyValue("color-scheme")).toBe("dark");
+  });
+
+  it("writes every chrome shape token as its --kd-radius-* variable", () => {
+    const el = document.createElement("div");
+    const theme = SYSTEM_DARK_THEME;
+    applyCssVars(theme, el);
+    for (const key of CHROME_KEYS) {
+      expect(el.style.getPropertyValue(CHROME_VARS[key])).toBe(theme.chrome[key]);
+    }
   });
 
   it("maps a light theme's color-scheme to light", () => {

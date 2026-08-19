@@ -1,7 +1,7 @@
 // Identity colors adapt to the app's resolved appearance. The dark variants
 // keep the original calm hues; the light variants are darker and saturated so
-// each clears 3:1 against Ködade Light's paper backgrounds (#f4f4f6 bg /
-// #eaebee surface).
+// each clears 3:1 against Ködade Light's paper backgrounds (#faf9f5 bg /
+// #f2f0ea surface).
 export const PROJECT_COLORS: {
   id: string;
   name: string;
