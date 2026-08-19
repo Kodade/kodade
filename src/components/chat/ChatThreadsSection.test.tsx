@@ -14,11 +14,11 @@ function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return { id: "t1", projectId: "p1", kind: "chat", name: "claude 1", ...overrides };
 }
 
-let mounted: Root | null = null;
+let mountedRoots: Root[] = [];
 afterEach(() => {
-  const root = mounted;
-  mounted = null;
-  if (root) act(() => root.unmount());
+  const roots = mountedRoots;
+  mountedRoots = [];
+  for (const root of roots) act(() => root.unmount());
   document.body.innerHTML = "";
 });
 
@@ -39,8 +39,12 @@ function renderRow(meta: SessionMeta, thread: ChatThread | undefined): HTMLEleme
       </ul>,
     );
   });
-  mounted = root;
+  mountedRoots.push(root);
   return host;
+}
+
+function dotClassOf(host: HTMLElement): string {
+  return host.querySelector("button[data-thread-state] > span[aria-hidden]")?.className ?? "";
 }
 
 describe("ChatThreadRow label", () => {
@@ -78,5 +82,32 @@ describe("ChatThreadRow label", () => {
     );
     expect(host.textContent).toContain("My thread");
     expect(host.textContent).not.toContain("login form validation");
+  });
+});
+
+describe("ChatThreadRow status dot (#59)", () => {
+  it("renders green for a working thread, never accent or dim", () => {
+    const host = renderRow(session(), { ...newThread("t1", "p1", "claude", 0), status: "working" });
+    const dotClass = dotClassOf(host);
+    expect(dotClass).toContain("bg-emerald-400");
+    expect(dotClass).toContain("kd-dot-pulse");
+    expect(dotClass).not.toContain("bg-accent");
+    expect(dotClass).not.toContain("bg-text-dim");
+  });
+
+  it("renders red for a settled thread, never accent or dim", () => {
+    const host = renderRow(session(), { ...newThread("t1", "p1", "claude", 0), status: "idle" });
+    const dotClass = dotClassOf(host);
+    expect(dotClass).toContain("bg-red-400");
+    expect(dotClass).not.toContain("bg-accent");
+    expect(dotClass).not.toContain("bg-text-dim");
+  });
+
+  it("renders red for a needs-you thread, never accent or dim", () => {
+    const host = renderRow(session(), { ...newThread("t1", "p1", "claude", 0), status: "error" });
+    const dotClass = dotClassOf(host);
+    expect(dotClass).toContain("bg-red-400");
+    expect(dotClass).not.toContain("bg-accent");
+    expect(dotClass).not.toContain("bg-text-dim");
   });
 });

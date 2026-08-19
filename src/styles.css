@@ -25,18 +25,20 @@
 }
 
 /* Session status-dot pulse (DESIGN.md §4.6): a subtle breathing glow on the
-   accent dot while an agent CLI is in the foreground of that session. Defined
+   status dot while an agent CLI is in the foreground of that session. Defined
    once here; the sidebar toggles the `.kd-dot-pulse` class off session state.
-   Uses the theme accent so it re-skins with the palette. */
+   Uses `currentColor` so the glow always matches the dot's own color — pair
+   this class with a `text-*` utility on the same element (e.g. `text-accent`,
+   `text-emerald-400`) so the box-shadow inherits the right color. */
 @keyframes kd-dot-pulse {
   0%,
   100% {
     opacity: 1;
-    box-shadow: 0 0 0 0 var(--kd-accent, #E7A33B);
+    box-shadow: 0 0 0 0 currentColor;
   }
   50% {
     opacity: 0.55;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--kd-accent, #E7A33B) 30%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 30%, transparent);
   }
 }
 .kd-dot-pulse {

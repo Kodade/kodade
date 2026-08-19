@@ -233,7 +233,7 @@ function TaskProgress({
               {running && (
                 <span
                   aria-hidden="true"
-                  className="kd-dot-pulse mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle"
+                  className="kd-dot-pulse mr-1 inline-block h-1.5 w-1.5 rounded-full bg-accent text-accent align-middle"
                 />
               )}
               {STATE_LABEL[task.state]}
@@ -324,7 +324,7 @@ function TaskProgress({
         >
           <span
             aria-hidden="true"
-            className="kd-dot-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            className="kd-dot-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-accent text-accent"
           />
           <span className="min-w-0 truncate">{task.statusText}</span>
         </p>

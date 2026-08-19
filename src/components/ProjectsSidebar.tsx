@@ -526,7 +526,7 @@ export function ProjectRail({
                 {running && (
                   <span
                     aria-hidden="true"
-                    className="kd-dot-pulse absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-accent ring-1 ring-surface"
+                    className="kd-dot-pulse absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 text-emerald-400 ring-1 ring-surface"
                   />
                 )}
               </span>
