@@ -39,3 +39,6 @@ __pycache__/
 
 # agent worktrees and local feedback artifacts stay out of the repo
 .claude/worktrees/
+
+# timestamped local backups of instruction files (never commit these)
+*.kodade-bak-*
