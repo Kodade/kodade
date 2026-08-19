@@ -176,9 +176,15 @@ function ProjectGroup({
         <button
           ref={projectTriggerRef}
           type="button"
+          aria-expanded={open}
           aria-label={`Open ${project.name} project`}
           onClick={() => {
-            void projectsStore.getState().setActiveProject(project.id);
+            const shouldOpen = !open; // effective state, honors the activeProjectId fallback
+            void (async () => {
+              await projectsStore.getState().setActiveProject(project.id);
+              // setActiveProject always force-expands; reconcile down when collapsing.
+              if (!shouldOpen) projectsStore.getState().toggleProjectExpanded(project.id);
+            })();
           }}
           className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left text-xs text-text-dim hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
         >
