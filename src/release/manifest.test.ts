@@ -9,6 +9,7 @@ describe("release manifest", () => {
       ssh: false,
       work: true,
       shell: false,
+      browser: false,
     });
   });
 
@@ -19,6 +20,7 @@ describe("release manifest", () => {
       ssh: true,
       work: true,
       shell: true,
+      browser: true,
     });
   });
 });

@@ -84,18 +84,28 @@ pub fn run() {
         .manage(ModeldManager::new())
         .manage(VoxManager::new())
         .setup(|app| {
+            // The readiness state is always managed so the browser commands
+            // resolve their extractors and fail closed with a message.
             let (readiness, ready) = browser_bridge::readiness();
             app.manage(readiness);
-            match browser_bridge::start(app.handle().clone(), ready) {
-                Ok(manager) => {
-                    app.manage(manager);
+            // The embedded browser is archived (#62): a build without the
+            // development features never listens for browser automation. The
+            // branch is a runtime cfg! (like commands.rs's feature guards) so
+            // the bridge stays compiled and revivable.
+            if cfg!(feature = "development-features") {
+                match browser_bridge::start(app.handle().clone(), ready) {
+                    Ok(manager) => {
+                        app.manage(manager);
+                    }
+                    Err(error) => {
+                        // The browser MCP server will expose no tools without a
+                        // healthy descriptor. Keep the rest of Kodade usable and
+                        // surface the unavailable state to agents instead.
+                        eprintln!("kodade: internal browser agent bridge unavailable: {error}");
+                    }
                 }
-                Err(error) => {
-                    // The browser MCP server will expose no tools without a
-                    // healthy descriptor. Keep the rest of Kodade usable and
-                    // surface the unavailable state to agents instead.
-                    eprintln!("kodade: internal browser agent bridge unavailable: {error}");
-                }
+            } else {
+                let _ = ready;
             }
             Ok(())
         })

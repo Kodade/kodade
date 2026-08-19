@@ -1336,6 +1336,32 @@ describe("editor tabs", () => {
     });
   });
 
+  // Archived embedded browser (#62): a build without the feature.
+  it("ignores browser actions entirely when the feature is compiled out", async () => {
+    const files = new MockFiles();
+    const tabEvents: { root: string; tabs: string[] }[] = [];
+    const store = createFilesStore({
+      files,
+      browserEnabled: () => false,
+      onTabsChanged: (root, tabs) => tabEvents.push({ root, tabs }),
+    });
+    files.fileReads.set("/repo/a.ts", { kind: "text", content: "A" });
+    await store.getState().setRoot("/repo");
+    await store.getState().selectFile("/repo/a.ts");
+    const intentBefore = store.getState().openIntentCount;
+
+    store.getState().openBrowserTab();
+    store.getState().setBrowserUrl("https://example.com/");
+
+    const s = store.getState();
+    expect(s.openTabs).toEqual([{ kind: "file", path: "/repo/a.ts" }]);
+    expect(s.activeTab).toEqual({ kind: "file", path: "/repo/a.ts" });
+    // The v2 shell must not auto-switch to the Editor for a browser open that
+    // can never render.
+    expect(s.openIntentCount).toBe(intentBefore);
+    expect(tabEvents.at(-1)).toEqual({ root: "/repo", tabs: ["/repo/a.ts"] });
+  });
+
   it("destroys the native browser when its inactive tab closes", async () => {
     const { store, browserCloses } = await makeTabStore();
     store.getState().openBrowserTab();

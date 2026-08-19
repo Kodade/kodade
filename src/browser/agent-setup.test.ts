@@ -6,6 +6,8 @@ import {
   ensureBrowserAgentSetup,
   ensureManagedBrowserRule,
   KODADE_BROWSER_RULE,
+  removeBrowserAgentSetup,
+  stripManagedBrowserRule,
   verifiedBrowserMcpBinaryPath,
 } from "./agent-setup";
 
@@ -317,5 +319,123 @@ args = [ "browser" ]
       expect.stringContaining('codex MCP: an MCP server named "kodade-browser" already exists'),
     ]);
     expect(config.reads.get(path)).toEqual({ kind: "text", content: existing });
+  });
+});
+
+// Archived embedded browser (#62): the upgrade cleanup path.
+describe("stripManagedBrowserRule", () => {
+  it("removes the managed block and leaves the user's own text", () => {
+    const current = `# My instructions\n\n${KODADE_BROWSER_RULE}\n`;
+    expect(stripManagedBrowserRule(current)).toBe("# My instructions\n");
+  });
+
+  it("keeps text on both sides of the block", () => {
+    const current = `before\n\n${KODADE_BROWSER_RULE}\n\nafter\n`;
+    expect(stripManagedBrowserRule(current)).toBe("before\n\nafter\n");
+  });
+
+  it("is a no-op on instructions that never had the rule", () => {
+    expect(stripManagedBrowserRule("# Mine\n")).toBe("# Mine\n");
+    expect(stripManagedBrowserRule("")).toBe("");
+  });
+
+  it("refuses malformed marker pairs instead of cutting user text", () => {
+    expect(() =>
+      stripManagedBrowserRule("before\n<!-- kodade:browser:start -->\nno end\n"),
+    ).toThrow("managed browser rule markers are incomplete");
+  });
+});
+
+describe("removeBrowserAgentSetup", () => {
+  const binaryPath = "/Applications/kodade/kodade-mcp";
+
+  it("removes what Ködade installed, then becomes a no-op", async () => {
+    const config = new MockConfig();
+    await ensureBrowserAgentSetup({ config, binaryPath, installedClis: ["codex"] });
+
+    const removed = await removeBrowserAgentSetup({
+      config,
+      binaryPath,
+      installedClis: ["codex"],
+    });
+
+    expect(removed).toEqual({ configured: ["codex"], errors: [] });
+    const codexConfig = config.reads.get("/Users/keith/.codex/config.toml");
+    if (codexConfig?.kind !== "text") throw new Error("Codex config was not written");
+    expect(codexConfig.content).not.toContain("kodade-browser");
+    const instructions = config.reads.get("/Users/keith/.codex/AGENTS.md");
+    if (instructions?.kind !== "text") throw new Error("Codex instructions were not written");
+    expect(instructions.content).not.toContain("kodade:browser");
+
+    const writes = config.writeCalls.length;
+    const second = await removeBrowserAgentSetup({
+      config,
+      binaryPath,
+      installedClis: ["codex"],
+    });
+    expect(second).toEqual({ configured: [], errors: [] });
+    expect(config.writeCalls).toHaveLength(writes);
+  });
+
+  it("keeps unrelated servers and user instructions intact", async () => {
+    const config = new MockConfig();
+    config.reads.set("/Users/keith/.codex/config.toml", {
+      kind: "text",
+      content: '[mcp_servers.github]\ncommand = "gh-mcp"\n',
+    });
+    config.reads.set("/Users/keith/.codex/AGENTS.md", {
+      kind: "text",
+      content: "# Mine\n",
+    });
+    await ensureBrowserAgentSetup({ config, binaryPath, installedClis: ["codex"] });
+
+    const removed = await removeBrowserAgentSetup({
+      config,
+      binaryPath,
+      installedClis: ["codex"],
+    });
+
+    expect(removed.errors).toEqual([]);
+    const codexConfig = config.reads.get("/Users/keith/.codex/config.toml");
+    if (codexConfig?.kind !== "text") throw new Error("Codex config was not written");
+    expect(parseByFormat(codexConfig.content, "toml")).toEqual({
+      mcp_servers: { github: { command: "gh-mcp" } },
+    });
+    expect(config.reads.get("/Users/keith/.codex/AGENTS.md")).toEqual({
+      kind: "text",
+      content: "# Mine\n",
+    });
+  });
+
+  it("never touches a user-owned server with the same name", async () => {
+    const config = new MockConfig();
+    const path = "/Users/keith/.codex/config.toml";
+    const existing = '[mcp_servers.kodade-browser]\ncommand = "my-browser"\n';
+    config.reads.set(path, { kind: "text", content: existing });
+
+    const removed = await removeBrowserAgentSetup({
+      config,
+      binaryPath,
+      installedClis: ["codex"],
+    });
+
+    expect(removed.configured).not.toContain("codex");
+    expect(removed.errors).toEqual([
+      expect.stringContaining("codex MCP: refusing to remove MCP server"),
+    ]);
+    expect(config.reads.get(path)).toEqual({ kind: "text", content: existing });
+  });
+
+  it("does nothing for a CLI that was never configured", async () => {
+    const config = new MockConfig();
+
+    const removed = await removeBrowserAgentSetup({
+      config,
+      binaryPath,
+      installedClis: ["codex", "claude", "grok", "opencode"],
+    });
+
+    expect(removed).toEqual({ configured: [], errors: [] });
+    expect(config.writeCalls).toHaveLength(0);
   });
 });

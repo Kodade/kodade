@@ -58,6 +58,10 @@ export function decodeTab(value: string): Tab | null {
   if (!value) return null;
   if (value === GITHUB_TAB_ENCODING) return { kind: "github" };
   if (value.startsWith(BROWSER_TAB_PREFIX)) {
+    // The embedded browser is archived (#62): a build without the feature
+    // drops persisted browser tabs instead of restoring a pane it cannot
+    // render. Every other tab in the document still restores normally.
+    if (!developmentFeatureEnabled("browser")) return null;
     return { kind: "browser", url: value.slice(BROWSER_TAB_PREFIX.length) };
   }
   // KödHarness moved from workspace tabs into Settings. Drop legacy persisted

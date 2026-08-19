@@ -97,9 +97,20 @@ execFileSync(
   ],
   { cwd: srcTauri, stdio: "inherit" },
 );
+// The development/QA package keeps the archived KödBrowser MCP subcommand
+// (#62); the public staging script builds this binary without the feature, so
+// a public kodade-mcp serves KödMem alone.
 execFileSync(
   "cargo",
-  ["build", "--release", "--no-default-features", "--bin", "kodade-mcp"],
+  [
+    "build",
+    "--release",
+    "--no-default-features",
+    "--features",
+    "development-features",
+    "--bin",
+    "kodade-mcp",
+  ],
   { cwd: srcTauri, stdio: "inherit" },
 );
 
