@@ -33,8 +33,10 @@ const CODE_EXPAND_TARGETS: readonly CodeExpandTarget[] = [
 // Bounds. A split pane may be dragged nearly anywhere but never to a sliver the
 // user can't drag back; the sidebar has a tighter ceiling because it holds a
 // fixed-width project list.
-const SPLIT_MIN = 10;
-const SPLIT_MAX = 90;
+// Exported so the panes that WRITE geometry clamp to exactly what load
+// enforces — one source of truth for the split bounds.
+export const SPLIT_MIN = 10;
+export const SPLIT_MAX = 90;
 const SIDEBAR_MIN = 8;
 const SIDEBAR_MAX = 40;
 

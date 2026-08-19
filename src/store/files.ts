@@ -113,6 +113,13 @@ export type FilesState = {
   // Session-only per-tab view state. Markdown opens rendered; other text opens
   // in the editor. This is deliberately not part of persisted project tabs.
   tabModes: Record<string, EditorMode>;
+  // Monotonic count of deliberate "put this on the editor surface" gestures:
+  // opening the GitHub/review/browser tab, or opening a file. Bumped in the
+  // same store write as the activation it belongs to, so a subscriber can tell
+  // a real gesture from the activations that housekeeping causes (restore,
+  // project switch, close-neighbor, cycle, in-page navigation). Session-only
+  // and never persisted — see the v2 shell's Editor auto-switch (#62).
+  openIntentCount: number;
 
   // --- Editor (M4b) ---
   editorStatus: EditorStatus; // state machine for the open text file
@@ -290,6 +297,16 @@ export function createFilesStore(deps: FilesDeps) {
     // Local projects key tabs by native root; remote projects key them by
     // their stable synthetic project id while rootPath intentionally stays null.
     const activeRoot = () => get().rootPath ?? remoteScope;
+
+    // Set while the store activates an already-open tab on the user's behalf
+    // (tab strip, close-neighbor, cycle, restore) so that housekeeping never
+    // reads as a gesture. See activateTab.
+    let suppressOpenIntent = false;
+
+    // Spread into the same set() as an activation to record an open gesture
+    // (see openIntentCount). Contributes nothing while suppressed.
+    const openIntent = () =>
+      suppressOpenIntent ? {} : { openIntentCount: get().openIntentCount + 1 };
 
     // Mirror the active root's tab list into state, and persist the change out
     // to whoever wired onTabsChanged (the app persists per project).
@@ -486,6 +503,7 @@ export function createFilesStore(deps: FilesDeps) {
       openTabs: [],
       activeTab: null,
       tabModes: {},
+      openIntentCount: 0,
       editorStatus: "clean",
       buffer: "",
       savedContent: "",
@@ -607,7 +625,7 @@ export function createFilesStore(deps: FilesDeps) {
         const prev = get();
         // Re-selecting the already-open file is a no-op — don't reset the buffer.
         if (prev.selectedPath === path) {
-          set({ activeTab: { kind: "file", path } });
+          set({ activeTab: { kind: "file", path }, ...openIntent() });
           return;
         }
 
@@ -656,6 +674,7 @@ export function createFilesStore(deps: FilesDeps) {
         set({
           selectedPath: path,
           activeTab: { kind: "file", path },
+          ...openIntent(),
           loading: true,
           fileContent: null,
           editorStatus: "clean",
@@ -1189,8 +1208,19 @@ export function createFilesStore(deps: FilesDeps) {
           !tabs.some((candidate) => tabsEqual(candidate, tab))
         )
           return;
-        if (tab.kind === "file" && root) void get().selectFile(tab.path);
-        else set({ activeTab: tab });
+        // Activating an already-open tab is never an open GESTURE: it is the
+        // tab strip, a close picking a neighbor, a cycle shortcut, or a
+        // restore. openIntentCount stays put so a surface watching for "the
+        // user just sent something to the editor" (#62) is not fooled. The
+        // suppression holds across selectFile because its activation write is
+        // synchronous, before the first await.
+        suppressOpenIntent = true;
+        try {
+          if (tab.kind === "file" && root) void get().selectFile(tab.path);
+          else set({ activeTab: tab });
+        } finally {
+          suppressOpenIntent = false;
+        }
       },
 
       openGithubTab() {
@@ -1202,7 +1232,7 @@ export function createFilesStore(deps: FilesDeps) {
           tabsByRoot.set(root, [...tabs, github]);
           syncTabs();
         }
-        set({ activeTab: github });
+        set({ activeTab: github, ...openIntent() });
       },
 
       openReviewTab() {
@@ -1214,7 +1244,7 @@ export function createFilesStore(deps: FilesDeps) {
           tabsByRoot.set(root, [...tabs, review]);
           syncTabs();
         }
-        set({ activeTab: review });
+        set({ activeTab: review, ...openIntent() });
       },
 
       openKodworkTab(taskId: string) {
@@ -1273,7 +1303,7 @@ export function createFilesStore(deps: FilesDeps) {
           tabsByRoot.set(root, [...tabs, browser]);
           syncTabs();
         }
-        set({ activeTab: browser });
+        set({ activeTab: browser, ...openIntent() });
       },
 
       setBrowserUrl(url: string) {
@@ -1387,7 +1417,8 @@ export function createFilesStore(deps: FilesDeps) {
         tabsByRoot.set(root, valid);
         syncTabs();
         // Activate the last valid tab (mirrors "most recently open"); if none
-        // survived, leave the editor empty.
+        // survived, leave the editor empty. activateTab keeps this out of the
+        // open-intent count, so a restore never reads as a user gesture.
         if (valid.length > 0 && get().activeTab === null) {
           get().activateTab(valid[valid.length - 1]);
         }
