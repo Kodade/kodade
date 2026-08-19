@@ -21,12 +21,12 @@ import {
 import { useStore } from "zustand";
 import { EditorPane } from "../EditorPane";
 import { Pane } from "../Pane";
-import { ProjectsSidebar } from "../ProjectsSidebar";
 import { WorkspaceFilesPane } from "../WorkspaceFilesPane";
 import { ChatPane } from "../chat/ChatPane";
 import { sizesToRestoredLayout, type PanelId } from "../layout";
 import { appStore } from "../../store/appStore";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
+import { WorkspacesSidebar } from "./WorkspacesSidebar";
 import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
 
 // Same separator styling as the v1 shell.
@@ -139,7 +139,7 @@ export function ShellV2() {
     <div className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
       {/* The sidebar sits outside the tab host so its state and scroll position
           survive every tab switch. Rail mode keeps the same fixed 44px width
-          the v1 shell gives it. */}
+          the v1 shell gives it, and the same rail the v1 sidebar renders. */}
       <div
         className="flex h-full shrink-0 flex-col overflow-hidden border-r border-border"
         style={{
@@ -147,7 +147,7 @@ export function ShellV2() {
             sidebarMode === "rail" ? "44px" : `${shellLayout.sidebarPct}%`,
         }}
       >
-        <ProjectsSidebar />
+        <WorkspacesSidebar />
       </div>
       <KeepAliveTabs
         tabs={tabs}

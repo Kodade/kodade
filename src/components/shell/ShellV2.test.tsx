@@ -39,8 +39,8 @@ vi.mock("../chat/ChatPane", async () => {
   };
 });
 vi.mock("../EditorPane", () => ({ EditorPane: () => <div data-editor /> }));
-vi.mock("../ProjectsSidebar", () => ({
-  ProjectsSidebar: () => <div data-sidebar />,
+vi.mock("./WorkspacesSidebar", () => ({
+  WorkspacesSidebar: () => <div data-sidebar />,
 }));
 vi.mock("../WorkspaceFilesPane", () => ({
   WorkspaceFilesPane: () => <div data-files />,

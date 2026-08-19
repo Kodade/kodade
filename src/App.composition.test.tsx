@@ -48,6 +48,10 @@ vi.mock("./components/EditorPane", () => ({ EditorPane: () => <div>editor</div> 
 vi.mock("./components/ProjectsSidebar", () => ({
   ProjectsSidebar: () => <div data-sidebar />,
 }));
+// The v2 shell mounts the Workspaces sidebar instead of the v1 one (#62).
+vi.mock("./components/shell/WorkspacesSidebar", () => ({
+  WorkspacesSidebar: () => <div data-sidebar />,
+}));
 vi.mock("./components/chat/ChatPane", () => ({
   ChatPane: () => <div data-chat />,
 }));
