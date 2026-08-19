@@ -7,6 +7,7 @@ release evidence are maintained outside the public repository.
 - [Roadmap](../ROADMAP.md)
 - [Projects vault workflow](#projects-vault-workflow)
 - [Projects vault acceptance](PROJECTS-VAULT-ACCEPTANCE.md)
+- [macOS app identity](MACOS-APP-IDENTITY.md)
 - [macOS release process](RELEASING.md)
 - [Windows build and status](WINDOWS.md)
 - [Windows CI](WINDOWS-CI.md)

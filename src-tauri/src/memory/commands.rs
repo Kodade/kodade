@@ -691,8 +691,8 @@ mod tests {
     #[test]
     fn packaged_mcp_path_prefers_the_profile_neutral_executable_sibling() {
         let fixture = tempfile::tempdir().expect("create packaged helper fixture");
-        let contents = fixture.path().join("kodade.app").join("Contents");
-        let executable = contents.join("MacOS").join("kodade");
+        let contents = fixture.path().join("Kodade.app").join("Contents");
+        let executable = contents.join("MacOS").join("Kodade");
         let sibling = contents.join("MacOS").join(mcp_binary_name());
         let resources = contents.join("Resources");
         let public = resources.join("helpers").join(mcp_binary_name());

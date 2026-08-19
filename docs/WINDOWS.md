@@ -14,7 +14,7 @@ installation.
 
 ## Install and uninstall
 
-Open `kodade_<version>_x64-setup.exe` and follow the installer. Unsigned preview
+Open `Kodade_<version>_x64-setup.exe` and follow the installer. Unsigned preview
 builds work, but Windows SmartScreen may ask you to confirm that you want to run
 an unrecognized app. Production downloads should be code-signed before broad
 distribution.
@@ -22,7 +22,7 @@ distribution.
 For unattended testing, Tauri's NSIS packages use an uppercase `/S` flag:
 
 ```powershell
-.\kodade_1.3.0_x64-setup.exe /S
+.\Kodade_1.3.0_x64-setup.exe /S
 ```
 
 Uninstall Kodade from **Settings → Apps → Installed apps**, or run the installed
@@ -109,9 +109,10 @@ Vulkan-linked process and therefore could not help the process start when
 
 Outputs land in:
 
-- Installer: `src-tauri/target/release/bundle/nsis/kodade_<version>_x64-setup.exe`
-- Unpacked executable: `src-tauri/target/release/kodade.exe`
-- Debug symbols: `src-tauri/target/release/kodade.pdb`
+- Installer: `src-tauri/target/release/bundle/nsis/Kodade_<version>_x64-setup.exe`
+- Unpacked executable: `src-tauri/target/release/Kodade.exe`
+- Debug symbols: `src-tauri/target/release/kodade.pdb` (Cargo emits the symbol
+  file under the crate's binary name; Tauri renames only the executable)
 
 Tauri automatically merges `src-tauri/tauri.windows.conf.json` on Windows. The
 shared config contains app metadata, while `tauri.windows.conf.json` selects
@@ -128,7 +129,7 @@ identity-matched `msedgewebview2.exe` child tree exits. A successful run uploads
 
 - `kodade-windows-installer-<version>-<run>` with the versioned installer,
   `.sha256`, and JSON manifest
-- `kodade-windows-unpacked-<run>` with `kodade.exe`, its PDB, and frontend output
+- `kodade-windows-unpacked-<run>` with `Kodade.exe`, its PDB, and frontend output
 
 The unpacked artifact is useful for diagnostics; users should install the NSIS
 package. The same workflow exercises the isolated browser child in a real Win32
@@ -179,7 +180,7 @@ Record the human-gate results with the release issue before publishing.
    ```
 
    The build order is intentional. `scripts/stage-modeld.mjs` signs all three
-   resource helpers first. Tauri then signs `target\release\kodade.exe` before
+   resource helpers first. Tauri then signs `target\release\Kodade.exe` before
    NSIS embeds that exact executable and signs the finished installer. This is
    Tauri's documented [Windows code-signing
    flow](https://v2.tauri.app/distribute/sign/windows/); do not sign the main
@@ -202,7 +203,7 @@ Record the human-gate results with the release issue before publishing.
 
    ```powershell
    $builtArtifacts = @(
-     "src-tauri\target\release\kodade.exe",
+     "src-tauri\target\release\Kodade.exe",
      "src-tauri\binaries\kodade-modeld.exe",
      "src-tauri\binaries\kodade-tool-host.exe",
      "src-tauri\binaries\kodade-mcp.exe",
@@ -223,10 +224,10 @@ Record the human-gate results with the release issue before publishing.
    verify the installed main executable plus all three installed helpers:
 
    ```powershell
-   $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\kodade"
+   $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Kodade"
    $installLocation = [Environment]::ExpandEnvironmentVariables($entry.InstallLocation).Trim('"')
    $installedArtifacts = @(
-     (Join-Path $installLocation "kodade.exe"),
+     (Join-Path $installLocation "Kodade.exe"),
      (Join-Path $installLocation "kodade-local\bin\kodade-modeld.exe"),
      (Join-Path $installLocation "kodade-local\bin\kodade-tool-host.exe"),
      (Join-Path $installLocation "kodade-local\bin\kodade-mcp.exe")

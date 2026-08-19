@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed the macOS application identity so the app installs as `Kodade.app` with
+  a `Kodade` main executable, keeping Ködade in Finder, the Dock, and the menu
+  bar while Activity Monitor no longer shows a lowercase process name.
+  Documented why the separate WebKit web-content row is attributed to the
+  embedded web view's page origin.
+
 ## 1.7.1 - 2026-08-16
 
 - Fixed KödMem settings overflow and added one-time, reviewable consent for

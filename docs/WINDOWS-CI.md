@@ -58,7 +58,7 @@ a separate current-user sentinel must remain byte-identical across every step.
 Successful runs retain two artifacts:
 
 - the versioned installer, `.sha256`, and JSON release manifest for 14 days
-- the unpacked `kodade.exe`, PDB, and frontend `dist/` for seven days
+- the unpacked `Kodade.exe`, PDB, and frontend `dist/` for seven days
 
 The first artifact is the distributable installer; the unpacked build is useful
 for diagnostics. Pull-request packages are intentionally unsigned and require
