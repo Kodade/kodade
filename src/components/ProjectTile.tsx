@@ -30,7 +30,7 @@ export function ProjectTile({
   return (
     <span
       aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-[5px]"
+      className="flex shrink-0 items-center justify-center rounded-md"
       style={{ width: size, height: size, ...projectTileStyle(project, appearance) }}
     >
       <svg

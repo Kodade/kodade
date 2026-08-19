@@ -21,9 +21,11 @@ export function Pane({
     <section className={`flex h-full min-w-0 flex-col ${className}`}>
       {/* Toolbar row: 38px (DESIGN.md §4.3). Titles arrive already-cased by the
           caller (lowercase kodade chrome; real filenames keep their case), so no
-          text-transform here. Wide tracking keeps the label feel. */}
+          text-transform here. Tracking stays wide enough to read as a label but
+          is eased off the old 0.16em, which spaced the words apart hard enough
+          to feel cold next to the softened radii. */}
       <header
-        className={`flex h-[38px] shrink-0 items-center justify-between border-b border-border text-[11px] font-semibold tracking-[0.16em] text-text-dim ${
+        className={`flex h-[38px] shrink-0 items-center justify-between gap-2 border-b border-border text-[11px] font-semibold tracking-[0.1em] text-text-dim ${
           compactHeader ? "px-2" : "px-3"
         }`}
       >

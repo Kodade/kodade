@@ -426,7 +426,7 @@ function SidebarToggle({ sidebarMode }: { sidebarMode: "full" | "rail" }) {
       title={`${action} — ${labelFor("toggle-sidebar")}`}
       aria-label={action}
       aria-pressed={rail}
-      className="flex h-7 w-7 items-center justify-center rounded text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+      className="flex h-7 w-7 items-center justify-center rounded-md text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
     >
       <svg
         viewBox="0 0 16 16"
@@ -511,7 +511,7 @@ export function ProjectRail({
               aria-haspopup="menu"
               aria-expanded={openColorMenuProjectId === project.id}
               aria-controls={`project-color-menu-${project.id}`}
-              className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-1 focus:ring-accent ${
+              className={`relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md focus:outline-none focus:ring-1 focus:ring-accent ${
                 active
                   ? "before:absolute before:inset-y-1 before:-left-2 before:w-0.5 before:bg-accent"
                   : "opacity-60 hover:opacity-100"
@@ -561,7 +561,7 @@ function RailOverflow({
         }}
         title="Add project"
         aria-label="Add project"
-        className="flex h-7 w-7 items-center justify-center rounded text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+        className="flex h-7 w-7 items-center justify-center rounded-md text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
       >
         <span className="text-base leading-none" aria-hidden="true">+</span>
       </button>
@@ -666,7 +666,7 @@ function ProjectColorPicker({
             aria-label={color.name}
             title={color.name}
             onClick={select(color.id)}
-            className={`flex h-7 w-7 items-center justify-center rounded-[5px] focus:outline-none focus:ring-1 focus:ring-accent ${
+            className={`flex h-7 w-7 items-center justify-center rounded-md focus:outline-none focus:ring-1 focus:ring-accent ${
               selected
                 ? "ring-2 ring-text ring-offset-1 ring-offset-surface"
                 : "hover:bg-surface-hover"
@@ -674,7 +674,7 @@ function ProjectColorPicker({
           >
             <span
               aria-hidden="true"
-              className="h-4 w-4 rounded-[4px]"
+              className="h-4 w-4 rounded-full"
               style={{ backgroundColor: color[appearance] }}
             />
           </button>
@@ -687,7 +687,7 @@ function ProjectColorPicker({
         aria-label="Auto color"
         title={`Auto (${PROJECT_COLORS.find((color) => color.id === autoId)!.name})`}
         onClick={select(null)}
-        className={`flex h-7 w-7 items-center justify-center rounded-[5px] text-[9px] text-text-dim focus:outline-none focus:ring-1 focus:ring-accent ${
+        className={`flex h-7 w-7 items-center justify-center rounded-md text-[9px] text-text-dim focus:outline-none focus:ring-1 focus:ring-accent ${
           !menu.project.color
             ? "ring-2 ring-text ring-offset-1 ring-offset-surface"
             : "hover:bg-surface-hover hover:text-text"

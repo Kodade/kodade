@@ -10,7 +10,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { Extension } from "@codemirror/state";
 import type { Theme } from "./schema";
-import { UI_KEYS } from "./schema";
+import { CHROME_KEYS, UI_KEYS } from "./schema";
 import { monoFontFamily } from "../platform/fonts";
 
 // UI token -> CSS custom property. Kept a plain map so styles.css's @theme block
@@ -26,12 +26,25 @@ export const CSS_VARS: Record<(typeof UI_KEYS)[number], string> = {
   accentText: "--kd-accent-text",
 };
 
+// Chrome token -> CSS custom property. styles.css maps these onto Tailwind's
+// --radius-* namespace, so `rounded-md` and friends follow the active theme.
+export const CHROME_VARS: Record<(typeof CHROME_KEYS)[number], string> = {
+  radiusSm: "--kd-radius-sm",
+  radiusMd: "--kd-radius-md",
+  radiusLg: "--kd-radius-lg",
+  radiusXl: "--kd-radius-xl",
+};
+
 // Write the UI tokens onto a root element as CSS variables. Defaults to
 // document root; a target is injectable for headless tests.
 export function applyCssVars(theme: Theme, root?: HTMLElement): void {
   const el = root ?? document.documentElement;
   for (const key of UI_KEYS) {
     el.style.setProperty(CSS_VARS[key], theme.ui[key]);
+  }
+  // Shape tokens ride along with the colors so a theme swap re-skins radii too.
+  for (const key of CHROME_KEYS) {
+    el.style.setProperty(CHROME_VARS[key], theme.chrome[key]);
   }
   // Let the OS render form controls/scrollbars to match.
   el.style.setProperty("color-scheme", theme.appearance);

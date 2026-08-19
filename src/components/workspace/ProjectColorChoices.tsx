@@ -23,7 +23,7 @@ export function ProjectColorChoices({
           <span
             data-project-color-swatch
             aria-hidden="true"
-            className="h-3 w-3 rounded-[3px]"
+            className="h-3 w-3 rounded-full"
             style={{ backgroundColor: color[appearance] }}
           />
         </button>

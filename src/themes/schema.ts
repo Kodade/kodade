@@ -37,6 +37,17 @@ export type UiTokens = {
   accentText: string; // text on top of accent (kept legible)
 };
 
+// Chrome shape tokens — the non-color half of the design token layer. These map
+// onto --kd-radius-* CSS variables which styles.css feeds into Tailwind's
+// --radius-* namespace, so every `rounded-sm|md|lg|xl` utility in the app is
+// theme-driven instead of hardcoded. Values are CSS lengths ("6px").
+export type ChromeTokens = {
+  radiusSm: string; // chips, inline badges, dense controls
+  radiusMd: string; // buttons, inputs, list rows
+  radiusLg: string; // cards, popovers
+  radiusXl: string; // dialogs, large panels
+};
+
 // Terminal palette. `ansi` is the 16-color set; the rest are xterm's specials.
 export type TerminalTokens = {
   background: string;
@@ -77,6 +88,7 @@ export type Theme = {
   name: string; // display name in the picker
   appearance: "dark" | "light"; // drives system-following resolution
   ui: UiTokens;
+  chrome: ChromeTokens;
   terminal: TerminalTokens;
   syntax: SyntaxTokens;
 };
@@ -94,6 +106,13 @@ export const UI_KEYS = [
   "accent",
   "accentText",
 ] as const satisfies readonly (keyof UiTokens)[];
+
+export const CHROME_KEYS = [
+  "radiusSm",
+  "radiusMd",
+  "radiusLg",
+  "radiusXl",
+] as const satisfies readonly (keyof ChromeTokens)[];
 
 export const ANSI_KEYS = [
   "black",
