@@ -18,34 +18,14 @@ import {
 } from "../../store/appStore";
 import type { ActivityModule, WorkspaceGroupKind } from "../../activity/activity";
 import type { KodworkState } from "../../kodwork/store";
-import { DEFAULT_TASK_TITLE, projectTokenUsage, taskGroup, type KodworkTask } from "../../kodwork/model";
-import type { ProjectsState, SessionMeta } from "../../store/projects";
+import { projectTokenUsage } from "../../kodwork/model";
+import type { ProjectsState } from "../../store/projects";
 import { isWorkSession } from "../../store/projects";
+import { TaskGroups } from "../sidebar/rows";
 
-const GROUP_ORDER: WorkspaceGroupKind[] = ["needs-user", "working", "settled"];
-
-const GROUP_LABEL: Record<WorkspaceGroupKind, string> = {
-  "needs-user": "needs you",
-  working: "working",
-  settled: "settled",
-};
-
-const DOT_CLASS: Record<WorkspaceGroupKind, string> = {
-  working: "kd-dot-pulse bg-emerald-400 text-emerald-400",
-  "needs-user": "bg-red-400",
-  settled: "bg-red-400",
-};
-
-// Which inbox group a task row renders in. The Activity module's projection is
-// authoritative when it knows the session; the task state covers the rest
-// (e.g. a draft created before any run).
-export function taskRowGroup(
-  task: KodworkTask | undefined,
-  projected: WorkspaceGroupKind | undefined,
-): WorkspaceGroupKind {
-  if (task && task.state === "draft") return "settled";
-  return projected ?? (task ? taskGroup(task.state) : "settled");
-}
+// The task rows themselves live in sidebar/rows.tsx (extracted in issue #62 so
+// the v2 Workspaces sidebar shares them) and are re-exported here unchanged.
+export { taskRowGroup, TaskGroups } from "../sidebar/rows";
 
 export function KodworkSection({
   projectsStore = appStore,
@@ -197,108 +177,6 @@ export function KodworkSection({
   );
 }
 
-function TaskGroups({
-  sessions,
-  tasks,
-  projectedGroup,
-  onOpen,
-  onClose,
-}: {
-  sessions: SessionMeta[];
-  tasks: Record<string, KodworkTask>;
-  projectedGroup: Map<string, WorkspaceGroupKind>;
-  onOpen(taskId: string): void;
-  onClose(taskId: string): void;
-}) {
-  const grouped = new Map<WorkspaceGroupKind, SessionMeta[]>(
-    GROUP_ORDER.map((kind) => [kind, []]),
-  );
-  for (const session of sessions) {
-    grouped
-      .get(taskRowGroup(tasks[session.id], projectedGroup.get(session.id)))!
-      .push(session);
-  }
-  const populated = GROUP_ORDER.filter((kind) => grouped.get(kind)!.length > 0);
-
-  return (
-    <div className="ml-3 space-y-1 border-l border-border pl-2">
-      {populated.map((kind) => (
-        <div key={kind}>
-          {populated.length > 1 && (
-            <p className="px-1.5 text-[10px] uppercase tracking-[0.12em] text-text-dim/70">
-              {GROUP_LABEL[kind]}
-            </p>
-          )}
-          <ul className="space-y-0.5">
-            {grouped.get(kind)!.map((session) => (
-              <TaskRow
-                key={session.id}
-                session={session}
-                task={tasks[session.id]}
-                group={kind}
-                closable={
-                  tasks[session.id]?.state !== "running" &&
-                  tasks[session.id]?.review.status !== "pending"
-                }
-                onOpen={() => onOpen(session.id)}
-                onClose={() => onClose(session.id)}
-              />
-            ))}
-          </ul>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TaskRow({
-  session,
-  task,
-  group,
-  closable,
-  onOpen,
-  onClose,
-}: {
-  session: SessionMeta;
-  task: KodworkTask | undefined;
-  group: WorkspaceGroupKind;
-  closable: boolean;
-  onOpen(): void;
-  onClose(): void;
-}) {
-  // A manual session rename wins; otherwise the task's distilled title.
-  const label = session.nameLocked
-    ? session.name
-    : (task?.title ?? DEFAULT_TASK_TITLE);
-  return (
-    <li className="group/task relative">
-      <button
-        type="button"
-        onClick={onOpen}
-        data-task-group={group}
-        className="flex w-full items-center gap-1.5 rounded py-1 pl-1.5 pr-6 text-left text-xs text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
-      >
-        <span
-          aria-hidden="true"
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_CLASS[group]}`}
-        />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className="sr-only">{GROUP_LABEL[group]}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`Close task ${label}`}
-        title={closable ? "Close task (deletes its record)" : "Finish or review this task before closing it"}
-        disabled={!closable}
-        onClick={onClose}
-        className="absolute right-0.5 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-text-dim opacity-0 hover:text-text disabled:cursor-not-allowed disabled:opacity-20 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-accent group-focus-within/task:opacity-100 group-hover/task:opacity-100"
-      >
-        <span aria-hidden="true">×</span>
-      </button>
-    </li>
-  );
-}
-
 // Wait for the files store to point at `path` before opening a tab there —
 // activating a background project re-roots the tree asynchronously.
 function whenRootIs(path: string, timeoutMs = 3_000): Promise<boolean> {
@@ -337,7 +215,7 @@ async function newTask(
   }
 }
 
-async function openTask(
+export async function openTask(
   projectsStore: StoreApi<ProjectsState>,
   workStore: StoreApi<KodworkState>,
   projectId: string,
