@@ -311,4 +311,38 @@ describe("KodworkSection", () => {
     expect(host.querySelector('[data-task-group="needs-user"]')).not.toBeNull();
     expect(host.querySelector('[data-task-group="settled"]')).not.toBeNull();
   });
+
+  it("renders green for working and red for needs-user or settled lanes — no other dot color (#59)", () => {
+    const { projects, work } = stores();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() =>
+      mounted?.render(
+        <KodworkSection
+          projectsStore={projects}
+          workStore={work}
+          activity={createActivityModule()}
+        />,
+      ),
+    );
+
+    const working = host.querySelector('[data-task-group="working"]');
+    const needsUser = host.querySelector('[data-task-group="needs-user"]');
+    const settled = host.querySelector('[data-task-group="settled"]');
+    const workingDot = working?.querySelector<HTMLElement>(".rounded-full");
+    const needsUserDot = needsUser?.querySelector<HTMLElement>(".rounded-full");
+    const settledDot = settled?.querySelector<HTMLElement>(".rounded-full");
+    expect(workingDot?.className).toContain("kd-dot-pulse");
+    expect(workingDot?.className).toContain("bg-emerald-400");
+    expect(workingDot?.className).not.toContain("bg-accent");
+    expect(workingDot?.className).not.toContain("bg-text-dim");
+    expect(needsUserDot?.className).toContain("bg-red-400");
+    expect(needsUserDot?.className).not.toContain("bg-accent");
+    expect(needsUserDot?.className).not.toContain("bg-text-dim");
+    expect(settledDot?.className).toContain("bg-red-400");
+    expect(settledDot?.className).not.toContain("bg-accent");
+    expect(settledDot?.className).not.toContain("bg-text-dim");
+    expect(settled?.querySelector(".bg-red-400")).not.toBeNull();
+  });
 });

@@ -213,7 +213,7 @@ function ToolActivitySummary({ entries }: { entries: ToolEntry[] }) {
           aria-hidden="true"
           className={
             running
-              ? "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent kd-dot-pulse"
+              ? "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent text-accent kd-dot-pulse"
               : "mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim"
           }
         />

@@ -31,9 +31,9 @@ const GROUP_LABEL: Record<WorkspaceGroupKind, string> = {
 };
 
 const DOT_CLASS: Record<WorkspaceGroupKind, string> = {
-  working: "kd-dot-pulse bg-accent",
+  working: "kd-dot-pulse bg-emerald-400 text-emerald-400",
   "needs-user": "bg-red-400",
-  settled: "bg-text-dim/40",
+  settled: "bg-red-400",
 };
 
 // Which inbox group a task row renders in. The Activity module's projection is

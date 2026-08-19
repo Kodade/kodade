@@ -224,7 +224,7 @@ export function ChatComposer({
             >
               <span
                 aria-hidden="true"
-                className="kd-dot-pulse h-1.5 w-1.5 rounded-full bg-accent"
+                className="kd-dot-pulse h-1.5 w-1.5 rounded-full bg-accent text-accent"
               />
               {detached ? "Stream detached — provider still working" : "Working…"}
             </span>

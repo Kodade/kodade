@@ -29,9 +29,9 @@ export function threadState(thread: ChatThread | undefined): ThreadState {
 }
 
 const DOT_CLASS: Record<ThreadState, string> = {
-  working: "kd-dot-pulse bg-accent",
+  working: "kd-dot-pulse bg-emerald-400 text-emerald-400",
   "needs-you": "bg-red-400",
-  settled: "bg-text-dim/40",
+  settled: "bg-red-400",
 };
 
 const DOT_LABEL: Record<ThreadState, string> = {
