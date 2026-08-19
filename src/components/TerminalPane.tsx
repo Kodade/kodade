@@ -43,11 +43,16 @@ export function TerminalPane({
   terminalRegistry = registry,
   voiceControls,
   workspaceId,
+  focusNonce,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   terminalRegistry?: TerminalDisplayRegistry;
   voiceControls?: ReactNode;
   workspaceId?: string;
+  // Bump to re-assert the active terminal's focus without touching the DOM
+  // (the v2 shell uses it when its Code tab becomes visible again). Optional:
+  // callers that never change it get exactly the old behaviour.
+  focusNonce?: number;
 }) {
   const hostsRef = useRef<HTMLDivElement>(null);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
@@ -193,6 +198,7 @@ export function TerminalPane({
     }
   }, [
     activeSessionId,
+    focusNonce,
     geometryKey,
     leafRects,
     sessions.length,

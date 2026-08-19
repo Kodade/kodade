@@ -50,6 +50,12 @@ export function ChatPane({
   review = defaultReviewStore,
   workingTree = defaultWorkingTreeSummaryStore,
   terminalRegistry,
+  // The v2 Code tab renders its own terminal window beside this pane, so it
+  // suppresses the in-pane split to keep exactly one terminal surface.
+  showTerminalToggle = true,
+  // Called instead of opening the in-pane split when the toggle is suppressed
+  // and the chat genuinely needs a shell (provider login).
+  onTerminalRequest,
 }: {
   projectsStore?: StoreApi<ProjectsState>;
   chatThreadsStore?: StoreApi<ChatState>;
@@ -57,6 +63,8 @@ export function ChatPane({
   review?: StoreApi<ReviewState>;
   workingTree?: StoreApi<WorkingTreeSummaryState>;
   terminalRegistry?: TerminalDisplayRegistry;
+  showTerminalToggle?: boolean;
+  onTerminalRequest?: () => void;
 } = {}) {
   // Terminal visibility belongs to the chat that owns the PTY. Switching
   // threads must never reveal another thread's shell below the transcript.
@@ -96,7 +104,10 @@ export function ChatPane({
     activeSession && isChatSession(activeSession) ? activeSession : owningChat;
   const threadId = activeChat?.id ?? null;
   const thread = threadId ? (threads[threadId] ?? null) : null;
-  const terminalOpen = threadId ? (terminalOpenByThread[threadId] ?? false) : false;
+  const terminalOpen =
+    showTerminalToggle && threadId
+      ? (terminalOpenByThread[threadId] ?? false)
+      : false;
   const activeProjectIsRemote = activeProjectId
     ? remoteTargetForProjectId(remoteTargets, activeProjectId) !== null
     : false;
@@ -223,7 +234,13 @@ export function ChatPane({
                   }}
                   onOpenLoginTerminal={() => {
                     if (!threadId) return;
-                    setTerminalOpenByThread((current) => ({ ...current, [threadId]: true }));
+                    // v1 reveals the in-pane split; a host that owns the
+                    // terminal itself (the v2 Code tab) is asked to show it.
+                    if (showTerminalToggle) {
+                      setTerminalOpenByThread((current) => ({ ...current, [threadId]: true }));
+                    } else {
+                      onTerminalRequest?.();
+                    }
                     void openLoginTerminal(projectsStore, thread.providerId);
                   }}
                 />
@@ -339,11 +356,13 @@ export function ChatPane({
       title={title}
       className="bg-bg"
       headerAction={
-        <TerminalToggle
-          open={terminalOpen}
-          disabled={!threadId}
-          onToggle={toggleTerminal}
-        />
+        showTerminalToggle ? (
+          <TerminalToggle
+            open={terminalOpen}
+            disabled={!threadId}
+            onToggle={toggleTerminal}
+          />
+        ) : undefined
       }
     >
       <div className="flex h-full min-h-0 flex-col">

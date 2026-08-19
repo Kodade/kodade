@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   chatMounts: 0,
   setLayouts: [] as Record<string, number>[],
+  resizes: [] as string[],
+  panelRef: { current: null } as { current: unknown },
 }));
 
 vi.mock("../../store/appStore", async () => {
@@ -38,6 +40,9 @@ vi.mock("../chat/ChatPane", async () => {
     },
   };
 });
+vi.mock("../TerminalPane", () => ({
+  TerminalPane: () => <div data-terminal />,
+}));
 vi.mock("../EditorPane", () => ({ EditorPane: () => <div data-editor /> }));
 vi.mock("./WorkspacesSidebar", () => ({
   WorkspacesSidebar: () => <div data-sidebar />,
@@ -75,11 +80,23 @@ vi.mock("react-resizable-panels", async () => {
         </div>
       );
     },
-    Panel: ({ children, id }: React.PropsWithChildren<{ id: string }>) => (
-      <div data-panel={id}>{children}</div>
-    ),
+    Panel: ({
+      children,
+      id,
+      panelRef,
+    }: React.PropsWithChildren<{
+      id: string;
+      panelRef?: { current: unknown };
+    }>) => {
+      if (panelRef) {
+        panelRef.current = {
+          resize: (size: string) => void mocks.resizes.push(size),
+        };
+      }
+      return <div data-panel={id}>{children}</div>;
+    },
     Separator: () => <div data-separator />,
-    usePanelRef: () => ({ current: null }),
+    usePanelRef: () => mocks.panelRef,
   };
 });
 
@@ -94,7 +111,12 @@ describe("ShellV2", () => {
   beforeEach(() => {
     mocks.chatMounts = 0;
     mocks.setLayouts = [];
-    appStore.setState({ shellLayout: defaultShellLayout() });
+    mocks.resizes = [];
+    mocks.panelRef = { current: null };
+    appStore.setState({
+      shellLayout: defaultShellLayout(),
+      filesCollapsed: false,
+    });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -105,45 +127,76 @@ describe("ShellV2", () => {
     container.remove();
   });
 
-  it("hosts the sidebar outside the tabs and the workspace inside the Code tab", () => {
+  // Let the next-frame reassert run (jsdom's rAF is real here).
+  const nextFrame = () =>
+    act(
+      async () =>
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        ),
+    );
+
+  it("hosts the sidebar outside the tabs and the chat/terminal split inside Code", () => {
     act(() => root.render(<ShellV2 />));
 
     expect(container.querySelector("[data-sidebar]")).not.toBeNull();
     const code = container.querySelector('[data-tab-id="code"]')!;
     expect(code.getAttribute("data-tab-active")).toBe("true");
-    for (const id of ["terminal", "editor", "files"]) {
+    for (const id of ["chat", "terminal"]) {
       expect(code.querySelector(`[data-panel="${id}"]`)).not.toBeNull();
     }
-    // The sidebar is not one of the Code tab's resizable panels in v2.
+    // The sidebar is not one of the Code tab's resizable panels in v2, and the
+    // editor moved to its own tab.
     expect(code.querySelector('[data-panel="sidebar"]')).toBeNull();
+    expect(code.querySelector('[data-panel="editor"]')).toBeNull();
     // Panels are paired with the title bar's pills for screen readers.
     expect(code.getAttribute("id")).toBe("shell-panel-code");
     expect(code.getAttribute("aria-labelledby")).toBe("shell-tab-code");
   });
 
-  it("sizes a lazily mounted Code tab from the saved layout", () => {
+  it("gives the Editor tab the editor and the workspace files", () => {
     appStore.setState({
       shellLayout: { ...defaultShellLayout(), activeTab: "editor" },
     });
     act(() => root.render(<ShellV2 />));
-    // The Code tab has never been shown, so it has not mounted yet.
-    expect(container.querySelector('[data-tab-id="code"]')).toBeNull();
 
-    act(() => {
-      appStore.getState().setShellLayout({
-        ...appStore.getState().shellLayout,
-        activeTab: "code",
-      });
+    const editor = container.querySelector('[data-tab-id="editor"]')!;
+    expect(editor.querySelector("[data-editor]")).not.toBeNull();
+    expect(editor.querySelector("[data-files]")).not.toBeNull();
+    // Read-only geometry in this slice: the saved files ratio, rendered.
+    const group = editor.querySelector("[data-group]")!;
+    expect(JSON.parse(group.getAttribute("data-default-layout")!)).toEqual({
+      editor: 65.22,
+      files: 34.78,
     });
+  });
 
-    // Saved v1 sizes [14, 40, 16, 30] minus the sidebar, renormalized.
-    const expected = { terminal: 46.51, editor: 34.88, files: 18.6 };
-    const group = container.querySelector('[data-tab-id="code"] [data-group]')!;
-    expect(JSON.parse(group.getAttribute("data-default-layout")!)).toEqual(
-      expected,
-    );
-    // And reasserted imperatively, since the first mount happened late.
-    expect(mocks.setLayouts.at(-1)).toEqual(expected);
+  // Same hazard the v1 shell documents: the rail's fixed 44px constraint is
+  // reconciled after this parent effect, so the saved ratio has to be
+  // reasserted on the next frame or the files pane stays stranded. jsdom can't
+  // reproduce the clamp, so the mechanism itself is what's asserted.
+  it("reasserts the editor split on the next frame when the files rail expands", async () => {
+    appStore.setState({
+      shellLayout: { ...defaultShellLayout(), activeTab: "editor" },
+      filesCollapsed: true,
+    });
+    act(() => root.render(<ShellV2 />));
+    // Collapsed: sized once, with no follow-up frame to fight the rail.
+    expect(mocks.setLayouts).toEqual([{ editor: 65.22, files: 34.78 }]);
+    await nextFrame();
+    expect(mocks.setLayouts).toHaveLength(1);
+    expect(mocks.resizes).toEqual([]);
+
+    mocks.setLayouts = [];
+    act(() => appStore.setState({ filesCollapsed: false }));
+    expect(mocks.setLayouts).toEqual([{ editor: 65.22, files: 34.78 }]);
+
+    await nextFrame();
+    expect(mocks.setLayouts).toEqual([
+      { editor: 65.22, files: 34.78 },
+      { editor: 65.22, files: 34.78 },
+    ]);
+    expect(mocks.resizes).toEqual(["34.78%"]);
   });
 
   it("keeps the Code tab mounted while another tab is showing", () => {

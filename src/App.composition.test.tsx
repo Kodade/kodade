@@ -55,6 +55,11 @@ vi.mock("./components/shell/WorkspacesSidebar", () => ({
 vi.mock("./components/chat/ChatPane", () => ({
   ChatPane: () => <div data-chat />,
 }));
+// The v2 Code tab renders the terminal beside the chat (#62); the real pane
+// wants the session registry, which this suite deliberately does not build.
+vi.mock("./components/TerminalPane", () => ({
+  TerminalPane: () => <div data-terminal />,
+}));
 vi.mock("./components/WorkspaceFilesPane", () => ({
   WorkspaceFilesPane: () => <div>files</div>,
 }));

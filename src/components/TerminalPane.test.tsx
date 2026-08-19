@@ -92,8 +92,41 @@ describe("TerminalPane splits", () => {
         />,
       ),
     );
-    return { projectsStore, terminalRegistry, initialTerminalId };
+    return {
+      projectsStore,
+      terminalRegistry,
+      initialTerminalId,
+      // Re-render the same pane with a new focus nonce (the v2 shell's
+      // tab-reactivation path); the pane is never remounted.
+      async bumpFocusNonce(focusNonce: number) {
+        await act(async () =>
+          root?.render(
+            <TerminalPane
+              projectsStore={projectsStore}
+              terminalRegistry={terminalRegistry}
+              voiceControls={null}
+              workspaceId={workspaceId}
+              focusNonce={focusNonce}
+            />,
+          ),
+        );
+      },
+    };
   }
+
+  it("re-asserts the active terminal's focus when the focus nonce changes", async () => {
+    const { terminalRegistry, initialTerminalId, bumpFocusNonce } =
+      await renderPane();
+    const before = terminalRegistry.sync.mock.calls.length;
+
+    await bumpFocusNonce(1);
+
+    const calls = terminalRegistry.sync.mock.calls;
+    expect(calls.length).toBeGreaterThan(before);
+    // sync(container, visible, activeId) — the third argument is what the
+    // registry focuses.
+    expect(calls.at(-1)?.[2]).toBe(initialTerminalId);
+  });
 
   it("splits the active terminal side by side and keeps both sessions alive", async () => {
     const { projectsStore, terminalRegistry } = await renderPane();
