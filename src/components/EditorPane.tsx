@@ -20,6 +20,7 @@ import { RemoteFilesPane } from "./RemoteFilesPane";
 import { RemotePreviewPane } from "./RemotePreviewPane";
 import { KodworkPane } from "./kodwork/KodworkPane";
 import { nativeBasename } from "../platform/native-path";
+import { RELEASE_MANIFEST } from "../release/manifest";
 
 // Editable CodeMirror over the files store's open text file (M4b). The store
 // owns the dirty/save/conflict state machine; this pane is a thin view:
@@ -256,7 +257,8 @@ export function EditorPane() {
           <GithubPane />
         </div>
       )}
-      {activeTab?.kind === "browser" && (
+      {/* Archived embedded browser (#62): compiled out of public builds. */}
+      {RELEASE_MANIFEST.features.browser && activeTab?.kind === "browser" && (
         <div className="relative min-h-0 flex-1">
           <BrowserPane url={activeTab.url} />
         </div>

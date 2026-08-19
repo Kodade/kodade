@@ -13,6 +13,7 @@ const FEATURE_NAMES: Record<DevelopmentFeature, string> = {
   // UI-only feature: it has no IPC group of its own, but the registry stays
   // exhaustive so a future guarded call reads correctly.
   shell: "Ködade v2 shell",
+  browser: "KödBrowser",
 };
 
 export function unavailableFeatureError(feature: DevelopmentFeature): Error {

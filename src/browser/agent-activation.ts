@@ -1,4 +1,6 @@
 import { nativeEquals, nativeRelativePath } from "../platform/native-path";
+import { unavailableFeatureError } from "../release/guard";
+import { developmentFeatureEnabled } from "../release/manifest";
 
 export type BrowserAgentActivationEvent = {
   projectRoot: string;
@@ -20,6 +22,12 @@ export async function activateBrowserForAgent(
     setBrowserUrl(url: string): void;
   },
 ): Promise<boolean> {
+  // Archived embedded browser (#62): fail closed with the same message the
+  // other disabled development features use, rather than half-routing an
+  // agent request to a pane that cannot render.
+  if (!developmentFeatureEnabled("browser")) {
+    throw unavailableFeatureError("browser");
+  }
   const project = deps.projects
     .filter(
       (candidate) =>

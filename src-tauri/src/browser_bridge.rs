@@ -243,6 +243,7 @@ pub fn browser_agent_ready(
     readiness: State<'_, BrowserBridgeReadiness>,
     project_root: Option<String>,
 ) -> Result<(), String> {
+    crate::commands::require_development_feature("KödBrowser")?;
     let Some(project_root) = project_root else {
         readiness.active_project.send_replace(String::new());
         return Ok(());

@@ -33,6 +33,9 @@ import type { ProjectsState } from "../../store/projects";
 import { isChatSession } from "../../store/projects";
 import type { ProvidersState } from "../../providers/store";
 import { AVAILABLE_PROVIDERS, isOllamaChat } from "../../providers/catalog";
+import { chatLinkTarget } from "../../browser/link-target";
+import { capabilitiesStore } from "../../platform/capabilities";
+import { openMarkdownLink } from "../../markdown/links";
 import { buildRemoteProgramLaunch } from "../../ssh/command";
 import {
   remoteSessionBase,
@@ -229,6 +232,13 @@ export function ChatPane({
                 <ChatTranscript
                   thread={thread}
                   onOpenLink={(url) => {
+                    // Archived embedded browser (#62): without the pane the
+                    // link opens in the OS browser instead of nowhere.
+                    const caps = capabilitiesStore.getState().capabilities;
+                    if (chatLinkTarget(caps) === "external") {
+                      void openMarkdownLink(url);
+                      return;
+                    }
                     filesStore.getState().openBrowserTab();
                     filesStore.getState().setBrowserUrl(url);
                   }}

@@ -2,7 +2,7 @@ import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { appStore, filesStore } from "../store/appStore";
 import {
-  canUseBrowserPane,
+  browserPaneAvailable,
   capabilitiesStore,
 } from "../platform/capabilities";
 import { RELEASE_MANIFEST } from "../release/manifest";
@@ -24,8 +24,10 @@ const SHELL_TABS: readonly { id: ShellTabId; label: string }[] = [
 
 // Matches the native title-bar height while leaving room for macOS traffic lights.
 export function TitleBar() {
+  // Archived embedded browser (#62): compiled out of public builds, and still
+  // hidden on any platform that cannot host the native child view.
   const browserPaneCapable = useStore(capabilitiesStore, (state) =>
-    canUseBrowserPane(state.capabilities),
+    browserPaneAvailable(state.capabilities),
   );
   // v2 shell (issue #62): compiled out of public builds, and off until the
   // user switches it on.

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { availableSettingsSections } from "../components/settings/registry";
-import { externalUrls, local, ssh, vox } from "../ipc/transport";
+import { activateBrowserForAgent } from "../browser/agent-activation";
+import { chatLinkTarget } from "../browser/link-target";
+import { browser, externalUrls, local, ssh, vox } from "../ipc/transport";
+import { browserPaneAvailable } from "../platform/capabilities";
 import { AVAILABLE_PROVIDERS, supportsChat } from "../providers/catalog";
 import { BINDINGS } from "../shortcuts/bindings";
-import { decodeTab } from "../store/tabs";
+import { decodeTab, decodeTabs } from "../store/tabs";
 import { RELEASE_MANIFEST } from "./manifest";
 
 describe("compiled public surface", () => {
@@ -14,6 +17,7 @@ describe("compiled public surface", () => {
       false,
       false,
       true,
+      false,
       false,
     ]);
   });
@@ -27,6 +31,42 @@ describe("compiled public surface", () => {
 
   it("compiles without the v2 tabbed shell (#62)", () => {
     expect(RELEASE_MANIFEST.features.shell).toBe(false);
+  });
+
+  it("compiles without the archived embedded browser (#62)", () => {
+    expect(RELEASE_MANIFEST.features.browser).toBe(false);
+    // No button, no pane, and chat links leave for the OS browser.
+    expect(browserPaneAvailable(null)).toBe(false);
+    expect(chatLinkTarget(null)).toBe("external");
+  });
+
+  it("drops persisted browser tabs without damaging the rest of the layout", () => {
+    expect(decodeTab("browser:https://example.com/")).toBeNull();
+    expect(decodeTabs(["/work/a.ts", "browser:https://example.com/", "github:"])).toEqual([
+      { kind: "file", path: "/work/a.ts" },
+      { kind: "github" },
+    ]);
+  });
+
+  it("fails the KödBrowser agent flows closed", async () => {
+    await expect(browser.create("editor", "https://example.com/", {
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    })).rejects.toThrow("KödBrowser is unavailable");
+    await expect(
+      activateBrowserForAgent(
+        { projectRoot: "/work", url: "https://example.com/" },
+        {
+          projects: [{ id: "p", path: "/work" }],
+          setActiveProject: async () => undefined,
+          syncProjectFiles: async () => undefined,
+          openBrowserTab: () => undefined,
+          setBrowserUrl: () => undefined,
+        },
+      ),
+    ).rejects.toThrow("KödBrowser is unavailable");
   });
 
   it("restores persisted KödWork task tabs", () => {

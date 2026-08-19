@@ -5,6 +5,8 @@ use tauri::Emitter as _;
 use tauri::{AppHandle, Window};
 use url::Url;
 
+use crate::commands::require_development_feature;
+
 pub const EVENT_NAVIGATED: &str = "browser://navigated";
 pub const EDITOR_BROWSER_ID: &str = "editor-browser";
 const MAX_AGENT_SCRIPT_BYTES: usize = 64 * 1024;
@@ -480,6 +482,7 @@ pub async fn browser_create(
     url: String,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     let url = http_url(&url)?.to_string();
     let bounds = checked_bounds(bounds)?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -504,6 +507,7 @@ pub async fn browser_create(
 
 #[tauri::command]
 pub async fn browser_navigate(window: Window, id: String, url: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     let url = http_url(&url)?.to_string();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -520,6 +524,7 @@ pub async fn browser_navigate(window: Window, id: String, url: String) -> Result
 
 #[tauri::command]
 pub async fn browser_back(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::with_view(window, id, platform::back)
@@ -533,6 +538,7 @@ pub async fn browser_back(window: Window, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn browser_forward(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::with_view(window, id, platform::forward)
@@ -546,6 +552,7 @@ pub async fn browser_forward(window: Window, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn browser_reload(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::with_view(window, id, |view| {
@@ -565,6 +572,7 @@ pub async fn browser_set_bounds(
     id: String,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     let bounds = checked_bounds(bounds)?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -582,6 +590,7 @@ pub async fn browser_set_bounds(
 
 #[tauri::command]
 pub async fn browser_show(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::with_view(window, id, |view| {
@@ -597,6 +606,7 @@ pub async fn browser_show(window: Window, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn browser_hide(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::with_view(window, id, |view| {
@@ -612,6 +622,7 @@ pub async fn browser_hide(window: Window, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn browser_destroy(window: Window, id: String) -> Result<(), String> {
+    require_development_feature("KödBrowser")?;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         platform::destroy(window, id)

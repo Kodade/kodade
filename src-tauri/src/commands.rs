@@ -73,6 +73,12 @@ mod release_feature_tests {
             development_feature_access(false, "KödSSH"),
             Err("KödSSH is unavailable in the public release".to_string())
         );
+        // The archived embedded browser (#62) reports the same way. The live
+        // guard reads cfg!(test), so only the pure helper can be asserted here.
+        assert_eq!(
+            development_feature_access(false, "KödBrowser"),
+            Err("KödBrowser is unavailable in the public release".to_string())
+        );
     }
 
     #[test]

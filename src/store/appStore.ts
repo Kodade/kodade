@@ -37,6 +37,7 @@ import { formatProjectMemory } from "../memory/provider-context";
 import { createProvidersStore } from "../providers/store";
 import {
   ensureBrowserAgentSetup,
+  removeBrowserAgentSetup,
   verifiedBrowserMcpBinaryPath,
 } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
@@ -768,19 +769,28 @@ darkQuery?.addEventListener("change", () => {
 let initStarted = false;
 let kodworkScheduleTimer: ReturnType<typeof setInterval> | null = null;
 
-async function installAutomaticBrowserAgentSetup(): Promise<void> {
+// Installs the KödBrowser agent wiring, or — in a build where the embedded
+// browser is archived (#62) — removes what older builds installed, so agents
+// stop being told to use a pane that no longer exists.
+async function reconcileAutomaticBrowserAgentSetup(): Promise<void> {
   await providersStore.getState().detectAll();
   const installedClis = Object.entries(providersStore.getState().statuses)
     .filter(([, status]) => status.status === "installed")
     .map(([id]) => id);
   const binary = await tauriMemory.mcpBinaryPath();
-  const result = await ensureBrowserAgentSetup({
+  const input = {
     config: tauriConfig,
     binaryPath: verifiedBrowserMcpBinaryPath(binary),
     installedClis,
-  });
+  };
+  const enabled = RELEASE_MANIFEST.features.browser;
+  const result = enabled
+    ? await ensureBrowserAgentSetup(input)
+    : await removeBrowserAgentSetup(input);
   for (const error of result.errors) {
-    console.warn(`kodade: browser agent setup: ${error}`);
+    console.warn(
+      `kodade: browser agent ${enabled ? "setup" : "cleanup"}: ${error}`,
+    );
   }
 }
 
@@ -849,10 +859,14 @@ export async function initApp(): Promise<void> {
       });
     }
   }
-  if (isTauriRuntime()) {
+  // Archived embedded browser (#62): builds without the pane never subscribe
+  // to agent activation requests.
+  if (RELEASE_MANIFEST.features.browser && isTauriRuntime()) {
     void tauriBrowser
       .onAgentActivate((event) => {
-        void routeBrowserForAgent(event);
+        void routeBrowserForAgent(event).catch((error) => {
+          console.error("kodade: browser agent activation failed:", error);
+        });
       })
       .catch((error) => {
         console.error("kodade: unable to install browser agent activation", error);
@@ -891,10 +905,11 @@ export async function initApp(): Promise<void> {
     console.error("kodade: shell name lookup failed:", err);
   }
 
-  // Detect installed agents and silently wire their unqualified browser use to
-  // Kodade's visible internal browser. Settings can still refresh detection.
+  // Detect installed agents and reconcile their KödBrowser wiring: install it
+  // where the embedded browser exists, remove Ködade's own entries where it
+  // does not (#62). Settings can still refresh detection.
   if (isTauriRuntime()) {
-    void installAutomaticBrowserAgentSetup().catch((error) => {
+    void reconcileAutomaticBrowserAgentSetup().catch((error) => {
       console.error("kodade: automatic browser agent setup failed:", error);
     });
   } else {

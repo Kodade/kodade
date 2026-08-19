@@ -10,6 +10,7 @@ import type { FileActivityFact } from "../activity/adapters";
 import type { DirEntry, FileRead, FilesIpc, Unlisten } from "../ipc/contract";
 import { viewerKind } from "../editor/language";
 import { decodeTabs, encodeTab, encodeTabs, tabsEqual, type Tab } from "./tabs";
+import { developmentFeatureEnabled } from "../release/manifest";
 import {
   nativeBasename,
   nativeDirname,
@@ -46,6 +47,9 @@ export type FilesDeps = {
   onFileSaved?: (root: string, path: string) => void;
   // Human-authored mutations are marked in any concurrent KödWork ledger.
   onFileMutated?: (path: string) => void;
+  // The embedded browser is archived (#62). Defaults to the compiled release
+  // manifest; injectable so both profiles are testable in one suite.
+  browserEnabled?: () => boolean;
 };
 
 // Editor state machine (M4b). Lives here next to the file tree so the whole
@@ -292,6 +296,10 @@ export function createFilesStore(deps: FilesDeps) {
     // Mirrors tabsByRoot but stays entirely in this session; project persistence
     // records only paths, never whether a markdown tab was being read or edited.
     const tabModesByRoot = new Map<string, Record<string, EditorMode>>();
+
+    // Archived embedded browser (#62): every browser action reads this.
+    const browserEnabled =
+      deps.browserEnabled ?? (() => developmentFeatureEnabled("browser"));
 
     let remoteScope: string | null = null;
     // Local projects key tabs by native root; remote projects key them by
@@ -1294,6 +1302,10 @@ export function createFilesStore(deps: FilesDeps) {
       },
 
       openBrowserTab() {
+        // Fail closed before any state is touched: a build without the
+        // embedded browser must not add a tab, activate one, or bump the
+        // editor open intent the v2 shell auto-switches on.
+        if (!browserEnabled()) return;
         const root = get().rootPath;
         if (!root) return;
         const tabs = tabsByRoot.get(root) ?? [];
@@ -1307,6 +1319,7 @@ export function createFilesStore(deps: FilesDeps) {
       },
 
       setBrowserUrl(url: string) {
+        if (!browserEnabled()) return;
         const root = get().rootPath;
         const active = get().activeTab;
         if (!root || active?.kind !== "browser") return;

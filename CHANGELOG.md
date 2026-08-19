@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Archived the embedded KödBrowser pane: public release builds no longer ship
+  the browser tab, its title-bar action, the native browser commands, or the
+  KödBrowser agent tools, and chat links open in the system browser instead.
+  Persisted browser tabs from earlier versions are dropped on restore without
+  affecting other tabs. On first launch after upgrading, Ködade also removes
+  the `kodade-browser` MCP server and the managed browser rule it previously
+  wrote into installed agent CLIs, leaving any same-named entry a user owns
+  untouched. The surface stays in source behind the development-feature flag
+  so it can be revived.
 - Fixed the macOS application identity so the app installs as `Kodade.app` with
   a `Kodade` main executable, keeping Ködade in Finder, the Dock, and the menu
   bar while Activity Monitor no longer shows a lowercase process name.

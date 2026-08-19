@@ -8,7 +8,8 @@ export type DevelopmentFeature =
   | "voice"
   | "ssh"
   | "work"
-  | "shell";
+  | "shell"
+  | "browser";
 
 export type ReleaseManifest = {
   readonly profile: ReleaseProfile;
@@ -30,6 +31,9 @@ export function releaseManifestFor(profile: ReleaseProfile): ReleaseManifest {
       // The v2 tabbed shell (issue #62) is still being built. Unlike `work` it
       // is a plain development feature: public builds compile without it.
       shell: enabled,
+      // The embedded KödBrowser pane (issue #62) is archived: public builds
+      // ship without it, and the code stays here so it can be revived.
+      browser: enabled,
     }),
   });
 }

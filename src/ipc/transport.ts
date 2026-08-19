@@ -46,7 +46,9 @@ export const externalUrls: ExternalUrlIpc = {
 };
 export const github = tauriGithub;
 export const git = tauriGit;
-export const browser = tauriBrowser;
+// Archived embedded browser (#62). The native commands stay registered so the
+// pane can be revived; the TypeScript surface is what a public build loses.
+export const browser = guardDevelopmentIpc("browser", tauriBrowser);
 export const memory = tauriMemory;
 export const memoryMcpBinaryPath = () => tauriMemory.mcpBinaryPath();
 export const ssh = guardDevelopmentIpc("ssh", tauriSsh);
