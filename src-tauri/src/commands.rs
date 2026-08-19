@@ -1297,7 +1297,7 @@ mod modeld_lifecycle_tests {
 
     #[test]
     fn packaged_helpers_resolve_from_the_stable_resource_paths() {
-        let resources = Path::new("/Applications/kodade.app/Contents/Resources");
+        let resources = Path::new("/Applications/Kodade.app/Contents/Resources");
         assert_eq!(
             bundled_local_cli_path(resources),
             resources.join("kodade-local/kodade-local.mjs")

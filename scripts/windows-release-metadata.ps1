@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $installer = Get-Item -LiteralPath $InstallerPath
-$expectedName = "kodade_${Version}_x64-setup.exe"
+$expectedName = "Kodade_${Version}_x64-setup.exe"
 if ($installer.Name -cne $expectedName) {
     throw "Expected installer $expectedName, found $($installer.Name)"
 }
@@ -27,7 +27,7 @@ $checksumPath = Join-Path $output.FullName "$($installer.Name).sha256"
     [System.Text.UTF8Encoding]::new($false)
 )
 
-$manifestPath = Join-Path $output.FullName "kodade_${Version}_windows-x64.json"
+$manifestPath = Join-Path $output.FullName "Kodade_${Version}_windows-x64.json"
 $manifest = [ordered]@{
     schemaVersion = 1
     product = "kodade"

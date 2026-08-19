@@ -208,7 +208,7 @@ jobs:
           name: kodade-windows-unpacked-${{ github.run_number }}
           path: |
             dist/
-            src-tauri/target/release/kodade.exe
+            src-tauri/target/release/Kodade.exe
             src-tauri/target/release/kodade.pdb
           if-no-files-found: warn
           retention-days: 7

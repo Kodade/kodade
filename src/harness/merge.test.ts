@@ -271,6 +271,110 @@ ${comment}  "mcpServers": {
     },
   );
 
+  it("updates a helper whose bundle was renamed from kodade.app to Kodade.app", () => {
+    const before = JSON.stringify({
+      mcpServers: {
+        "kodade-browser": {
+          command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      },
+    });
+    const merge = mergeMcpServer(before, "json", "mcpServers", {
+      name: "kodade-browser",
+      config: {
+        command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+        args: ["browser"],
+      },
+    });
+
+    expect(merge.operation).toBe("update");
+    expect(parseByFormat(merge.after, "json")).toEqual({
+      mcpServers: {
+        "kodade-browser": {
+          command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      },
+    });
+  });
+
+  it("updates a KödMem helper across the same bundle rename", () => {
+    const before = JSON.stringify({
+      mcpServers: {
+        "kodade-mem": {
+          command: "/Applications/kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["--project", "demo"],
+        },
+      },
+    });
+    const merge = mergeMcpServer(before, "json", "mcpServers", {
+      name: "kodade-mem",
+      config: {
+        command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+        args: ["--project", "demo"],
+      },
+    });
+
+    expect(merge.operation).toBe("update");
+    expect(parseByFormat(merge.after, "json")).toEqual({
+      mcpServers: {
+        "kodade-mem": {
+          command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["--project", "demo"],
+        },
+      },
+    });
+  });
+
+  it("migrates a legacy resource helper from the old bundle name to the new one", () => {
+    const before = JSON.stringify({
+      mcpServers: {
+        "kodade-browser": {
+          command: "/Applications/kodade.app/Contents/Resources/helpers/kodade-mcp",
+          args: ["browser"],
+        },
+      },
+    });
+    const merge = mergeMcpServer(before, "json", "mcpServers", {
+      name: "kodade-browser",
+      config: {
+        command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+        args: ["browser"],
+      },
+    });
+
+    expect(merge.operation).toBe("update");
+    expect(parseByFormat(merge.after, "json")).toEqual({
+      mcpServers: {
+        "kodade-browser": {
+          command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      },
+    });
+  });
+
+  it.each([
+    "/Applications/notkodade.app/Contents/MacOS/kodade-mcp",
+    "/Users/someone/other.app/Contents/Resources/helpers/kodade-mcp",
+  ])("refuses to replace a same-name helper rooted at %s", (existingCommand) => {
+    const before = JSON.stringify({
+      mcpServers: {
+        "kodade-browser": { command: existingCommand, args: ["browser"] },
+      },
+    });
+    expect(() =>
+      mergeMcpServer(before, "json", "mcpServers", {
+        name: "kodade-browser",
+        config: {
+          command: "/Applications/Kodade.app/Contents/MacOS/kodade-mcp",
+          args: ["browser"],
+        },
+      }),
+    ).toThrow(/already exists/);
+  });
+
   it("migrates the stale KödBrowser helper in an OpenCode command array", () => {
     const before = JSON.stringify({
       mcp: {

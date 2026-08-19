@@ -7,6 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const publicDocs = new Set([
   "docs/README.md",
+  "docs/MACOS-APP-IDENTITY.md",
   "docs/PROJECTS-VAULT-ACCEPTANCE.md",
   "docs/RELEASING.md",
   "docs/WINDOWS-CI.md",

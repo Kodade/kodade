@@ -10,7 +10,7 @@ function read(relativePath) {
   return readFileSync(join(root, relativePath), "utf8");
 }
 
-test("macOS uses the Ködade display name without changing stable bundle paths", () => {
+test("macOS presents the Ködade identity from an ASCII product name", () => {
   const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
   const macOS = JSON.parse(read("src-tauri/tauri.macos.conf.json"));
   const infoPlist = read("src-tauri/Info.plist");
@@ -18,11 +18,17 @@ test("macOS uses the Ködade display name without changing stable bundle paths",
 
   assert.equal(
     tauri.productName,
-    "kodade",
-    "the lowercase product name keeps kodade.app and packaged helper paths stable",
+    "Kodade",
+    "the ASCII product name drives the Kodade.app bundle name",
+  );
+  assert.equal(
+    tauri.mainBinaryName,
+    "Kodade",
+    "the main executable name is what Activity Monitor shows for the app process",
   );
   assert.equal(tauri.app.windows[0].title, "Ködade");
   assert.equal(macOS.bundle.macOS.bundleName, "Ködade");
+  assert.match(infoPlist, /<key>CFBundleName<\/key>\s*<string>Ködade<\/string>/);
   assert.match(
     infoPlist,
     /<key>CFBundleDisplayName<\/key>\s*<string>Ködade<\/string>/,

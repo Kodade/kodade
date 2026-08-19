@@ -44,14 +44,14 @@ release.
 
 Output lands in:
 
-- App: `src-tauri/target/release/bundle/macos/kodade.app`
-- DMG: `src-tauri/target/release/bundle/dmg/kodade_<version>_aarch64.dmg`
+- App: `src-tauri/target/release/bundle/macos/Kodade.app`
+- DMG: `src-tauri/target/release/bundle/dmg/Kodade_<version>_aarch64.dmg`
 
 To open the unsigned app on your own machine without the Gatekeeper prompt:
 right-click the app → **Open** → **Open** (only needed the first time), or
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/kodade.app
+xattr -dr com.apple.quarantine /Applications/Kodade.app
 ```
 
 Do **not** ship the unsigned DMG to other users — they'll hit Gatekeeper.
@@ -167,7 +167,7 @@ fallback is a two-stage packaging operation, not just three post-build
 commands:
 
 ```bash
-DMG="$CARGO_TARGET_DIR/release/bundle/dmg/kodade_<version>_aarch64.dmg"
+DMG="$CARGO_TARGET_DIR/release/bundle/dmg/Kodade_<version>_aarch64.dmg"
 xcrun notarytool submit "$DMG" --keychain-profile kodade-notarize --wait
 ```
 
@@ -191,7 +191,7 @@ of the outer DMG alone is therefore insufficient release evidence.
 ### 5. Verify the result
 
 ```bash
-APP="${CARGO_TARGET_DIR:-src-tauri/target}/release/bundle/macos/kodade.app"
+APP="${CARGO_TARGET_DIR:-src-tauri/target}/release/bundle/macos/Kodade.app"
 HELPERS=(
   "$APP/Contents/Resources/helpers/kodade-mcp"
 )
@@ -256,9 +256,9 @@ Before building a distributed artifact:
    mirror the changelog entry and its platform status table.
 
 The DMG filename encodes the version and target arch, e.g.
-`kodade_1.3.4_aarch64.dmg`.
+`Kodade_1.3.4_aarch64.dmg`.
 
 The Windows NSIS filename follows the same version, e.g.
-`kodade_1.3.4_x64-setup.exe`. Windows pull-request builds remain unsigned until
+`Kodade_1.3.4_x64-setup.exe`. Windows pull-request builds remain unsigned until
 a signing provider is selected; no signing secrets or inactive placeholder
 credentials are committed to the workflow.

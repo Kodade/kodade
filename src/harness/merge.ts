@@ -541,7 +541,9 @@ function isKodadeOwnedServer(
       name === "kodade-local-delegate" ||
       name.startsWith("kodade-local-delegate-")) &&
     existingCommand !== null &&
-    (existingCommand === proposedCommand ||
+    proposedCommand !== null &&
+    (normalizeKodadeBundlePath(existingCommand) ===
+      normalizeKodadeBundlePath(proposedCommand) ||
       (name === "kodade-browser" && isLegacyBrowserHelperMigration(existing, proposed)))
   );
 }
@@ -553,7 +555,7 @@ const LEGACY_MACOS_BROWSER_HELPER_SUFFIXES = [
 const STABLE_MACOS_BROWSER_HELPER_SUFFIX = "/Contents/MacOS/kodade-mcp";
 
 // A path change is ownership evidence only for the exact shapes Ködade writes
-// and only within the same lowercase kodade.app bundle. This heals profile
+// and only within the same Ködade .app bundle. This heals profile
 // switches without turning a same-name user server into a replaceable entry.
 function isLegacyBrowserHelperMigration(
   existing: unknown,
@@ -592,10 +594,22 @@ function browserHelperPath(value: unknown): string | null {
   return null;
 }
 
+// Ködade shipped this bundle as "kodade.app" before the macOS app identity
+// rename and as "Kodade.app" after it, so an upgraded install proposes the same
+// helper under a differently cased bundle name. Only that one known segment is
+// case-normalized; every other part of a user-supplied path stays byte-exact,
+// so a genuinely different directory or bundle name is still a different path.
+const KODADE_BUNDLE_SEGMENT = /\/kodade\.app(?=\/|$)/i;
+const KODADE_BUNDLE_NAME = "/Kodade.app";
+
+function normalizeKodadeBundlePath(path: string): string {
+  return path.replace(KODADE_BUNDLE_SEGMENT, KODADE_BUNDLE_NAME);
+}
+
 function browserBundleRoot(path: string, suffix: string): string | null {
   if (!path.endsWith(suffix)) return null;
-  const root = path.slice(0, -suffix.length);
-  return root.endsWith("/kodade.app") ? root : null;
+  const root = normalizeKodadeBundlePath(path.slice(0, -suffix.length));
+  return root.endsWith(KODADE_BUNDLE_NAME) ? root : null;
 }
 
 // Structural equality over JSON-ish values (objects, arrays, primitives). Used to

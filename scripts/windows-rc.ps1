@@ -9,15 +9,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$userUninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\kodade"
-$machineUninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\kodade"
+$userUninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Kodade"
+$machineUninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Kodade"
 $appDataDirectory = Join-Path $env:APPDATA "com.kodade.desktop"
 $runToken = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { [guid]::NewGuid().ToString("N") }
 $projectDirectory = Join-Path $env:TEMP "Kodade RC Project Ω $runToken"
 $storagePath = Join-Path $appDataDirectory "kodade.json"
 $sentinelPath = Join-Path $appDataDirectory "windows-rc-sentinel.txt"
 $app = $null
-$fallbackInstallDirectory = Join-Path $env:LOCALAPPDATA "kodade"
+$fallbackInstallDirectory = Join-Path $env:LOCALAPPDATA "Kodade"
 $fallbackUninstaller = Join-Path $fallbackInstallDirectory "uninstall.exe"
 $uninstaller = $fallbackUninstaller
 $tauriConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) "src-tauri\tauri.conf.json"
@@ -338,21 +338,21 @@ function Invoke-LaunchAndGracefulQuit {
             Start-Sleep -Milliseconds 250
             $process.Refresh()
             if ($process.HasExited) {
-                throw "Installed kodade.exe exited during WebView2 startup (code $($process.ExitCode))"
+                throw "Installed Kodade.exe exited during WebView2 startup (code $($process.ExitCode))"
             }
             if ($process.MainWindowHandle -ne 0) {
                 break
             }
         }
         if ($process.MainWindowHandle -eq 0) {
-            throw "Installed kodade.exe did not create a main window"
+            throw "Installed Kodade.exe did not create a main window"
         }
 
         $tracked = New-TrackedProcessTree -RootId $process.Id
         try {
             $process.Refresh()
             if ($process.HasExited) {
-                throw "Installed kodade.exe exited before its process identity was recorded"
+                throw "Installed Kodade.exe exited before its process identity was recorded"
             }
             $appCreationFileTime = [long] $process.StartTime.ToUniversalTime().ToFileTimeUtc()
         }
@@ -368,7 +368,7 @@ function Invoke-LaunchAndGracefulQuit {
         while ([DateTime]::UtcNow -lt $readinessDeadline) {
             $process.Refresh()
             if ($process.HasExited) {
-                throw "Installed kodade.exe exited before its Windows UI was ready (code $($process.ExitCode))"
+                throw "Installed Kodade.exe exited before its Windows UI was ready (code $($process.ExitCode))"
             }
             $windows = @([KodadeWindowProbe]::ForProcess([uint32] $process.Id))
             $matchingWindows = @($windows | Where-Object {
@@ -410,7 +410,7 @@ function Invoke-LaunchAndGracefulQuit {
             $names = @($lastSnapshot | Where-Object {
                 $tracked.ContainsKey((Get-ProcessIdentityKey -ProcessRecord $_))
             } | ForEach-Object { $_.Name } | Sort-Object -Unique)
-            throw "Installed kodade.exe did not become close-ready with its visible unowned '$expectedWindowTitle' window, WebView2, and managed interactive login shell; windows=$($windows | ConvertTo-Json -Compress -Depth 3) processes=$($names -join ',')"
+            throw "Installed Kodade.exe did not become close-ready with its visible unowned '$expectedWindowTitle' window, WebView2, and managed interactive login shell; windows=$($windows | ConvertTo-Json -Compress -Depth 3) processes=$($names -join ',')"
         }
 
         $mainHandle = $mainWindow.Handle
@@ -420,14 +420,14 @@ function Invoke-LaunchAndGracefulQuit {
         $closeReturned = [KodadeWindowProbe]::Close($mainHandle, 10000)
         Write-Host "Kodade SendMessageTimeout(WM_CLOSE) returned $closeReturned for handle $mainHandle"
         if (-not $closeReturned) {
-            throw "Installed kodade.exe did not accept WM_CLOSE within 10 seconds on its ready main window"
+            throw "Installed Kodade.exe did not accept WM_CLOSE within 10 seconds on its ready main window"
         }
         Assert-TrackedProcessTreeExited -Tracked $tracked
         $closeTimer.Stop()
         Write-Host "Kodade close completed in $($closeTimer.ElapsedMilliseconds)ms"
         $process.Refresh()
         if (-not $process.HasExited) {
-            throw "Installed kodade.exe did not exit after its main window closed"
+            throw "Installed Kodade.exe did not exit after its main window closed"
         }
     }
     catch {
@@ -459,14 +459,14 @@ function Invoke-LaunchAndGracefulQuit {
 
 function Assert-CurrentUserInstall {
     if (-not (Test-Path -LiteralPath $userUninstallKey)) {
-        throw "The installer did not register kodade $Version for the current user"
+        throw "The installer did not register Kodade $Version for the current user"
     }
     if (Test-Path -LiteralPath $machineUninstallKey) {
         throw "The current-user installer unexpectedly registered a machine-wide uninstall entry"
     }
     $entry = Get-ItemProperty -LiteralPath $userUninstallKey
-    if ($entry.DisplayName -ine "kodade" -or $entry.DisplayVersion -ne $Version) {
-        throw "The current-user uninstall metadata does not match kodade $Version"
+    if ($entry.DisplayName -cne "Kodade" -or $entry.DisplayVersion -ne $Version) {
+        throw "The current-user uninstall metadata does not match Kodade $Version"
     }
     $installLocation = [Environment]::ExpandEnvironmentVariables($entry.InstallLocation).Trim('"')
     if (-not $installLocation) {
@@ -506,7 +506,7 @@ try {
         }
     }
     $installLocation = Assert-CurrentUserInstall
-    $app = Join-Path $installLocation "kodade.exe"
+    $app = Join-Path $installLocation "Kodade.exe"
     $uninstaller = Join-Path $installLocation "uninstall.exe"
     if (-not (Test-Path -LiteralPath $app -PathType Leaf)) {
         throw "Installed executable was not found at $app"
