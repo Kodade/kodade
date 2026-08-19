@@ -16,16 +16,19 @@ import {
   usePanelRef,
   type GroupImperativeHandle,
   type Layout,
+  type LayoutChangedMeta,
 } from "react-resizable-panels";
 import { useStore } from "zustand";
 import { EditorPane } from "../EditorPane";
 import { Pane } from "../Pane";
 import { WorkspaceFilesPane } from "../WorkspaceFilesPane";
-import { appStore } from "../../store/appStore";
+import { appStore, filesStore } from "../../store/appStore";
 import { CodeTab } from "./CodeTab";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
 import { WorkspacesSidebar } from "./WorkspacesSidebar";
 import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
+import { SPLIT_MAX, SPLIT_MIN } from "./shell-layout";
+import { isEditorOpenIntent, panelFlagsFor } from "./editor-activation";
 
 // Same separator styling as the v1 shell.
 const SEP =
@@ -35,11 +38,10 @@ export function ShellV2() {
   const shellLayout = useStore(appStore, (s) => s.shellLayout);
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
+  const openTabs = useStore(filesStore, (s) => s.openTabs);
   const filesRef = usePanelRef();
   const editorGroupRef = useRef<GroupImperativeHandle | null>(null);
 
-  // Editor geometry is read-only in this slice: the split renders at the saved
-  // ratio, and writing it back lands with the Editor tab's own work.
   const filesPct = shellLayout.editor.filesPct;
   const editorLayout: Layout = {
     editor: round2(100 - filesPct),
@@ -66,6 +68,58 @@ export function ShellV2() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesPct, filesCollapsed, shellLayout.activeTab]);
 
+  // Only a drag writes geometry: the imperative setLayout calls above report
+  // isUserInteraction=false, and a split measured while the files rail is
+  // collapsed to its fixed 44px is not a width the user chose.
+  const onEditorLayoutChanged = (next: Layout, meta: LayoutChangedMeta) => {
+    if (!meta.isUserInteraction || filesCollapsed) return;
+    const pct = next.files;
+    if (typeof pct !== "number" || !Number.isFinite(pct)) return;
+    const clamped = round2(Math.min(Math.max(pct, SPLIT_MIN), SPLIT_MAX));
+    const state = appStore.getState();
+    if (state.shellLayout.editor.filesPct === clamped) return;
+    state.setShellLayout({
+      ...state.shellLayout,
+      editor: { ...state.shellLayout.editor, filesPct: clamped },
+    });
+  };
+
+  // Auto-switch: surfaces that open a files-store tab (the title bar's GitHub /
+  // review / browser actions, KödChat's review + link handoffs, the file tree)
+  // are otherwise invisible while the user sits on the Code tab.
+  //
+  // ONE subscription is the choke point rather than wrappers around each call
+  // site: every one of those paths ends in the same files-store write, and the
+  // store states its intent there (openIntentCount) instead of making this
+  // guess from the shape of the write. Because this component only ever mounts
+  // under the v2 shell, v1 and public builds never install the subscription.
+  useEffect(() => {
+    return filesStore.subscribe((next, prev) => {
+      if (!isEditorOpenIntent(next, prev)) return;
+      const state = appStore.getState();
+      if (state.shellLayout.activeTab === "editor") return;
+      state.setShellLayout({ ...state.shellLayout, activeTab: "editor" });
+    });
+  }, []);
+
+  // `editor.panels` is a write-only mirror of the GitHub/review tabs that are
+  // open right now, kept for a later Phase 3 surface to read.
+  //
+  // It deliberately does NOT restore anything: the files store persists tabs
+  // PER ROOT and reopens the GitHub/review tabs itself, while this flag is
+  // shell-global — restoring from it would inject panels into every project
+  // the user visits.
+  useEffect(() => {
+    const state = appStore.getState();
+    const { panels } = state.shellLayout.editor;
+    const live = panelFlagsFor(openTabs);
+    if (panels.github === live.github && panels.review === live.review) return;
+    state.setShellLayout({
+      ...state.shellLayout,
+      editor: { ...state.shellLayout.editor, panels: live },
+    });
+  }, [openTabs, shellLayout.editor.panels]);
+
   // Tab SELECTION lives in the title bar (the pill group); this component only
   // renders whatever `shellLayout.activeTab` currently says.
   const tabs: KeepAliveTab[] = [
@@ -89,6 +143,7 @@ export function ShellV2() {
           groupRef={editorGroupRef}
           className="min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
           defaultLayout={editorLayout}
+          onLayoutChanged={onEditorLayoutChanged}
         >
           <Panel id="editor" minSize="20%" collapsible={false}>
             <EditorPane />
