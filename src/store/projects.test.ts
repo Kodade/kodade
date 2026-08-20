@@ -3253,6 +3253,21 @@ describe("v2 shell state (#62)", () => {
     expect(store.getState().shellV2Enabled).toBe(false);
   });
 
+  it("lets an explicit fallback outrank a legacy shellV2: true", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: true,
+      shellV1Fallback: true,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
   it("keeps a pre-hydration switch to the classic shell", async () => {
     const storage = new MockStorage();
     storage.doc = JSON.stringify({
@@ -3269,6 +3284,35 @@ describe("v2 shell state (#62)", () => {
     await hydrateP;
 
     expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  // The mirror of the disable race, and the reason session intent is recorded
+  // even when the click doesn't change the value: the default is already true,
+  // so this click is a no-op against state and only the intent flag keeps
+  // hydration from re-applying the saved opt-out.
+  it("keeps a pre-hydration switch back to the tabbed shell", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: false,
+      shellV1Fallback: true,
+    } satisfies PersistedDoc);
+    storage.deferRead = true;
+    const { store } = makeStore(storage);
+
+    const hydrateP = store.getState().hydrate(); // disk read pending
+    store.getState().setShellV2Enabled(true); // user acts NOW
+    storage.resolveRead();
+    await hydrateP;
+
+    expect(store.getState().shellV2Enabled).toBe(true);
+    // And the choice reaches disk, so it survives the next restart.
+    await store.getState().flushPersistence();
+    expect(
+      (JSON.parse(storage.doc!) as PersistedDoc).shellV1Fallback,
+    ).toBe(false);
   });
 
   it("round-trips the escape hatch through persistence", async () => {

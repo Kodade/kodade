@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The tabbed layout is now how Ködade opens. Projects, terminals, files, the
+  editor, and agents live behind Agents, Code, and Editor tabs in the title
+  bar, with one workspace sidebar that stays put as you move between them — and
+  a tab you have opened keeps running in the background, so switching away from
+  a terminal or an agent never interrupts it. Upgrading carries your work over:
+  the sidebar width you already chose becomes the tabbed layout's, and your
+  projects, open files, and sessions are where you left them. If you would
+  rather keep the four-pane layout from 1.x, the title-bar button to the left
+  of the workspace actions switches back to the classic layout at any time, and
+  that choice sticks across restarts. The classic layout stays available for
+  one more release.
 - The Agents tab now builds reusable agent personas. A persona is a name, a
   provider, a system prompt, and the KödSkills it should lean on, kept in an
   app-wide or per-workspace list; preparing a run drafts a normal KödWork

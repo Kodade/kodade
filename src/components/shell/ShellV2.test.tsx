@@ -174,6 +174,7 @@ describe("ShellV2", () => {
     appStore.setState({
       shellLayout: defaultShellLayout(),
       filesCollapsed: false,
+      sidebarMode: "full",
     });
 
     container = document.createElement("div");
@@ -185,6 +186,11 @@ describe("ShellV2", () => {
     act(() => root.unmount());
     container.remove();
   });
+
+  // Geometry written by the editor group alone (the sidebar group shares the
+  // same mock recorder).
+  const editorSetLayouts = () =>
+    mocks.setLayouts.filter((layout) => "editor" in layout);
 
   // Let the next-frame reassert run (jsdom's rAF is real here).
   const nextFrame = () =>
@@ -240,22 +246,74 @@ describe("ShellV2", () => {
       filesCollapsed: true,
     });
     act(() => root.render(<ShellV2 />));
-    // Collapsed: sized once, with no follow-up frame to fight the rail.
-    expect(mocks.setLayouts).toEqual([{ editor: 65.22, files: 34.78 }]);
+    // Two groups write geometry now (the sidebar's and the editor's), and the
+    // mocks share one recorder: this case is about the editor split alone.
+    expect(editorSetLayouts()).toEqual([{ editor: 65.22, files: 34.78 }]);
     await nextFrame();
-    expect(mocks.setLayouts).toHaveLength(1);
-    expect(mocks.resizes).toEqual([]);
+    expect(editorSetLayouts()).toHaveLength(1);
+    expect(mocks.resizes).not.toContain("34.78%");
 
     mocks.setLayouts = [];
+    mocks.resizes = [];
     act(() => appStore.setState({ filesCollapsed: false }));
-    expect(mocks.setLayouts).toEqual([{ editor: 65.22, files: 34.78 }]);
+    expect(editorSetLayouts()).toEqual([{ editor: 65.22, files: 34.78 }]);
 
     await nextFrame();
-    expect(mocks.setLayouts).toEqual([
+    expect(editorSetLayouts()).toEqual([
       { editor: 65.22, files: 34.78 },
       { editor: 65.22, files: 34.78 },
     ]);
-    expect(mocks.resizes).toEqual(["34.78%"]);
+    expect(mocks.resizes).toContain("34.78%");
+  });
+
+  // The sidebar is a resizable panel in the v2 shell, not a fixed width: its
+  // drag persists through the same clamped path as the editor split, so a
+  // fresh install isn't pinned at the default 14% forever (#65).
+  it("writes the sidebar width back on a user drag, clamped", () => {
+    act(() => root.render(<ShellV2 />));
+    // The shell group mounts with the saved sidebar width.
+    const group = container.querySelector("[data-group]")!;
+    expect(JSON.parse(group.getAttribute("data-default-layout")!)).toEqual({
+      sidebar: 14,
+      tabs: 86,
+    });
+
+    const drag = (sidebar: number) =>
+      act(() =>
+        mocks.layoutHandlers[0]!({ sidebar, tabs: 100 - sidebar }, {
+          isUserInteraction: true,
+        }),
+      );
+
+    drag(21.436);
+    expect(appStore.getState().shellLayout.sidebarPct).toBe(21.44);
+
+    // Beyond the persisted contract's bounds: clamped, never rejected.
+    drag(64);
+    expect(appStore.getState().shellLayout.sidebarPct).toBe(40);
+    drag(1);
+    expect(appStore.getState().shellLayout.sidebarPct).toBe(8);
+  });
+
+  it("never writes a sidebar width measured while it is a rail", () => {
+    appStore.setState({ sidebarMode: "rail" });
+    act(() => root.render(<ShellV2 />));
+
+    act(() =>
+      mocks.layoutHandlers[0]!({ sidebar: 4, tabs: 96 }, {
+        isUserInteraction: true,
+      }),
+    );
+    expect(appStore.getState().shellLayout.sidebarPct).toBe(14);
+
+    // Programmatic setLayout reports isUserInteraction=false.
+    act(() => appStore.setState({ sidebarMode: "full" }));
+    act(() =>
+      mocks.layoutHandlers[0]!({ sidebar: 30, tabs: 70 }, {
+        isUserInteraction: false,
+      }),
+    );
+    expect(appStore.getState().shellLayout.sidebarPct).toBe(14);
   });
 
   it("writes the editor split back on a user drag, clamped", () => {

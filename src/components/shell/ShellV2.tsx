@@ -2,11 +2,13 @@
 //
 // Sidebar on the left, a keep-alive tab host on the right. Code holds the
 // chat/terminal split (CodeTab); Editor holds the editor beside the workspace
-// files; Agents is still a placeholder. Tab content mounts once and is only
-// ever hidden, so switching tabs never unmounts a live terminal or editor.
+// files; Agents holds the personas and their runs. Tab content mounts once and
+// is only ever hidden, so switching tabs never unmounts a live terminal or
+// editor.
 //
 // This whole component is gated twice: the `shell` release feature must be
-// compiled in AND the user must have switched the shell on.
+// compiled in AND the user must not have taken the v2.0 escape hatch back to
+// the classic v1 shell (#65).
 
 import { useEffect, useRef } from "react";
 import {
@@ -27,7 +29,12 @@ import { CodeTab } from "./CodeTab";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
 import { WorkspacesSidebar } from "./WorkspacesSidebar";
 import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
-import { SPLIT_MAX, SPLIT_MIN } from "./shell-layout";
+import {
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
+  SPLIT_MAX,
+  SPLIT_MIN,
+} from "./shell-layout";
 import { isEditorOpenIntent, panelFlagsFor } from "./editor-activation";
 
 // Same separator styling as the v1 shell.
@@ -40,12 +47,47 @@ export function ShellV2() {
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
   const openTabs = useStore(filesStore, (s) => s.openTabs);
   const filesRef = usePanelRef();
+  const sidebarRef = usePanelRef();
   const editorGroupRef = useRef<GroupImperativeHandle | null>(null);
+  const shellGroupRef = useRef<GroupImperativeHandle | null>(null);
 
   const filesPct = shellLayout.editor.filesPct;
   const editorLayout: Layout = {
     editor: round2(100 - filesPct),
     files: filesPct,
+  };
+  const sidebarPct = shellLayout.sidebarPct;
+  const shellLayoutSizes: Layout = {
+    sidebar: sidebarPct,
+    tabs: round2(100 - sidebarPct),
+  };
+
+  // Same rail hazard as the files pane: the sidebar's old fixed 44px constraint
+  // is reconciled AFTER this parent effect, so leaving rail mode needs the
+  // next-frame reassert or the sidebar stays stranded at its rail width.
+  useEffect(() => {
+    shellGroupRef.current?.setLayout(shellLayoutSizes);
+    if (sidebarMode === "rail") return;
+    const frame = requestAnimationFrame(() => {
+      shellGroupRef.current?.setLayout(shellLayoutSizes);
+      sidebarRef.current?.resize(`${sidebarPct}%`);
+    });
+    return () => cancelAnimationFrame(frame);
+    // shellLayoutSizes is derived from sidebarPct alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarPct, sidebarMode]);
+
+  // The sidebar's own drag, with the same rules as the editor split: only a
+  // user interaction writes, and a width measured while the sidebar is a fixed
+  // 44px rail is not a width the user chose.
+  const onShellLayoutChanged = (next: Layout, meta: LayoutChangedMeta) => {
+    if (!meta.isUserInteraction || sidebarMode === "rail") return;
+    const pct = next.sidebar;
+    if (typeof pct !== "number" || !Number.isFinite(pct)) return;
+    const clamped = round2(Math.min(Math.max(pct, SIDEBAR_MIN), SIDEBAR_MAX));
+    const state = appStore.getState();
+    if (state.shellLayout.sidebarPct === clamped) return;
+    state.setShellLayout({ ...state.shellLayout, sidebarPct: clamped });
   };
 
   // Reapply the editor split when the files pane leaves its 44px rail — the
@@ -92,7 +134,8 @@ export function ShellV2() {
   // site: every one of those paths ends in the same files-store write, and the
   // store states its intent there (openIntentCount) instead of making this
   // guess from the shape of the write. Because this component only ever mounts
-  // under the v2 shell, v1 and public builds never install the subscription.
+  // under the tabbed shell, a user on the classic v1 shell never installs the
+  // subscription.
   useEffect(() => {
     return filesStore.subscribe((next, prev) => {
       if (!isEditorOpenIntent(next, prev)) return;
@@ -166,27 +209,44 @@ export function ShellV2() {
   ];
 
   return (
-    <div className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
-      {/* The sidebar sits outside the tab host so its state and scroll position
-          survive every tab switch. Rail mode keeps the same fixed 44px width
-          the v1 shell gives it, and the same rail the v1 sidebar renders. */}
-      <div
-        className="flex h-full shrink-0 flex-col overflow-hidden border-r border-border"
-        style={{
-          width:
-            sidebarMode === "rail" ? "44px" : `${shellLayout.sidebarPct}%`,
-        }}
+    // The sidebar sits outside the tab host so its state and scroll position
+    // survive every tab switch — it is a sibling PANEL of the host, not a child
+    // of it, so the shared separator can resize it without ever remounting a
+    // tab. Rail mode keeps the same fixed 44px width the v1 shell gives it, and
+    // the same rail the v1 sidebar renders.
+    <Group
+      groupRef={shellGroupRef}
+      className="flex min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
+      defaultLayout={shellLayoutSizes}
+      onLayoutChanged={onShellLayoutChanged}
+    >
+      <Panel
+        panelRef={sidebarRef}
+        id="sidebar"
+        minSize={sidebarMode === "rail" ? 44 : `${SIDEBAR_MIN}%`}
+        maxSize={sidebarMode === "rail" ? 44 : `${SIDEBAR_MAX}%`}
+        disabled={sidebarMode === "rail"}
+        collapsible={false}
       >
-        <WorkspacesSidebar />
-      </div>
-      <KeepAliveTabs
-        tabs={tabs}
-        activeId={shellLayout.activeTab}
-        className="min-w-0 max-w-full flex-1 overflow-hidden"
-        panelId={shellTabPanelId}
-        labelledBy={shellTabButtonId}
+        <div className="flex h-full flex-col overflow-hidden border-r border-border">
+          <WorkspacesSidebar />
+        </div>
+      </Panel>
+      <Separator
+        className={SEP}
+        disabled={sidebarMode === "rail"}
+        disableDoubleClick={sidebarMode === "rail"}
       />
-    </div>
+      <Panel id="tabs" minSize="30%" collapsible={false}>
+        <KeepAliveTabs
+          tabs={tabs}
+          activeId={shellLayout.activeTab}
+          className="min-w-0 max-w-full flex-1 overflow-hidden"
+          panelId={shellTabPanelId}
+          labelledBy={shellTabButtonId}
+        />
+      </Panel>
+    </Group>
   );
 }
 
