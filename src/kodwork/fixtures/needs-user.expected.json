@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "task-needs-user",
+  "projectId": "proj-alpha",
+  "folder": "/Users/dev/repo",
+  "outcome": "Add a login screen",
+  "title": "Add a login screen",
+  "providerId": "codex",
+  "access": "standard",
+  "state": "needs-user",
+  "plan": [
+    {
+      "text": "Scaffold the form",
+      "status": "completed"
+    }
+  ],
+  "tools": [
+    {
+      "id": "t1",
+      "tool": "Write",
+      "detail": "src/login.tsx",
+      "ok": true
+    }
+  ],
+  "statusText": null,
+  "summary": "Waiting on the user to approve a tool request",
+  "usage": {
+    "promptTokens": 10,
+    "completionTokens": 5,
+    "totalTokens": 15
+  },
+  "review": {
+    "kind": null,
+    "status": "idle",
+    "files": [],
+    "feedback": "",
+    "fingerprint": null
+  },
+  "reviewOutcomeState": null,
+  "rejectionFingerprints": [],
+  "doomLoop": false,
+  "permissionRequest": null,
+  "alwaysAllowedTools": [],
+  "deniedTools": [],
+  "recurrence": null,
+  "scheduleReceipts": [],
+  "scheduledFromTaskId": null,
+  "resumeId": "cli-session-def",
+  "error": null,
+  "needsLogin": false,
+  "createdAt": 1000,
+  "updatedAt": 6000,
+  "startedAt": 1500,
+  "settledAt": null
+}
