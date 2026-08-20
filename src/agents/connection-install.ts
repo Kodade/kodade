@@ -87,7 +87,9 @@ function configFor(
       // HTTP server via a bare `url` key — verified 2026-08-20 against official
       // docs: Codex CLI (learn.chatgpt.com/docs/config-file/config-reference,
       // `mcp_servers.<id>.url` = "Endpoint for an MCP streamable HTTP server",
-      // shipped since rust-v0.44.0) and Grok Build CLI
+      // shipped since rust-v0.44.0, whose companion PR openai/codex#4689
+      // removed the earlier experimental_use_rmcp_client gate — any Codex that
+      // reads `url` at all reads it ungated) and Grok Build CLI
       // (docs.x.ai/build/features/mcp-servers, `[mcp_servers.<name>] url = "…"`).
       // BYOK: write ONLY `url` — never http_headers/headers/bearer_token_env_var
       // or any auth field. Credentials and headers stay in the user's own CLI
