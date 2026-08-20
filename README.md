@@ -52,7 +52,8 @@ Windows support is under active development; Linux is planned.
   searchable local index, with optional mapped Obsidian projects-vault
   Markdown and portable project identity across local checkouts. SQLite stays
   a rebuildable machine-local projection; it is not synced between machines.
-- **KödHarness and KödSkills** make agent instructions and skills inspectable.
+- **KödHarness and KödSkills** install and update skills and register MCP
+  servers for the CLIs you already use; instruction files stay yours to edit.
 - **Browser and GitHub panes** keep previews, assistant links, and repository
   context in editor tabs without replacing the desktop workspace.
 

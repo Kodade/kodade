@@ -241,7 +241,7 @@ describe("settings page", () => {
     expect(container?.textContent).not.toContain("ködssh");
   });
 
-  it("renders the KödHarness inventory inside settings", async () => {
+  it("renders the KödHarness background prompt and tools inside settings", async () => {
     filesStore.setState({ rootPath: "/repo" });
     appStore.setState({
       activeProjectId: "project",
@@ -251,10 +251,13 @@ describe("settings page", () => {
 
     await render(<SettingsPage />);
 
-    expect(container?.textContent).toContain("instructions");
-    expect(container?.textContent).toContain("skills");
-    expect(container?.textContent).toContain("mcp servers");
+    expect(container?.textContent).toContain("Background prompt");
+    expect(container?.textContent).toContain("Skills and tools");
+    expect(container?.textContent).toContain("manage KödSkills…");
     expect(container?.textContent).not.toContain("open KödHarness…");
+    // The retired inventory pane: no artifact matrix, no scope toggle.
+    expect(container?.querySelector('[data-harness-grid="header"]')).toBeNull();
+    expect(container?.textContent).not.toContain("no subagents found");
     expect(
       container?.querySelector('[data-settings-harness="true"]'),
     ).not.toBeNull();
