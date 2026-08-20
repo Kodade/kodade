@@ -504,6 +504,27 @@ describe("a turn", () => {
     expect(store.getState().threads.t1.status).toBe("working");
   });
 
+  // Issue #63: the background prompt is injected by the app wiring, so the
+  // store only forwards it — the test above (no `ambientPrompt` dep) is the
+  // proof that a build without it spawns exactly as before.
+  it("forwards the Ködade background prompt to the spawn", async () => {
+    const { agent, store } = setup({
+      ambientPrompt: () => "Be concise inside Ködade.",
+    });
+    await store.getState().start();
+    await openThread(store);
+    await store.getState().send("t1", "read the file");
+
+    expect(agent.starts[0].args).toEqual(
+      expect.arrayContaining(["--append-system-prompt=Be concise inside Ködade."]),
+    );
+    // It is a system prompt, not a message: the transcript never sees it.
+    expect(agent.starts[0].stdin).toBe("read the file");
+    expect(JSON.stringify(store.getState().threads.t1.entries)).not.toContain(
+      "Be concise inside Ködade.",
+    );
+  });
+
   it("injects bounded mapped project memory for a local CLI without persisting it", async () => {
     const memory = "mapped-context-marker\n" + "🧠".repeat(20_000);
     const { agent, store } = setup({
@@ -1001,6 +1022,63 @@ describe("failures", () => {
       { role: "system", content: "mapped-ollama-memory" },
       { role: "user", content: "use the project state" },
     ]);
+  });
+
+  // Ollama has no argv, so its system-message slot is the injection point
+  // (#63). It shares the effective-prompt getter and the disabled semantics
+  // with the CLI providers.
+  it("gives Ollama the background prompt through its system message", async () => {
+    const calls: Array<{ messages: ChatMessage[] }> = [];
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return [{ id: "qwen3:8b", label: "qwen3:8b" }];
+      },
+      async *chat(input) {
+        calls.push({ messages: input.messages });
+        yield { content: "done" };
+      },
+    };
+    const { store } = setup({
+      ollama,
+      ambientPrompt: () => "Be concise inside Ködade.",
+      memoryContext: async () => "mapped-ollama-memory",
+    });
+    await store.getState().start();
+    await openThread(store, "ollama");
+    await store.getState().send("t1", "use the project state");
+
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.messages).toEqual([
+      {
+        role: "system",
+        content: "Be concise inside Ködade.\n\nmapped-ollama-memory",
+      },
+      { role: "user", content: "use the project state" },
+    ]);
+    // Never persisted into the transcript, same as the CLI providers.
+    expect(JSON.stringify(store.getState().threads.t1.entries)).not.toContain(
+      "Be concise inside Ködade.",
+    );
+  });
+
+  it("sends Ollama no system message at all when the background prompt is off", async () => {
+    const calls: Array<{ messages: ChatMessage[] }> = [];
+    const ollama: OllamaChatRuntime = {
+      async listModels() {
+        return [{ id: "qwen3:8b", label: "qwen3:8b" }];
+      },
+      async *chat(input) {
+        calls.push({ messages: input.messages });
+        yield { content: "done" };
+      },
+    };
+    const { store } = setup({ ollama, ambientPrompt: () => null });
+    await store.getState().start();
+    await openThread(store, "ollama");
+    await store.getState().send("t1", "hi");
+
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.messages).toEqual([{ role: "user", content: "hi" }]);
   });
 
   it("shows the actionable local-service state when Ollama is unavailable", async () => {

@@ -42,6 +42,7 @@ import {
 } from "../browser/agent-setup";
 import { activateBrowserForAgent } from "../browser/agent-activation";
 import { createGithubStore } from "../github/store";
+import { ambientPromptFor } from "../harness/ambient";
 import { createHarnessAdapter } from "../harness/adapters/shared";
 import { createReadOnlyHarnessAdapter } from "../harness/adapters/read";
 import { SessionRegistry } from "../terminal/registry";
@@ -606,6 +607,13 @@ export const chatStore = createChatStore({
   projectRoot: (projectId) =>
     appStore.getState().projects.find((project) => project.id === projectId)
       ?.path ?? null,
+  // Ködade's background prompt (#63). Read fresh per spawn so a settings
+  // change applies to the next turn without restarting anything.
+  ambientPrompt: () =>
+    ambientPromptFor(
+      appStore.getState().ambientPromptEnabled,
+      appStore.getState().ambientPromptOverride,
+    ),
   memoryContext: async (projectRoot) => {
     const workspace = await tauriMemory.resolveWorkspace(projectRoot);
     if (!workspace) return null;
@@ -673,6 +681,11 @@ export const kodworkStore = createKodworkStore({
   projectRoot: (projectId) =>
     appStore.getState().projects.find((project) => project.id === projectId)
       ?.path ?? null,
+  ambientPrompt: () =>
+    ambientPromptFor(
+      appStore.getState().ambientPromptEnabled,
+      appStore.getState().ambientPromptOverride,
+    ),
   enabled: () => RELEASE_MANIFEST.features.work,
   activity: {
     streamed: (projectId, taskId) =>

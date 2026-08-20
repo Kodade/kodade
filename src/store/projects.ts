@@ -20,6 +20,7 @@ import {
   normalizeProjectColorId,
 } from "../projects/colors";
 import { chatProviderIds } from "../agents/registry";
+import { normalizeAmbientOverride } from "../harness/ambient";
 import {
   defaultShellLayout,
   isShellLayout,
@@ -267,6 +268,13 @@ export type PersistedDoc = {
   // switched on. Development builds only — the manifest gates the surface, so
   // a `true` here does nothing in a public build. Absent/invalid = false.
   shellV2?: boolean;
+  // Optional and additive (still STORAGE_VERSION 1): the Ködade background
+  // prompt (issue #63). Absent means "on, with no override" — the default
+  // text ships in harness/ambient.ts, never in this document, so improving it
+  // doesn't require migrating anyone's settings. An override longer than
+  // MAX_AMBIENT_PROMPT_LENGTH is capped on read.
+  ambientPromptEnabled?: boolean;
+  ambientPromptOverride?: string;
 };
 
 // One review-scope's reviewed-path set plus a write timestamp, used only to
@@ -321,6 +329,10 @@ export type ProjectsState = {
   voicePreferences: VoicePreferences; // app-level KödWhisper preferences
   localModelPreferences: LocalModelPreferences;
   memoryAgentAccess: MemoryAgentAccessPreference;
+  // Ködade's background prompt (issue #63): whether agents Ködade launches
+  // receive it at all, and the user's replacement text (null = the default).
+  ambientPromptEnabled: boolean;
+  ambientPromptOverride: string | null;
   // KödPR reviewed-file checkmarks (M12d, Pro), keyed by project path then
   // review-scope key. See PersistedDoc.reviewChecks for the shape/pruning rule.
   reviewChecks: Record<string, Record<string, ReviewCheckEntry>>;
@@ -388,6 +400,9 @@ export type ProjectsState = {
   setVoicePreferences(preferences: VoicePreferences): void;
   setLocalModelPreferences(preferences: LocalModelPreferences): void;
   setMemoryAgentAccess(preference: MemoryAgentAccessPreference): void;
+  // Ködade background prompt (issue #63).
+  setAmbientPromptEnabled(enabled: boolean): void;
+  setAmbientPromptOverride(text: string | null): void;
   // Record one review scope's reviewed-path set for `projectRoot` (KödPR,
   // M12d) and persist debounced, like setOpenTabs. No-op for a project whose
   // path isn't currently tracked. Caps the project's scope-entry count (see
@@ -744,6 +759,8 @@ export function createProjectsStore(deps: StoreDeps) {
           voicePreferences,
           localModelPreferences,
           memoryAgentAccess,
+          ambientPromptEnabled,
+          ambientPromptOverride,
           reviewChecks,
           voiceVocabulary,
           remoteTargets,
@@ -778,6 +795,10 @@ export function createProjectsStore(deps: StoreDeps) {
           voice: voicePreferences,
           local: localModelPreferences,
           memoryAgentAccess,
+          ambientPromptEnabled,
+          ...(ambientPromptOverride === null
+            ? {}
+            : { ambientPromptOverride }),
           reviewChecks,
           voiceVocabulary,
           remoteTargets,
@@ -1004,6 +1025,8 @@ export function createProjectsStore(deps: StoreDeps) {
       voicePreferences: DEFAULT_VOICE_PREFERENCES,
       localModelPreferences: DEFAULT_LOCAL_MODEL_PREFERENCES,
       memoryAgentAccess: DEFAULT_MEMORY_AGENT_ACCESS,
+      ambientPromptEnabled: true, // background prompt is on by default (#63)
+      ambientPromptOverride: null, // …with Ködade's own text
       reviewChecks: {}, // KödPR reviewed-file checkmarks, per project path (M12d)
       voiceVocabulary: {}, // KödWhisper Pro per-project user vocabulary (M9e)
       remoteTargets: [], // pinned remote projects (KödSSH Pro, M11c)
@@ -1251,6 +1274,20 @@ export function createProjectsStore(deps: StoreDeps) {
               // doc that had it on) re-enables — accepted, because this is a
               // development-only toggle one click away from being flipped back.
               const shellV2Enabled = s.shellV2Enabled || doc.shellV2 === true;
+              // Background prompt (#63). An absent field means "on, default
+              // text"; a change made in this session outranks the document,
+              // like theme/sidebar above. Same accepted edge as the shellV2
+              // note: a pre-hydration change back TO the default (re-enabling,
+              // or clearing the override) is indistinguishable from an
+              // untouched store, so a document that disagrees wins — one click
+              // away from being flipped back, in the direction of the user's
+              // saved settings.
+              const ambientPromptEnabled = !s.ambientPromptEnabled
+                ? false
+                : doc.ambientPromptEnabled !== false;
+              const ambientPromptOverride =
+                s.ambientPromptOverride ??
+                normalizeAmbientOverride(doc.ambientPromptOverride);
               const activeProjectId = s.activeProjectId ?? activeFromDoc;
               // Union runtime (pre-hydration) pins with persisted ones, runtime
               // winning on a key collision, so a pin made before the read landed
@@ -1281,6 +1318,8 @@ export function createProjectsStore(deps: StoreDeps) {
                 voicePreferences,
                 localModelPreferences,
                 memoryAgentAccess,
+                ambientPromptEnabled,
+                ambientPromptOverride,
                 reviewChecks,
                 voiceVocabulary,
                 remoteTargets,
@@ -2010,6 +2049,23 @@ export function createProjectsStore(deps: StoreDeps) {
         if (sameLocalModelPreferences(get().localModelPreferences, normalized))
           return;
         set({ localModelPreferences: normalized });
+        void persistAfterHydration();
+      },
+
+      // Switch Ködade's background prompt on/off (#63). Off means every spawn
+      // is byte-identical to a build without the feature.
+      setAmbientPromptEnabled(enabled: boolean) {
+        if (get().ambientPromptEnabled === enabled) return;
+        set({ ambientPromptEnabled: enabled });
+        void persistAfterHydration();
+      },
+
+      // Replace the background prompt's text, or clear back to Ködade's own
+      // default. Trimmed and capped — this becomes a system prompt on every run.
+      setAmbientPromptOverride(text: string | null) {
+        const normalized = normalizeAmbientOverride(text);
+        if (get().ambientPromptOverride === normalized) return;
+        set({ ambientPromptOverride: normalized });
         void persistAfterHydration();
       },
 

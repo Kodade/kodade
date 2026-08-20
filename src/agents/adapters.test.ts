@@ -7,6 +7,12 @@ import { PROVIDERS } from "../providers/catalog";
 import { adapterFor, chatProviderIds, streamProviderIds } from "./registry";
 import type { AgentStreamEvent } from "./contract";
 import { buildAgentArgs, looksLikeAuthFailure } from "./engine";
+import { encodeClaudeUserMessage } from "./claude-input";
+import {
+  DEFAULT_AMBIENT_PROMPT,
+  ambientPrompt,
+  ambientPromptFor,
+} from "../harness/ambient";
 import {
   CLAUDE_TOOL_TURN,
   CODEX_COLLABORATION_TURN,
@@ -942,5 +948,323 @@ describe("auth classification", () => {
     ]) {
       expect(looksLikeAuthFailure(message)).toBe(false);
     }
+  });
+});
+
+// Ködade's background prompt (issue #63). The pre-slice construction is
+// pinned here byte-for-byte: with the prompt off, or absent, a spawn must be
+// exactly what it was before the feature existed.
+describe("the Ködade background prompt reaches only spawned sessions", () => {
+  const AMBIENT = "You are running inside Ködade.";
+
+  // Captured from the shipped adapters BEFORE this slice.
+  const BASELINE: Record<string, { fresh: string[]; resume: string[] }> = {
+    claude: {
+      fresh: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "Bash",
+        "Read",
+        "WebFetch",
+        "WebSearch",
+      ],
+      resume: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "Bash",
+        "Read",
+        "WebFetch",
+        "WebSearch",
+        "--resume",
+        "s1",
+      ],
+    },
+    codex: {
+      fresh: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"],
+      resume: [
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "resume",
+        "s1",
+        "-",
+      ],
+    },
+    grok: {
+      fresh: [
+        "--prompt-file",
+        "/dev/stdin",
+        "--output-format",
+        "streaming-json",
+        "--permission-mode",
+        "acceptEdits",
+      ],
+      resume: [
+        "--prompt-file",
+        "/dev/stdin",
+        "--output-format",
+        "streaming-json",
+        "--permission-mode",
+        "acceptEdits",
+        "--resume",
+        "s1",
+      ],
+    },
+    opencode: {
+      fresh: ["run", "--format", "json", "--thinking", "--agent", "build"],
+      resume: [
+        "run",
+        "--format",
+        "json",
+        "--thinking",
+        "--agent",
+        "build",
+        "--session",
+        "s1",
+      ],
+    },
+  };
+
+  it("no ambient prompt spawns byte-identically to the pre-slice build", () => {
+    for (const [id, baseline] of Object.entries(BASELINE)) {
+      const adapter = adapterFor(id)!;
+      for (const ambient of [undefined, null, "", "   "]) {
+        expect(adapter.spawn({ prompt: "hi", cwd: "/repo", ambient })).toEqual({
+          bin: providerOf(id).bin,
+          args: baseline.fresh,
+          stdin: "hi",
+        });
+        expect(
+          adapter.spawn({ prompt: "hi", cwd: "/repo", resumeId: "s1", ambient }),
+        ).toEqual({
+          bin: providerOf(id).bin,
+          args: baseline.resume,
+          stdin: "hi",
+        });
+      }
+    }
+  });
+
+  it("claude appends it to the default system prompt, on resume too", () => {
+    const adapter = adapterFor("claude")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT })).toEqual({
+      bin: "claude",
+      args: [...BASELINE.claude.fresh, `--append-system-prompt=${AMBIENT}`],
+      stdin: "hi",
+    });
+    // Each turn is a fresh process, so the flag rides every spawn — and it
+    // still precedes nothing that would break argument order.
+    expect(
+      adapter.spawn({ prompt: "hi", cwd: "/repo", resumeId: "s1", ambient: AMBIENT }).args,
+    ).toEqual([
+      ...BASELINE.claude.fresh,
+      `--append-system-prompt=${AMBIENT}`,
+      "--resume",
+      "s1",
+    ]);
+  });
+
+  // An override written as a markdown bullet list is ordinary user input, and
+  // `grok --rules "- Be concise."` fails outright ("unexpected argument '- '"),
+  // so the note must never reach a CLI as its own argv token.
+  it("an override starting with a dash can never be read as a flag", () => {
+    const bullets = "- Be concise.\n- Skip preamble.";
+    for (const id of ["claude", "codex", "grok"]) {
+      const args = adapterFor(id)!.spawn({ prompt: "hi", cwd: "/repo", ambient: bullets }).args;
+      const carrying = args.filter((arg) => arg.includes("Be concise."));
+      // Exactly one argv token, and the text is always attached to its key —
+      // never a bare token the CLI's parser would see as another option.
+      expect(carrying).toHaveLength(1);
+      expect(carrying[0]).toMatch(/^(--[a-z-]+=|developer_instructions=")/);
+    }
+    expect(adapterFor("grok")!.spawn({ prompt: "hi", cwd: "/repo", ambient: bullets }).args)
+      .toEqual([...BASELINE.grok.fresh, `--rules=${bullets}`]);
+  });
+
+  // String.replace expands `$&` and "$`" in a replacement, so a prompt using
+  // either would arrive at the CLI corrupted if any substitution used the
+  // plain string form.
+  it("dollar sequences in the prompt survive substitution verbatim", () => {
+    const tricky = "Prefer $& over $` and $$ in examples.";
+    expect(
+      adapterFor("claude")!.spawn({ prompt: "hi", cwd: "/repo", ambient: tricky }).args.at(-1),
+    ).toBe(`--append-system-prompt=${tricky}`);
+    expect(
+      adapterFor("grok")!.spawn({ prompt: "hi", cwd: "/repo", ambient: tricky }).args.at(-1),
+    ).toBe(`--rules=${tricky}`);
+    expect(
+      adapterFor("codex")!.spawn({ prompt: "hi", cwd: "/repo", ambient: tricky }).args.at(-1),
+    ).toBe(`developer_instructions="${tricky}"`);
+    // The same hazard applies to every other templated value.
+    expect(
+      adapterFor("claude")!.spawn({ prompt: "hi", cwd: "/repo", resumeId: "$&x" }).args.at(-1),
+    ).toBe("$&x");
+    expect(
+      adapterFor("claude")!.spawn({ prompt: "hi", cwd: "/repo", model: "$`m" }).args,
+    ).toContain("$`m");
+  });
+
+  it("codex sends it as a TOML-quoted developer_instructions override", () => {
+    const adapter = adapterFor("codex")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT }).args).toEqual([
+      ...BASELINE.codex.fresh,
+      "-c",
+      `developer_instructions="${AMBIENT}"`,
+    ]);
+    // Exec options must precede the resume subcommand, or codex refuses.
+    expect(
+      adapter.spawn({ prompt: "hi", cwd: "/repo", resumeId: "s1", ambient: AMBIENT }).args,
+    ).toEqual([
+      ...BASELINE.codex.fresh,
+      "-c",
+      `developer_instructions="${AMBIENT}"`,
+      "resume",
+      "s1",
+      "-",
+    ]);
+  });
+
+  it("codex quoting survives an override that looks like TOML", () => {
+    const args = adapterFor("codex")!.spawn({
+      prompt: "hi",
+      cwd: "/repo",
+      ambient: 'true\nsay "hi" \\ now',
+    }).args;
+    expect(args.at(-1)).toBe('developer_instructions="true\\nsay \\"hi\\" \\\\ now"');
+  });
+
+  // A pasted control character is illegal inside a TOML basic string; left
+  // raw it would fail to parse and drop codex back to its raw-literal
+  // fallback, defeating the quoting.
+  it("codex escapes control characters instead of breaking the TOML value", () => {
+    const args = adapterFor("codex")!.spawn({
+      prompt: "hi",
+      cwd: "/repo",
+      ambient: "be\u0007terse\u0000now\u007f",
+    }).args;
+    expect(args.at(-1)).toBe('developer_instructions="be\\u0007terse\\u0000now\\u007F"');
+    // Tabs and newlines keep their short escapes.
+    expect(
+      adapterFor("codex")!
+        .spawn({ prompt: "hi", cwd: "/repo", ambient: "a\tb\nc" })
+        .args.at(-1),
+    ).toBe('developer_instructions="a\\tb\\nc"');
+  });
+
+  // Verified live before shipping this: a fresh codex run plus two
+  // `exec resume --last` turns carrying the same override recorded the marker
+  // text exactly once in the session's rollout JSONL, so the flag does NOT
+  // accumulate per resume and belongs on every spawn.
+  it("codex sends the override once per spawn, resume included", () => {
+    const fresh = adapterFor("codex")!.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT });
+    const resumed = adapterFor("codex")!.spawn({
+      prompt: "hi",
+      cwd: "/repo",
+      resumeId: "s1",
+      ambient: AMBIENT,
+    });
+    for (const spawn of [fresh, resumed]) {
+      expect(
+        spawn.args.filter((arg) => arg.startsWith("developer_instructions=")),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("grok appends it through --rules, on resume too", () => {
+    const adapter = adapterFor("grok")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT }).args).toEqual([
+      ...BASELINE.grok.fresh,
+      `--rules=${AMBIENT}`,
+    ]);
+    expect(
+      adapter.spawn({ prompt: "hi", cwd: "/repo", resumeId: "s1", ambient: AMBIENT }).args,
+    ).toEqual([...BASELINE.grok.fresh, `--rules=${AMBIENT}`, "--resume", "s1"]);
+  });
+
+  it("opencode has no flag, so it rides the FIRST turn's stdin only", () => {
+    const adapter = adapterFor("opencode")!;
+    expect(adapter.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT })).toEqual({
+      bin: "opencode",
+      args: BASELINE.opencode.fresh, // argv is untouched
+      stdin: `<kodade-harness>\n${AMBIENT}\n</kodade-harness>\n\nhi`,
+    });
+    // A resumed session already carries the note in its own history.
+    expect(
+      adapter.spawn({ prompt: "next", cwd: "/repo", resumeId: "s1", ambient: AMBIENT }),
+    ).toEqual({
+      bin: "opencode",
+      args: BASELINE.opencode.resume,
+      stdin: "next",
+    });
+  });
+
+  it("flag providers never put the note in the prompt", () => {
+    for (const id of ["claude", "codex", "grok"]) {
+      const spawn = adapterFor(id)!.spawn({ prompt: "hi", cwd: "/repo", ambient: AMBIENT });
+      expect(spawn.stdin).toBe("hi");
+    }
+  });
+
+  it("KödWork's interactive claude spawn carries it too", () => {
+    const spawn = adapterFor("claude")!.spawn({
+      prompt: "hi",
+      cwd: "/repo",
+      ambient: AMBIENT,
+      interactive: true,
+    });
+    expect(spawn.args).toContain(`--append-system-prompt=${AMBIENT}`);
+    expect(spawn.initialInput).toBe(encodeClaudeUserMessage("hi"));
+  });
+
+  // Coverage that actually walks the chat-capable catalog: every CLI needs a
+  // verified argv/stdin mechanism, and Ollama — which has no argv at all —
+  // must be covered through its chat transport's system message instead
+  // (asserted in chat/store.test.ts).
+  it("every chat-capable provider is covered, Ollama included", () => {
+    const covered: string[] = [];
+    for (const id of chatProviderIds()) {
+      const provider = providerOf(id);
+      if (provider.stream) {
+        expect(provider.stream.systemPrompt).toBeDefined();
+        covered.push(id);
+        continue;
+      }
+      // The only non-CLI chat transport. Its injection point is the system
+      // message, so it has no catalog entry by design.
+      expect(provider.chat?.kind).toBe("ollama");
+      covered.push(id);
+    }
+    expect(covered).toEqual(["claude", "codex", "grok", "opencode", "ollama"]);
+  });
+
+  it("a user override replaces the default text verbatim", () => {
+    const args = adapterFor("claude")!.spawn({
+      prompt: "hi",
+      cwd: "/repo",
+      ambient: ambientPrompt("  Only speak in haiku.  "),
+    }).args;
+    expect(args).toContain("--append-system-prompt=Only speak in haiku.");
+    expect(args).not.toContain(DEFAULT_AMBIENT_PROMPT);
+  });
+
+  it("the default is what an empty override resolves to", () => {
+    expect(ambientPrompt("")).toBe(DEFAULT_AMBIENT_PROMPT);
+    expect(ambientPrompt(null)).toBe(DEFAULT_AMBIENT_PROMPT);
+    expect(ambientPromptFor(false, "Only speak in haiku.")).toBeNull();
+    expect(ambientPromptFor(true, null)).toBe(DEFAULT_AMBIENT_PROMPT);
   });
 });

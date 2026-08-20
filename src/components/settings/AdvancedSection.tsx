@@ -11,6 +11,7 @@ import {
   developmentFeatureEnabled,
   type ReleaseManifest,
 } from "../../release/manifest";
+import { AmbientPromptSettings } from "./AmbientPromptSettings";
 import { HarnessSection } from "./HarnessSection";
 import { LocalSection } from "./LocalSection";
 import { CollapsibleSettingsBlock, SettingsBlock } from "./SettingsCard";
@@ -29,6 +30,7 @@ export function AdvancedSection({
         description="What your agents read and can use."
       >
         <HarnessSection />
+        <AmbientPromptSettings />
       </SettingsBlock>
 
       {developmentFeatureEnabled("local", manifest) && (

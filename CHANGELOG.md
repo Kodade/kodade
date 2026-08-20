@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Agents Ködade starts in chat and KödWork now receive a short, token-lean
+  background note that they are running inside Ködade, so answers arrive
+  direct and render well in the chat and terminal panes. It is on by default,
+  and Settings → Advanced → KödHarness shows the exact text, lets you rewrite
+  it, and switches it off entirely. The note is sent only to sessions Ködade
+  launches — it is never written to CLAUDE.md, AGENTS.md, or any other file on
+  disk, so your own terminal sessions of the same CLIs are unaffected.
 - Archived the embedded KödBrowser pane: public release builds no longer ship
   the browser tab, its title-bar action, the native browser commands, or the
   KödBrowser agent tools, and chat links open in the system browser instead.

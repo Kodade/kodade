@@ -34,6 +34,31 @@ export type ProviderModel = {
   thinkingLevels?: readonly ThinkingLevel[];
 };
 
+// How one CLI accepts Ködade's background system prompt (issue #63). Every
+// entry was verified against the shipped CLI's own `--help`:
+//   claude   --append-system-prompt <prompt>   (appends to the default prompt)
+//   grok     --rules <RULES>                   ("Extra rules to append to the
+//                                               system prompt")
+//   codex    -c developer_instructions=<text>  (config override; additive —
+//                                               AGENTS.md still loads)
+//   opencode no such flag, so the note rides the stdin prompt instead.
+// `via: "args"` is always preferred: argv keeps the note out of the visible
+// conversation. `stdin-preamble` is the documented fallback, and it is applied
+// on the FIRST turn only — the CLI keeps the earlier turns when it resumes, so
+// repeating the note every turn would just burn tokens.
+export type ProviderSystemPrompt =
+  | {
+      via: "args";
+      // Appended before any resume subcommand; `{prompt}` is substituted.
+      args: readonly string[];
+      // Wrap the substituted value as a TOML basic string. Codex parses a
+      // `-c key=value` value as TOML and only falls back to a literal when
+      // that fails, so quoting keeps an override that happens to look like
+      // TOML (`true`, `[1, 2]`) from being read as one.
+      encode?: "toml-string";
+    }
+  | { via: "stdin-preamble" };
+
 export type ProviderModelDiscovery = {
   // A read-only CLI command whose stdout is one provider/model id per line.
   // The app executes it through the same login-shell process boundary as a
@@ -70,6 +95,9 @@ export type ProviderStream = {
   // Dynamic model discovery for provider/plugin catalogs that can change
   // independently of Ködade. The picker always keeps a Default escape hatch.
   modelDiscovery?: ProviderModelDiscovery;
+  // How Ködade's background prompt reaches this CLI (issue #63). Omitted means
+  // the provider gets no background prompt at all.
+  systemPrompt?: ProviderSystemPrompt;
   // Bidirectional stdin protocol. Omitted providers remain one-shot.
   input?: {
     dialect: "claude-control";
@@ -260,6 +288,12 @@ export const PROVIDERS: Provider[] = [
       // level for the current session (low, medium, high, xhigh, max)". The
       // flag is session-wide, so every model offers the same list.
       thinkingArgs: ["--effort", "{level}"],
+      // claude 2.1.223 `--help`: "--append-system-prompt <prompt>  Append a
+      // system prompt to the default system prompt". Each turn is its own
+      // process, so it is passed on resume spawns too. Single-token
+      // `--flag=value` form: an override that starts with `-` (a markdown
+      // bullet list is the obvious one) must not be parsed as another flag.
+      systemPrompt: { via: "args", args: ["--append-system-prompt={prompt}"] },
       thinkingLevels: [
         { id: "low", label: "Low" },
         { id: "medium", label: "Medium" },
@@ -349,6 +383,24 @@ export const PROVIDERS: Provider[] = [
       // `model_reasoning_effort` is the documented key. A bare value that
       // isn't TOML is used as a literal string per the same help text.
       thinkingArgs: ["-c", "model_reasoning_effort={level}"],
+      // codex-cli 0.148.0 has no append-system-prompt flag, but `-c
+      // <key=value>` config overrides are documented in `exec --help` and
+      // `developer_instructions` is an additive developer message: verified
+      // live that the project's AGENTS.md still loads alongside it (unlike
+      // `base_instructions`, which REPLACES the base prompt). Exec options
+      // must precede `resume`, which buildAgentArgs already guarantees.
+      //
+      // Passed on resume spawns too, and that is safe: a session run fresh
+      // plus two `exec resume --last` turns with the same override recorded
+      // the marker text EXACTLY ONCE in its rollout JSONL (a single
+      // role:"developer" item at session start), so codex stores it as
+      // session config rather than appending it per turn. The whole value is
+      // one argv token, so a leading `-` is never read as a flag.
+      systemPrompt: {
+        via: "args",
+        args: ["-c", "developer_instructions={prompt}"],
+        encode: "toml-string",
+      },
       speedArgs: {
         fast: ["-c", "features.fast_mode=true", "-c", "service_tier=fast"],
       },
@@ -396,6 +448,14 @@ export const PROVIDERS: Provider[] = [
       },
       resumeArgs: ["--resume", "{session}"],
       modelArgs: ["--model", "{model}"],
+      // Grok Build `--help`: "--rules <RULES>  Extra rules to append to the
+      // system prompt" — additive, unlike --system-prompt-override, which
+      // replaces it. Passed on resume spawns too. Single-token `--rules=…`
+      // form because `--rules "- Be concise."` is rejected outright ("error:
+      // unexpected argument '- ' found"), which would break every Grok spawn
+      // for anyone whose override is a bullet list; the `=` form takes the
+      // same text verbatim (verified live).
+      systemPrompt: { via: "args", args: ["--rules={prompt}"] },
       // Grok Build 1.0.3 reports 4.6 as its default and retains 4.5.
       models: [
         { id: "grok-4.6", label: "Grok 4.6" },
@@ -458,6 +518,11 @@ export const PROVIDERS: Provider[] = [
       resumeArgs: ["--session", "{session}"],
       modelArgs: ["--model", "{model}"],
       modelDiscovery: { args: ["models"], format: "lines" },
+      // `opencode run --help` (1.18.15) exposes no system-prompt flag, and its
+      // only other channel is the on-disk `instructions` config Ködade must
+      // not touch. The note therefore rides the first turn's stdin prompt;
+      // resumed turns replay the same session, so it is not repeated.
+      systemPrompt: { via: "stdin-preamble" },
     },
     // OpenCode: instructions in AGENTS.md (global ~/.config/opencode/AGENTS.md,
     // project <project>/AGENTS.md — the same file codex reads, so a shared

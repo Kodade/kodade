@@ -61,6 +61,9 @@ export type ChatDeps = {
   // Bounded KödMem context for local projects. Failures are non-fatal: chat
   // still runs without memory when the local index cannot be read.
   memoryContext?(projectRoot: string): Promise<string | null>;
+  // Ködade's background prompt (issue #63), read fresh at spawn time. Absent
+  // (or null) means no background prompt — the same argv as before the feature.
+  ambientPrompt?: () => string | null;
   // A pinned target makes this a remote project. The adapter still constructs
   // the provider argv; this store wraps it in a direct OpenSSH spawn.
   remoteTarget?(projectId: string): RemoteTarget | null;
@@ -1131,6 +1134,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
             model,
             controller,
             memoryContext: projectMemory,
+            ambient: deps.ambientPrompt?.() ?? null,
           });
           return;
         }
@@ -1198,6 +1202,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
           access: currentThread.access,
           thinking: currentThread.thinking,
           speed: currentThread.speed,
+          ambient: deps.ambientPrompt?.() ?? null,
         });
         const process = remoteTarget
           ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)
@@ -1291,6 +1296,10 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       model: string;
       controller: AbortController;
       memoryContext: string | null;
+      // Ködade's background prompt (#63). Ollama has no CLI argv, so its
+      // system-message slot IS the injection point; null spawns exactly the
+      // request shape this store sent before the feature.
+      ambient: string | null;
     }) {
       const thread = get().threads[input.threadId];
       if (!thread) return;
@@ -1299,8 +1308,12 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         .filter((entry) => (entry.conversationId ?? 0) === thread.conversationId)
         .filter((entry) => entry.role === "user" || entry.role === "assistant")
         .map((entry) => ({ role: entry.role, content: entry.text }));
-      const messages: ChatMessage[] = input.memoryContext
-        ? [{ role: "system", content: input.memoryContext }, ...history]
+      const ambient = input.ambient?.trim() ?? "";
+      const systemContent = [ambient, input.memoryContext ?? ""]
+        .filter((part) => part.length > 0)
+        .join("\n\n");
+      const messages: ChatMessage[] = systemContent
+        ? [{ role: "system", content: systemContent }, ...history]
         : history;
       try {
         for await (const delta of input.runtime.chat({

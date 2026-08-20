@@ -62,6 +62,11 @@ export type AgentRunRequest = {
   thinking?: string | null;
   // Per-thread speed choice. Unsupported providers ignore non-default values.
   speed?: ChatSpeed | null;
+  // Ködade's background system prompt (issue #63), already resolved by the
+  // caller — the engine stays store-free, exactly like `prompt` arriving with
+  // KödMem context already folded in. Null/omitted spawns byte-identically to
+  // a build without the feature.
+  ambient?: string | null;
   interactive?: boolean;
 };
 
