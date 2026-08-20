@@ -33,9 +33,9 @@ pub use portable::migration::{
     LegacyMigrationRollback, LegacyMigrationSource, LegacyMigrationStatus,
 };
 pub use projects::{
-    LogicalProject, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeProvenance,
-    ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus, ProjectsVault,
-    WorkspaceProjectMapping,
+    KnowledgeSurfaceMode, LogicalProject, ProjectKnowledgeContext, ProjectKnowledgeKind,
+    ProjectKnowledgeProvenance, ProjectKnowledgeSource, ProjectKnowledgeSync,
+    ProjectKnowledgeSyncStatus, ProjectsVault, WorkspaceKnowledgeSurface, WorkspaceProjectMapping,
 };
 pub use scaffold::{
     ProjectScaffoldApply, ProjectScaffoldPlan, ScaffoldOperation, ScaffoldOperationKind,
@@ -45,7 +45,7 @@ pub use working::{WorkingMemoryContext, WorkingMemoryMode, WorkingMemoryStatus};
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
 pub const MEMORY_TITLE_LIMIT: usize = 200;
-const MEMORY_SCHEMA_VERSION: u32 = 12;
+const MEMORY_SCHEMA_VERSION: u32 = 13;
 const SEARCH_OFFSET_LIMIT: u32 = 10_000;
 
 #[derive(Debug)]
@@ -880,8 +880,12 @@ impl MemoryStore {
             let connection = self.connection()?;
             let workspace = workspace_with_connection(&connection, workspace_id)?;
             let canonical_filter = if portable_active {
-                " AND canonical_project_id = (
-                    SELECT project_id FROM workspace_project_mappings WHERE workspace_id = ?1
+                // COALESCE keeps mapped workspaces on the identical mapping
+                // lookup and only falls through for local knowledge surfaces.
+                " AND canonical_project_id = COALESCE(
+                    (SELECT project_id FROM workspace_project_mappings WHERE workspace_id = ?1),
+                    (SELECT project_id FROM workspace_knowledge_config
+                     WHERE workspace_id = ?1 AND mode = 'local')
                   )"
             } else {
                 " AND canonical_project_id IS NULL"
@@ -1643,7 +1647,10 @@ impl MemoryStore {
             self.run_with_recovery(|| {
                 let connection = self.connection()?;
                 let mut statement = connection.prepare(
-                    "SELECT workspace_id FROM workspace_project_mappings ORDER BY workspace_id",
+                    "SELECT workspace_id FROM workspace_project_mappings
+                     UNION
+                     SELECT workspace_id FROM workspace_knowledge_config WHERE mode = 'local'
+                     ORDER BY workspace_id",
                 )?;
                 let workspace_ids = statement
                     .query_map([], |row| row.get::<_, String>(0))?
@@ -3299,6 +3306,24 @@ fn migrate(connection: &mut Connection) -> Result<()> {
             WHEN 'knowledge' THEN 'fact'
             ELSE 'summary'
          END;",
+    )?;
+    // Knowledge surfaces. Purely additive: existing logical projects keep the
+    // vault kind, and no config row is written for existing mappings, so a
+    // mapped workspace resolves exactly as it did before this migration.
+    apply_migration(
+        &transaction,
+        13,
+        "ALTER TABLE logical_projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'vault'
+            CHECK (kind IN ('vault', 'local'));
+         CREATE TABLE workspace_knowledge_config (
+            workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+            mode TEXT NOT NULL CHECK (mode IN ('vault', 'local')),
+            project_id TEXT NOT NULL REFERENCES logical_projects(id) ON DELETE RESTRICT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE INDEX workspace_knowledge_config_project_idx
+            ON workspace_knowledge_config(project_id, workspace_id);",
     )?;
     transaction.commit()?;
     Ok(())

@@ -99,6 +99,21 @@ impl MemoryStore {
                     .into(),
             ));
         }
+        // One knowledge surface per workspace, checked for local surfaces only:
+        // a vault mapping still activates legacy working memory before its
+        // cutover, and portable_authority above already covers it afterwards.
+        // A local surface that is enabled but not yet scaffolded has no
+        // Project.md marker, so it reports no authority while still owning this
+        // workspace's knowledge - hence the direct config check.
+        if self
+            .workspace_knowledge_surface(workspace_id)?
+            .is_some_and(|surface| surface.mode == super::KnowledgeSurfaceMode::Local)
+        {
+            return Err(MemoryError::InvalidInput(
+                "this workspace already uses a local KödMem knowledge surface; turn it off before activating repo-local working memory"
+                    .into(),
+            ));
+        }
         let workspace = self.workspace(workspace_id)?;
         let root = PathBuf::from(&workspace.canonical_root);
         let directory = working_directory(&root)?;

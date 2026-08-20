@@ -7,7 +7,7 @@ use super::super::{
     fts_query, now_millis, validate_no_likely_credential, MemoryKind, MemoryQuery, MemorySearchHit,
     MemorySource, MemoryStore, Page, Result, StoreAccess,
 };
-use super::ProjectLocation;
+use super::{KnowledgeSurfaceMode, ProjectLocation};
 
 mod source;
 
@@ -216,6 +216,21 @@ impl MemoryStore {
         validate_no_likely_credential("workspace id", workspace_id)?;
         self.run_with_recovery(|| {
             let connection = self.connection()?;
+            // Local knowledge surfaces are an explicit opt-in row. Every other
+            // workspace - including every legacy config - falls through to the
+            // unchanged projects-vault mapping query below.
+            if let Some(surface) =
+                super::local_knowledge_surface_with_connection(&connection, workspace_id)?
+            {
+                let project_root = PathBuf::from(&surface.knowledge_root);
+                return Ok(Some(ProjectLocation {
+                    project_id: surface.project_id,
+                    project_display_name: surface.project_display_name,
+                    mode: KnowledgeSurfaceMode::Local,
+                    surface_root: project_root.clone(),
+                    project_root,
+                }));
+            }
             connection
                 .query_row(
                     "SELECT m.project_id, p.display_name, v.canonical_root
@@ -231,7 +246,8 @@ impl MemoryStore {
                             project_root: vault_root.join("10-Projects").join(&project_id),
                             project_id,
                             project_display_name: row.get(1)?,
-                            vault_root,
+                            mode: KnowledgeSurfaceMode::Vault,
+                            surface_root: vault_root,
                         })
                     },
                 )

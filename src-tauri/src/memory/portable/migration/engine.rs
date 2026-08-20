@@ -1021,7 +1021,7 @@ impl MemoryStore {
             )
         })?;
         if current.project_id != expected.project_id
-            || current.vault_root != expected.vault_root
+            || current.surface_root != expected.surface_root
             || current.project_root != expected.project_root
         {
             return Err(MemoryError::InvalidInput(

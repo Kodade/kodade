@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use super::super::super::{
     validate_no_likely_credential, MemoryError, MemoryKind, MemorySource, Result,
 };
-use super::super::{validate_projects_vault_root, ProjectLocation};
+use super::super::{knowledge_escape_message, validate_knowledge_container, ProjectLocation};
 use super::{
     IndexedProjectDocument, ProjectKnowledgeContext, ProjectKnowledgeKind, ProjectKnowledgeSource,
     ProjectKnowledgeSync, ProjectKnowledgeSyncStatus,
@@ -40,9 +40,10 @@ pub(super) fn collect_project_documents_with_project_override(
     location: &ProjectLocation,
     project_override: Option<&str>,
 ) -> Result<Vec<IndexedProjectDocument>> {
-    validate_projects_vault_root(&location.vault_root)?;
+    let container = validate_knowledge_container(location)?;
     require_confined_directory(
-        &location.vault_root,
+        location,
+        &container,
         &location.project_root,
         "mapped project",
     )?;
@@ -390,7 +391,12 @@ fn collect_markdown_level(
     Ok(())
 }
 
-fn require_confined_directory(vault_root: &Path, path: &Path, label: &str) -> Result<()> {
+fn require_confined_directory(
+    location: &ProjectLocation,
+    container: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         MemoryError::InvalidInput(format!("{label} folder is unavailable: {error}"))
     })?;
@@ -399,11 +405,11 @@ fn require_confined_directory(vault_root: &Path, path: &Path, label: &str) -> Re
             "{label} folder must be a regular directory, not a symlink"
         )));
     }
-    let canonical_vault = std::fs::canonicalize(vault_root)?;
     let canonical_path = std::fs::canonicalize(path)?;
-    if !canonical_path.starts_with(canonical_vault.join("10-Projects")) {
-        return Err(MemoryError::InvalidInput(format!(
-            "{label} folder escapes the registered projects vault"
+    if !canonical_path.starts_with(container) {
+        return Err(MemoryError::InvalidInput(knowledge_escape_message(
+            location.mode,
+            label,
         )));
     }
     Ok(())

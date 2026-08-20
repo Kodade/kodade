@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use unicode_normalization::UnicodeNormalization;
 
 use super::credential::validate_no_likely_credential;
 use super::{audit_mutation, now_millis, AuditMutation, MemoryError, MemoryStore, Result};
@@ -42,12 +43,86 @@ pub use knowledge::{
     ProjectKnowledgeSource, ProjectKnowledgeSync, ProjectKnowledgeSyncStatus,
 };
 
+/// Where a workspace's durable knowledge lives. `Vault` is the original
+/// projects-vault mapping; `Local` keeps the same documents inside the
+/// workspace itself. Legacy configs have no stored mode and always resolve to
+/// `Vault` through the existing mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KnowledgeSurfaceMode {
+    Vault,
+    Local,
+}
+
+/// The resolved knowledge surface for one workspace. Vault surfaces are derived
+/// from the existing mapping and never written to the knowledge config table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceKnowledgeSurface {
+    pub workspace_id: String,
+    pub mode: KnowledgeSurfaceMode,
+    pub project_id: String,
+    pub project_display_name: String,
+    pub knowledge_root: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProjectLocation {
     pub(crate) project_id: String,
     pub(crate) project_display_name: String,
-    pub(crate) vault_root: PathBuf,
+    pub(crate) mode: KnowledgeSurfaceMode,
+    /// Vault surfaces: the registered vault root. Local surfaces: the
+    /// workspace knowledge root, which is also the project root.
+    pub(crate) surface_root: PathBuf,
     pub(crate) project_root: PathBuf,
+}
+
+/// The knowledge root a local surface uses: `<workspaceRoot>/.kodade/knowledge`.
+/// Deliberately separate from `.kodade/memory`, which belongs to the repo-local
+/// working-memory feature and keeps its own STATE.md format there.
+pub(crate) fn local_knowledge_root(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".kodade").join("knowledge")
+}
+
+/// Directory that must contain `project_root`. Vault surfaces confine to
+/// `<vault>/10-Projects`; local surfaces confine to the knowledge root itself.
+pub(crate) fn validate_knowledge_container(location: &ProjectLocation) -> Result<PathBuf> {
+    match location.mode {
+        KnowledgeSurfaceMode::Vault => Ok(PathBuf::from(validate_projects_vault_root(
+            &location.surface_root,
+        )?)
+        .join("10-Projects")),
+        KnowledgeSurfaceMode::Local => validate_local_knowledge_root(&location.surface_root),
+    }
+}
+
+pub(crate) fn validate_local_knowledge_root(root: &Path) -> Result<PathBuf> {
+    let metadata = std::fs::symlink_metadata(root).map_err(|error| {
+        MemoryError::InvalidInput(format!(
+            "workspace knowledge root is inaccessible at {}: {error}",
+            root.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(MemoryError::InvalidInput(
+            "workspace knowledge root must be a regular directory, not a symlink".into(),
+        ));
+    }
+    std::fs::canonicalize(root).map_err(Into::into)
+}
+
+/// Confinement failure wording, kept byte-identical for vault surfaces.
+pub(crate) fn knowledge_escape_message(mode: KnowledgeSurfaceMode, label: &str) -> String {
+    match mode {
+        KnowledgeSurfaceMode::Vault => {
+            format!("{label} folder escapes the registered projects vault")
+        }
+        KnowledgeSurfaceMode::Local => {
+            format!("{label} folder escapes the workspace knowledge root")
+        }
+    }
 }
 
 impl MemoryStore {
@@ -112,6 +187,172 @@ impl MemoryStore {
         })
     }
 
+    /// Resolve the knowledge surface for a workspace without writing anything.
+    /// Legacy configs carry no stored mode: a mapping resolves to `Vault`, and
+    /// a workspace with neither mapping nor local config has no surface at all.
+    pub fn workspace_knowledge_surface(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<WorkspaceKnowledgeSurface>> {
+        validate_no_likely_credential("workspace id", workspace_id)?;
+        let local = self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            local_knowledge_surface_with_connection(&connection, workspace_id)
+        })?;
+        if let Some(local) = local {
+            return Ok(Some(local));
+        }
+        let Some(mapping) = self.workspace_project_mapping(workspace_id)? else {
+            return Ok(None);
+        };
+        let vault = self.projects_vault()?.ok_or_else(|| {
+            MemoryError::InvalidInput("mapped workspace has no registered projects vault".into())
+        })?;
+        Ok(Some(WorkspaceKnowledgeSurface {
+            workspace_id: mapping.workspace_id,
+            mode: KnowledgeSurfaceMode::Vault,
+            knowledge_root: Path::new(&vault.canonical_root)
+                .join("10-Projects")
+                .join(&mapping.project_id)
+                .to_string_lossy()
+                .into_owned(),
+            project_id: mapping.project_id,
+            project_display_name: mapping.project_display_name,
+            created_at: mapping.created_at,
+            updated_at: mapping.updated_at,
+        }))
+    }
+
+    /// Opt a workspace into a local knowledge surface. Idempotent: an already
+    /// local workspace returns its existing surface untouched.
+    pub fn enable_local_knowledge(&self, workspace_id: &str) -> Result<WorkspaceKnowledgeSurface> {
+        validate_no_likely_credential("workspace id", workspace_id)?;
+        if let Some(existing) = self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            local_knowledge_surface_with_connection(&connection, workspace_id)
+        })? {
+            return Ok(existing);
+        }
+        if self.workspace_project_mapping(workspace_id)?.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "this workspace is mapped to a projects vault; unmap it before using local knowledge"
+                    .into(),
+            ));
+        }
+        // One knowledge surface per workspace. The two features now use
+        // separate directories, so this is a coherence rule rather than a
+        // collision fix. (The reverse direction is already refused by
+        // activate_working_memory once a local surface has authority.)
+        if self.working_memory_status(workspace_id)?.is_some() {
+            return Err(MemoryError::InvalidInput(
+                "repo-local working memory is already active for this workspace; turn it off before using local knowledge"
+                    .into(),
+            ));
+        }
+        let workspace = self.workspace(workspace_id)?;
+        let now = now_millis();
+        self.run_with_recovery(|| {
+            let mut connection = self.connection()?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let project_id = available_local_project_id(&transaction, &workspace.display_name)?;
+            transaction.execute(
+                "INSERT INTO logical_projects (id, display_name, kind, created_at, updated_at)
+                 VALUES (?1, ?2, 'local', ?3, ?3)",
+                params![project_id, workspace.display_name, now],
+            )?;
+            transaction.execute(
+                "INSERT INTO workspace_knowledge_config (
+                    workspace_id, mode, project_id, created_at, updated_at
+                 ) VALUES (?1, 'local', ?2, ?3, ?3)",
+                params![workspace_id, project_id, now],
+            )?;
+            audit_mutation(
+                &transaction,
+                workspace_id,
+                AuditMutation {
+                    client: "kodade-ui",
+                    session_id: None,
+                    capability: "memory:write",
+                    action: "enable_local_knowledge",
+                    target_id: None,
+                    occurred_at: now,
+                },
+            )?;
+            transaction.commit()?;
+            local_knowledge_surface_with_connection(&connection, workspace_id)?.ok_or_else(|| {
+                MemoryError::InvalidInput("local knowledge surface was not saved".into())
+            })
+        })
+    }
+
+    /// Turn a local knowledge surface back off. Only local configs can be
+    /// disabled; a vault mapping is refused. Idempotent for a workspace that
+    /// has no surface at all. Files under the knowledge root are left alone.
+    pub fn disable_local_knowledge(&self, workspace_id: &str) -> Result<()> {
+        validate_no_likely_credential("workspace id", workspace_id)?;
+        let Some(surface) = self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            local_knowledge_surface_with_connection(&connection, workspace_id)
+        })?
+        else {
+            if self.workspace_project_mapping(workspace_id)?.is_some() {
+                return Err(MemoryError::InvalidInput(
+                    "this workspace uses a projects vault; change its mapping instead of disabling local knowledge"
+                        .into(),
+                ));
+            }
+            return Ok(());
+        };
+        let now = now_millis();
+        self.run_with_recovery(|| {
+            let mut connection = self.connection()?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.execute(
+                "DELETE FROM workspace_knowledge_config WHERE workspace_id = ?1 AND mode = 'local'",
+                [workspace_id],
+            )?;
+            // logical_projects is RESTRICT-referenced and also carries record
+            // provenance. Drop the local project only when nothing points at it
+            // any more; otherwise leave the row, which stays kind = 'local' and
+            // therefore stays out of the vault project picker.
+            let referenced: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM workspace_knowledge_config WHERE project_id = ?1
+                    UNION ALL
+                    SELECT 1 FROM workspace_project_mappings WHERE project_id = ?1
+                    UNION ALL
+                    SELECT 1 FROM memories WHERE canonical_project_id = ?1
+                    UNION ALL
+                    SELECT 1 FROM checkpoints WHERE canonical_project_id = ?1
+                 )",
+                [&surface.project_id],
+                |row| row.get(0),
+            )?;
+            if !referenced {
+                transaction.execute(
+                    "DELETE FROM logical_projects WHERE id = ?1 AND kind = 'local'",
+                    [&surface.project_id],
+                )?;
+            }
+            audit_mutation(
+                &transaction,
+                workspace_id,
+                AuditMutation {
+                    client: "kodade-ui",
+                    session_id: None,
+                    capability: "memory:write",
+                    action: "disable_local_knowledge",
+                    target_id: None,
+                    occurred_at: now,
+                },
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     pub fn map_workspace_to_project(
         &self,
         workspace_id: &str,
@@ -149,7 +390,8 @@ impl MemoryStore {
         let destination = ProjectLocation {
             project_id: project_id.into(),
             project_display_name: project_display_name.into(),
-            vault_root: PathBuf::from(&vault.canonical_root),
+            mode: KnowledgeSurfaceMode::Vault,
+            surface_root: PathBuf::from(&vault.canonical_root),
             project_root: PathBuf::from(&vault.canonical_root)
                 .join("10-Projects")
                 .join(project_id),
@@ -195,13 +437,24 @@ impl MemoryStore {
                 });
             }
 
-            let existing_project_name: Option<String> = transaction
+            let existing_project: Option<(String, String)> = transaction
                 .query_row(
-                    "SELECT display_name FROM logical_projects WHERE id = ?1",
+                    "SELECT display_name, kind FROM logical_projects WHERE id = ?1",
                     [project_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
+            // A local-surface project owns workspace-local files; it can never
+            // become a vault mapping target.
+            if existing_project
+                .as_ref()
+                .is_some_and(|(_, kind)| kind == "local")
+            {
+                return Err(MemoryError::InvalidInput(format!(
+                    "{project_id} is a local knowledge project; choose a different logical project ID"
+                )));
+            }
+            let existing_project_name = existing_project.map(|(display_name, _)| display_name);
             if let Some(existing) = existing_project_name.as_deref() {
                 if existing != project_display_name {
                     return Err(MemoryError::InvalidInput(format!(
@@ -357,8 +610,10 @@ fn projects_vault_with_connection(connection: &Connection) -> Result<Option<Proj
     validate_projects_vault_root(Path::new(&canonical_root))?;
 
     let mut projects = BTreeMap::<String, LogicalProject>::new();
-    let mut statement =
-        connection.prepare("SELECT id, display_name FROM logical_projects ORDER BY id")?;
+    // Local-surface projects never appear in the vault picker.
+    let mut statement = connection.prepare(
+        "SELECT id, display_name FROM logical_projects WHERE kind = 'vault' ORDER BY id",
+    )?;
     let stored = statement
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -413,6 +668,101 @@ fn projects_vault_with_connection(connection: &Connection) -> Result<Option<Proj
         created_at,
         updated_at,
     }))
+}
+
+pub(crate) fn local_knowledge_surface_with_connection(
+    connection: &Connection,
+    workspace_id: &str,
+) -> Result<Option<WorkspaceKnowledgeSurface>> {
+    let row = connection
+        .query_row(
+            "SELECT c.project_id, p.display_name, w.canonical_root, c.created_at, c.updated_at
+             FROM workspace_knowledge_config c
+             JOIN logical_projects p ON p.id = c.project_id
+             JOIN workspaces w ON w.id = c.workspace_id
+             WHERE c.workspace_id = ?1 AND c.mode = 'local'",
+            [workspace_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((project_id, project_display_name, workspace_root, created_at, updated_at)) = row
+    else {
+        return Ok(None);
+    };
+    Ok(Some(WorkspaceKnowledgeSurface {
+        workspace_id: workspace_id.into(),
+        mode: KnowledgeSurfaceMode::Local,
+        project_id,
+        project_display_name,
+        knowledge_root: local_knowledge_root(Path::new(&workspace_root))
+            .to_string_lossy()
+            .into_owned(),
+        created_at,
+        updated_at,
+    }))
+}
+
+/// Derive a valid, unused logical project ID from a workspace display name.
+fn available_local_project_id(connection: &Connection, display_name: &str) -> Result<String> {
+    let base = slug_project_id(display_name);
+    for attempt in 0..1_000u32 {
+        let candidate = if attempt == 0 {
+            base.clone()
+        } else {
+            let suffix = format!("-{}", attempt + 1);
+            let trimmed = base
+                .chars()
+                .take(64usize.saturating_sub(suffix.len()))
+                .collect::<String>();
+            format!("{}{suffix}", trimmed.trim_end_matches('-'))
+        };
+        let taken: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM logical_projects WHERE id = ?1)",
+            [&candidate],
+            |row| row.get(0),
+        )?;
+        if !taken {
+            return Ok(candidate);
+        }
+    }
+    Err(MemoryError::InvalidInput(
+        "could not derive a free local knowledge project ID for this workspace".into(),
+    ))
+}
+
+/// Mirrors `projectIdFromName` in ProjectsVaultSetup.tsx so a local project ID
+/// looks like the one the vault setup form would suggest: NFKD-decompose, drop
+/// the combining diacritics block, then collapse every run of non-`[a-z0-9]`
+/// into a single hyphen.
+fn slug_project_id(display_name: &str) -> String {
+    let folded = display_name
+        .nfkd()
+        .filter(|character| !matches!(character, '\u{0300}'..='\u{036f}'))
+        .collect::<String>()
+        .to_lowercase();
+    let mut slug = String::new();
+    for character in folded.chars() {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            slug.push(character);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-').chars().take(64).collect::<String>();
+    let slug = slug.trim_end_matches('-').to_string();
+    if slug.is_empty() {
+        "project".into()
+    } else {
+        slug
+    }
 }
 
 fn workspace_project_mapping_with_connection(

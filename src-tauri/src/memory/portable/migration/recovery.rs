@@ -1160,7 +1160,8 @@ pub(super) fn validate_backup_source_binding(
     let staged = ProjectLocation {
         project_id: location.project_id.clone(),
         project_display_name: location.project_display_name.clone(),
-        vault_root: staging.path().to_path_buf(),
+        mode: location.mode,
+        surface_root: staging.path().to_path_buf(),
         project_root: staged_root,
     };
     stage_backup_preimage(location, &staged, backup)?;
@@ -1488,7 +1489,8 @@ mod tests {
         let location = ProjectLocation {
             project_id: "portable-project".into(),
             project_display_name: "Portable project".into(),
-            vault_root: root.path().into(),
+            mode: crate::memory::KnowledgeSurfaceMode::Vault,
+            surface_root: root.path().into(),
             project_root: project_root.clone(),
         };
 

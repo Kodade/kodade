@@ -1764,7 +1764,7 @@ fn read_only_stdio_rejects_an_older_schema_without_migrating() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("schema 6 is older than current version 12"),
+            .contains("schema 6 is older than current version 13"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );

@@ -1,0 +1,81 @@
+{
+  "entries": [
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Decisions"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project Decisions\"\ntype: index\nproject: \"[[../Project]]\"\nproject_id: fixture-project\ntags:\n  - project/decision\n---\n\n# Fixture project Decisions\n\nAdd project decisions here.\n",
+      "kind": "file",
+      "relativePath": "Decisions/Decisions.md"
+    },
+    {
+      "content": "---\ntitle: \"Recorded fixture decision\"\ntype: decision\nstatus: accepted\nagent_context: true\nproject_id: fixture-project\n---\n<!-- kodmem-checkpoint-decision {\"schema\":1,\"checkpointId\":\"km_05270ffc3211380ff61b49a2d824e3e7\",\"index\":0} -->\n\n# Recorded fixture decision\n\nRecorded fixture decision\n",
+      "kind": "file",
+      "relativePath": "Decisions/checkpoint-km_05270ffc3211380ff61b49a2d824e3e7-01.md"
+    },
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Knowledge"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project Knowledge\"\ntype: index\nproject: \"[[../Project]]\"\nproject_id: fixture-project\ntags:\n  - project/knowledge\n---\n\n# Fixture project Knowledge\n\nApproved durable project knowledge appears here.\n",
+      "kind": "file",
+      "relativePath": "Knowledge/Knowledge.md"
+    },
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Plans"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project Plans\"\ntype: index\nproject: \"[[../Project]]\"\nproject_id: fixture-project\ntags:\n  - project/plan\n---\n\n# Fixture project Plans\n\nAdd project plans here.\n",
+      "kind": "file",
+      "relativePath": "Plans/Plans.md"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project\"\ntype: project\nproject_id: fixture-project\nstatus: active\nrepositories: []\ntags:\n  - project\n  - project/active\n---\n<!-- kodmem-project {\"schema\":1,\"projectId\":\"fixture-project\",\"authority\":\"projects-vault\"} -->\n\n# Fixture project\n\n## Purpose\n\nDescribe the durable purpose and boundaries of this project.\n\n## Resume here\n\n- [[STATE|Current state]]\n- Latest daily note in `Worklog/`\n\n## Knowledge\n\n- [[Decisions/Decisions|Decisions]]\n- [[Plans/Plans|Plans]]\n- [[Research/Research|Research]]\n- [[References]]\n\n## Boundaries\n\n- The `kodmem-project` marker makes this project folder the portable KödMem authority.\n",
+      "kind": "file",
+      "relativePath": "Project.md"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project References\"\ntype: references\nproject: \"[[Project]]\"\nproject_id: fixture-project\ntags:\n  - project/reference\n---\n\n# Fixture project references\n\nAdd durable project links and references here.\n",
+      "kind": "file",
+      "relativePath": "References.md"
+    },
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Research"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project Research\"\ntype: index\nproject: \"[[../Project]]\"\nproject_id: fixture-project\ntags:\n  - project/research\n---\n\n# Fixture project Research\n\nAdd project research here.\n",
+      "kind": "file",
+      "relativePath": "Research/Research.md"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project State\"\ntype: state\nproject: \"[[Project]]\"\nproject_id: fixture-project\ntags:\n  - project/state\n---\n\n# Fixture project state\n\n## Current state\n\n- Add the current verified project state.\n\n## Decisions\n\n- None recorded.\n\n## Risks\n\n- None recorded.\n\n## Next actions\n\n- Add the next concrete action.\n",
+      "kind": "file",
+      "relativePath": "STATE.md"
+    },
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Worklog"
+    },
+    {
+      "content": "",
+      "kind": "dir",
+      "relativePath": "Worklog/2026"
+    },
+    {
+      "content": "---\ntitle: \"Fixture project — 2026-08-20\"\ntype: worklog\ndate: 2026-08-20\n---\n\n# Fixture project — 2026-08-20\n\n<!-- kodmem-checkpoint {\"schema\":1,\"checkpointId\":\"km_05270ffc3211380ff61b49a2d824e3e7\",\"projectId\":\"fixture-project\",\"source\":\"kodade\",\"sourceClient\":\"kodade-ui\",\"sessionId\":null,\"idempotencyKeyHash\":null,\"payloadHash\":\"18ccd3ae13e1d44a1a31162fc27bd5bf47da52e13fa4b548e5bac905e0b2338a\",\"createdAt\":1787198735810,\"updatesState\":false,\"summary\":\"Recorded fixture checkpoint\",\"decisions\":[\"Recorded fixture decision\"],\"nextActions\":[\"Recorded fixture next action\"],\"changedPaths\":[\"src/lib.rs\"]} -->\n## 2026-08-20T04-05-35-810Z\n\nRecorded fixture checkpoint\n\n### Decisions\n\n- Recorded fixture decision\n\n### Next actions\n\n- Recorded fixture next action\n\n### Changed paths\n\n- src/lib.rs\n<!-- /kodmem-checkpoint km_05270ffc3211380ff61b49a2d824e3e7 -->\n",
+      "kind": "file",
+      "relativePath": "Worklog/2026/2026-08-20.md"
+    }
+  ],
+  "projectDisplayName": "Fixture project",
+  "projectId": "fixture-project"
+}
