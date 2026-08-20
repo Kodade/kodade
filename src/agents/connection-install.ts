@@ -7,9 +7,10 @@
 //
 // Each CLI stores remote and stdio servers differently, so we map by DIALECT,
 // derived from a target's (format, keyPath) pair — the same pair the KödHarness
-// scan already carries. A dialect that has no verified remote representation
-// disables remote install for its targets with a clear reason, rather than
-// fabricating a config shape that would silently not work.
+// scan already carries. Every dialect maps a transport only to a config shape
+// verified against the CLI's docs; a dialect that couldn't express a transport
+// would disable install for its targets with a clear reason rather than
+// fabricate a shape that silently doesn't work.
 
 import type { McpServerSpec } from "../harness/merge";
 import type { HarnessInventory, McpServerDetail } from "../harness/model";
@@ -22,8 +23,9 @@ import type { AgentConnection, ConnectionTransport } from "./connection";
 // of these shapes works without a code change here.
 //   • claude-json  → .mcp.json "mcpServers": { command/args | { type:"http", url } }
 //   • opencode-json→ opencode.json "mcp": { type:"local"/"remote", … , enabled }
-//   • toml-stdio   → codex/grok config.toml [mcp_servers.*]: command/args (stdio only)
-export type McpDialect = "claude-json" | "opencode-json" | "toml-stdio";
+//   • toml         → codex/grok config.toml [mcp_servers.*]: stdio command/args, or
+//                    a remote streamable-HTTP server as a bare `url` key.
+export type McpDialect = "claude-json" | "opencode-json" | "toml";
 
 // Identify a target's dialect from its format and server-map key. Unknown
 // combinations return null so install is honestly refused rather than guessed.
@@ -31,7 +33,7 @@ export function dialectForTarget(target: Pick<McpTarget, "format" | "keyPath">):
   const key = typeof target.keyPath === "string" ? target.keyPath : target.keyPath.join(".");
   if (target.format === "json" && key === "mcpServers") return "claude-json";
   if (target.format === "json" && key === "mcp") return "opencode-json";
-  if (target.format === "toml" && key === "mcp_servers") return "toml-stdio";
+  if (target.format === "toml" && key === "mcp_servers") return "toml";
   return null;
 }
 
@@ -58,7 +60,9 @@ export type ConnectionMapping =
   | { ok: false; reason: string };
 
 // Build the config object for a transport under a dialect, or null when the
-// dialect has no representation for that transport (remote under toml-stdio).
+// dialect has no representation for that transport. (Every dialect Ködade
+// currently knows can express both transports; null is kept for a future dialect
+// that can't.)
 function configFor(
   transport: ConnectionTransport,
   dialect: McpDialect,
@@ -78,10 +82,17 @@ function configFor(
         command: [transport.command, ...transport.args],
         enabled: true,
       };
-    case "toml-stdio":
-      // Codex/Grok config.toml has no verified remote MCP transport for this CLI
-      // — only a stdio [mcp_servers.*] with command/args. Refuse remote honestly.
-      if (transport.kind === "http") return null;
+    case "toml":
+      // Codex/Grok config.toml [mcp_servers.<name>] supports a remote streamable
+      // HTTP server via a bare `url` key — verified 2026-08-20 against official
+      // docs: Codex CLI (learn.chatgpt.com/docs/config-file/config-reference,
+      // `mcp_servers.<id>.url` = "Endpoint for an MCP streamable HTTP server",
+      // shipped since rust-v0.44.0) and Grok Build CLI
+      // (docs.x.ai/build/features/mcp-servers, `[mcp_servers.<name>] url = "…"`).
+      // BYOK: write ONLY `url` — never http_headers/headers/bearer_token_env_var
+      // or any auth field. Credentials and headers stay in the user's own CLI
+      // config, exactly as with a stdio server.
+      if (transport.kind === "http") return { url: transport.url };
       return transport.args.length > 0
         ? { command: transport.command, args: transport.args }
         : { command: transport.command };
@@ -100,11 +111,14 @@ export function mapConnectionToTarget(
   }
   const config = configFor(connection.transport, dialect);
   if (!config) {
+    // Unreachable for the dialects Ködade ships today (each maps both stdio and
+    // http). Kept as an honest fallback for a future dialect that can't express
+    // a transport — the reason stays generic so it never claims something false.
     return {
       ok: false,
       reason:
-        "No verified remote MCP transport for this CLI — install a stdio " +
-        "connection, or configure the remote server with the CLI's own tooling.",
+        "This CLI's config can't express this connection's transport — install " +
+        "it with the CLI's own tooling instead.",
     };
   }
   return { ok: true, spec: { name: connectionServerName(connection), config } };

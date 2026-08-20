@@ -19,9 +19,10 @@
   server into the CLI's own MCP config through the same preview-then-apply
   review the KödHarness tools use, so nothing is written silently, and an
   attached connection can't let a run do anything a KödWork task with the same
-  CLI config couldn't. Remote endpoints install into the CLIs that can express
-  them and are honestly disabled, with the reason shown, for configs that
-  can't. Preparing a run warns — without blocking — when an attached connection
+  CLI config couldn't. Remote endpoints install into every supported CLI —
+  including Codex and Grok `config.toml`, verified against each CLI's own docs,
+  where only the server URL is ever written so auth stays in your hands.
+  Preparing a run warns — without blocking — when an attached connection
   isn't installed for the chosen provider.
 - Signing an agent CLI in now lives in the surface where it fails. When a chat
   turn or a KödWork task stops because the CLI is signed out, the thread or

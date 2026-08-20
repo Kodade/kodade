@@ -1,6 +1,6 @@
 // Connection → CLI config mapping (#64, slice 4): dialect detection, the
-// per-dialect server-config shape, honest refusal of remote under a stdio-only
-// dialect, server-name resolution, and inventory probe extraction.
+// per-dialect server-config shape (including the BYOK url-only remote shape for
+// codex/grok toml), server-name resolution, and inventory probe extraction.
 
 import { describe, expect, it } from "vitest";
 import { createConnection, type AgentConnection } from "./connection";
@@ -37,7 +37,7 @@ describe("dialectForTarget", () => {
   it("maps format+keyPath to a known dialect, else null", () => {
     expect(dialectForTarget(claudeTarget)).toBe("claude-json");
     expect(dialectForTarget(opencodeTarget)).toBe("opencode-json");
-    expect(dialectForTarget(codexTarget)).toBe("toml-stdio");
+    expect(dialectForTarget(codexTarget)).toBe("toml");
     expect(dialectForTarget({ format: "json", keyPath: "weird" })).toBeNull();
   });
 });
@@ -85,14 +85,31 @@ describe("mapConnectionToTarget", () => {
     });
   });
 
-  it("toml-stdio: stdio works, remote is honestly refused", () => {
+  it("toml: stdio → command/args (unchanged), http → bare {url}", () => {
     expect(mapConnectionToTarget(stdio(), codexTarget)).toStrictEqual({
       ok: true,
       spec: { name: "fetch", config: { command: "uvx", args: ["mcp-server-fetch"] } },
     });
-    const refusal = mapConnectionToTarget(http(), codexTarget);
-    expect(refusal.ok).toBe(false);
-    if (!refusal.ok) expect(refusal.reason).toMatch(/remote/i);
+    expect(mapConnectionToTarget(http(), codexTarget)).toStrictEqual({
+      ok: true,
+      spec: { name: "github", config: { url: "https://api.githubcopilot.com/mcp/" } },
+    });
+  });
+
+  it("toml http is BYOK: the config carries ONLY a url — no headers/auth keys", () => {
+    const withAuthNote = createConnection("g", 1, {
+      source: "catalog",
+      catalogId: "github",
+      name: "GitHub",
+      authNote: "set GITHUB_TOKEN and pass a bearer header",
+      transport: { kind: "http", url: "https://api.githubcopilot.com/mcp/" },
+    });
+    const mapping = mapConnectionToTarget(withAuthNote, codexTarget);
+    expect(mapping.ok).toBe(true);
+    if (!mapping.ok) return;
+    // The exact shape, and — the BYOK guard — no other keys leaked in.
+    expect(mapping.spec.config).toStrictEqual({ url: "https://api.githubcopilot.com/mcp/" });
+    expect(Object.keys(mapping.spec.config)).toEqual(["url"]);
   });
 
   it("omits an empty args array in the command shapes", () => {
@@ -122,7 +139,8 @@ describe("mapConnectionToTarget → mergeMcpServer round-trip", () => {
     { label: "claude-json http", target: claudeTarget, conn: http },
     { label: "opencode-json stdio", target: opencodeTarget, conn: stdio },
     { label: "opencode-json http", target: opencodeTarget, conn: http },
-    { label: "toml-stdio stdio", target: codexTarget, conn: stdio },
+    { label: "toml stdio", target: codexTarget, conn: stdio },
+    { label: "toml http", target: codexTarget, conn: http },
   ];
 
   for (const { label, target, conn } of cases) {
