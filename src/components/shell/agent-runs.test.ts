@@ -74,25 +74,33 @@ function fakeHarness(calls: string[], overrides: Record<string, unknown> = {}) {
       },
     ],
   };
-  return createStore(() => ({
+  // prepareKodSkills stages an OWNED pending change, the way the real
+  // stageBatch does, so the ownership checks are exercised for real.
+  const store = createStore(() => ({
     kodSkills: model,
     kodSkillsError: null,
     pendingChange: null,
     applying: false,
     mutationError: null,
     loadKodSkills: vi.fn(async () => {}),
-    prepareKodSkills: vi.fn(async () => {
+    prepareKodSkills: vi.fn(async (_action, _skills, _targets, projectRoot: string, owner) => {
       calls.push("prepareKodSkills");
+      store.setState({ pendingChange: { title: "install skills", owner } } as never);
+      void projectRoot;
+    }),
+    cancelPendingChange: vi.fn(() => {
+      calls.push("cancelPendingChange");
+      store.setState({ pendingChange: null } as never);
     }),
     ...overrides,
   })) as unknown as StoreApi<HarnessState>;
+  return store;
 }
 
 describe("launchPersonaRun", () => {
   it("stages the persona's missing skills before the task is opened", async () => {
     const { calls, projects, work, agents } = seams();
-    // A staged change is what the review dialog renders; the fake reports one.
-    const harness = fakeHarness(calls, { pendingChange: { owner: personaSkillsOwner("/repo") } });
+    const harness = fakeHarness(calls);
 
     const result = await launchPersonaRun(projects, work, agents, "p1", persona(["code-review", "release-notes"]), {
       harness,
@@ -165,9 +173,9 @@ describe("launchPersonaRun", () => {
     expect(result.skillsNotice).toContain("still launches");
   });
 
-  it("loads the KödSkills model when the editor hasn't already", async () => {
+  it("re-inspects KödSkills on every launch (a cached model goes stale)", async () => {
     const { calls, projects, work, agents } = seams();
-    const harness = fakeHarness(calls, { kodSkills: null });
+    const harness = fakeHarness(calls);
 
     await launchPersonaRun(projects, work, agents, "p1", persona(["code-review"]), {
       harness,
@@ -175,5 +183,48 @@ describe("launchPersonaRun", () => {
     });
 
     expect(harness.getState().loadKodSkills).toHaveBeenCalledWith("/repo");
+  });
+
+  it("never clobbers a foreign staged change", async () => {
+    const { calls, projects, work, agents } = seams();
+    // Someone staged an MCP server from the Connections manager and left it.
+    const foreign = {
+      title: "add MCP server fetch",
+      owner: { surface: "connections", scopeId: "/repo" },
+    };
+    const harness = fakeHarness(calls, { pendingChange: foreign });
+
+    const result = await launchPersonaRun(projects, work, agents, "p1", persona(["code-review"]), {
+      harness,
+      projectRoot: "/repo",
+    });
+
+    expect(harness.getState().prepareKodSkills).not.toHaveBeenCalled();
+    expect(harness.getState().cancelPendingChange).not.toHaveBeenCalled();
+    // The foreign change survives untouched, and the run still launches.
+    expect(harness.getState().pendingChange).toBe(foreign);
+    expect(result.taskId).toBe("task-1");
+    expect(result.skillsNotice).toContain("add MCP server fetch");
+    expect(result.skillsNotice).toContain("still launches");
+    expect(calls).toStrictEqual(["addWorkSession", "openTask"]);
+  });
+
+  it("replaces its own leftover staged change from an earlier launch", async () => {
+    const { calls, projects, work, agents } = seams();
+    const harness = fakeHarness(calls, {
+      pendingChange: { title: "install skills", owner: personaSkillsOwner("/repo") },
+    });
+
+    const result = await launchPersonaRun(projects, work, agents, "p1", persona(["code-review"]), {
+      harness,
+      projectRoot: "/repo",
+    });
+
+    expect(harness.getState().cancelPendingChange).toHaveBeenCalledWith({
+      surface: "skills",
+      scopeId: "/repo",
+    });
+    expect(harness.getState().prepareKodSkills).toHaveBeenCalled();
+    expect(result.taskId).toBe("task-1");
   });
 });

@@ -101,6 +101,20 @@ describe("planPersonaSkills", () => {
     expect(plan.notice).toContain("Couldn't check installed KödSkills");
   });
 
+  it("reports a skill that only installs into some of the provider's folders", () => {
+    const targets = [
+      { id: "claude", cli: "claude", clis: ["claude"], path: "/home/.claude/skills" },
+      { id: "agent", cli: "claude", clis: ["claude"], path: "/home/.agent/skills" },
+    ];
+    const base = model({ "code-review": "ready" }, targets);
+    // The second folder already holds a conflicting skill of the same name.
+    base.cells[1] = { ...base.cells[1], status: "conflict", eligible: false };
+
+    const plan = planPersonaSkills(persona(["code-review"]), base, "Claude Code");
+    expect(plan.skillIds).toStrictEqual(["code-review"]);
+    expect(plan.notice).toContain("only some of Claude Code's skills folders");
+  });
+
   it("notices skill ids that no longer resolve, and blocked cells", () => {
     const plan = planPersonaSkills(
       persona(["code-review", "gone", "tangled"]),

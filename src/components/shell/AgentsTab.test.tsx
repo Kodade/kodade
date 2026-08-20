@@ -63,6 +63,39 @@ function fakeHarness(kodSkills: unknown = null, kodSkillsError: string | null = 
   })) as unknown as StoreApi<HarnessState>;
 }
 
+// A staged KödSkills batch, shaped the way stageBatch leaves it.
+function stagedSkillsChange(owner: { surface: string; scopeId: string }) {
+  const change = {
+    path: "/home/.claude/skills/code-review",
+    format: "skill-dir",
+    diff: [],
+  };
+  return {
+    cli: "claude",
+    title: "install 1 KödSkills change",
+    change,
+    owner,
+    items: [
+      { cli: "claude", title: "install code-review for claude", change },
+      { cli: "claude", title: "install release-notes for claude", change },
+    ],
+  };
+}
+
+// A harness fake that starts with one staged change and records cancellations.
+function harnessWithPending(pendingChange: unknown): StoreApi<HarnessState> {
+  return createStore(() => ({
+    kodSkills: null,
+    kodSkillsError: null,
+    pendingChange,
+    applying: false,
+    mutationError: null,
+    loadKodSkills: vi.fn(async () => {}),
+    cancelPendingChange: vi.fn(() => {}),
+    confirmPendingChange: vi.fn(async () => {}),
+  })) as unknown as StoreApi<HarnessState>;
+}
+
 const WORK_MANIFEST = {
   ...RELEASE_MANIFEST,
   features: { ...RELEASE_MANIFEST.features, work: true },
@@ -303,6 +336,55 @@ describe("AgentsTab", () => {
     const notice = host.querySelector('[data-testid="persona-skills-notice"]');
     expect(notice).not.toBeNull();
     expect(notice!.textContent).toContain("no managed KödSkills folder");
+  });
+
+  it("reviews an owned staged skills install and ignores a foreign one", async () => {
+    const { store } = agents();
+    const harness = harnessWithPending(
+      stagedSkillsChange({ surface: "skills", scopeId: "/repo" }),
+    );
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={harness}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    expect(host.querySelector('[data-testid="persona-skills-review"]')).not.toBeNull();
+
+    // A Connections-owned change for the same project is not ours to present.
+    await act(async () => {
+      harness.setState({
+        pendingChange: stagedSkillsChange({ surface: "connections", scopeId: "/repo" }),
+      } as never);
+    });
+    expect(host.querySelector('[data-testid="persona-skills-review"]')).toBeNull();
+    expect(harness.getState().cancelPendingChange).not.toHaveBeenCalled();
+  });
+
+  it("cancels an orphaned persona-skills change staged for another workspace", async () => {
+    const { store } = agents();
+    const harness = harnessWithPending(
+      stagedSkillsChange({ surface: "skills", scopeId: "/other-repo" }),
+    );
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={harness}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    // It can't be reviewed here (wrong workspace), so it is cancelled rather
+    // than left stuck blocking the KödHarness pane.
+    expect(host.querySelector('[data-testid="persona-skills-review"]')).toBeNull();
+    expect(harness.getState().cancelPendingChange).toHaveBeenCalledWith({
+      surface: "skills",
+      scopeId: "/other-repo",
+    });
   });
 
   it("shows a persisted project persona on first open (no empty-scope race)", async () => {

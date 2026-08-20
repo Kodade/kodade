@@ -9,7 +9,7 @@
 // the store's own setters and runs it on the existing spawn path. Run history
 // stays in the Workspaces sidebar's shared green/red rows.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
@@ -125,6 +125,11 @@ export function AgentsTab({
   // It lives here, not in the editor, because the editor unmounts as soon as
   // the run area takes over.
   const [skillsNotice, setSkillsNotice] = useState<string | null>(null);
+  const clearSkillsNotice = useCallback(() => setSkillsNotice(null), []);
+  // A notice is about one workspace's launch; switching workspaces retires it.
+  useEffect(() => {
+    setSkillsNotice(null);
+  }, [activeProject?.id]);
 
   // A run opened from the sidebar (or a fresh launch) takes over the run area:
   // drop the editor so the task pane is visible. Keyed on runOpenSeq — which
@@ -155,36 +160,36 @@ export function AgentsTab({
             harness={harness}
             projectRoot={activeProject?.path ?? null}
             notice={skillsNotice}
-            onDismissNotice={() => setSkillsNotice(null)}
+            onDismissNotice={clearSkillsNotice}
           />
           <div className="relative min-h-0 flex-1 overflow-hidden">
-          {editing ? (
-            <PersonaEditor
-              key={`${personaScopeKey(editing.scope)}:${editing.id ?? "new"}`}
-              store={store}
-              workStore={workStore}
-              projectsStore={projectsStore}
-              harness={harness}
-              connections={connections}
-              connectionSource={connectionSource}
-              manifest={manifest}
-              scope={editing.scope}
-              personaId={editing.id}
-              projectId={activeProject?.id ?? null}
-              projectPath={activeProject?.path ?? null}
-              onSaved={(id) => setEditing({ scope: editing.scope, id })}
-              onDeleted={() => setEditing(null)}
-              onSkillsNotice={setSkillsNotice}
-            />
-          ) : selectedRunTaskId ? (
-            <KodworkPane
-              taskId={selectedRunTaskId}
-              workStore={workStore}
-              projectsStore={projectsStore}
-            />
-          ) : (
-            <EmptyState hasProject={!!activeProject} />
-          )}
+            {editing ? (
+              <PersonaEditor
+                key={`${personaScopeKey(editing.scope)}:${editing.id ?? "new"}`}
+                store={store}
+                workStore={workStore}
+                projectsStore={projectsStore}
+                harness={harness}
+                connections={connections}
+                connectionSource={connectionSource}
+                manifest={manifest}
+                scope={editing.scope}
+                personaId={editing.id}
+                projectId={activeProject?.id ?? null}
+                projectPath={activeProject?.path ?? null}
+                onSaved={(id) => setEditing({ scope: editing.scope, id })}
+                onDeleted={() => setEditing(null)}
+                onSkillsNotice={setSkillsNotice}
+              />
+            ) : selectedRunTaskId ? (
+              <KodworkPane
+                taskId={selectedRunTaskId}
+                workStore={workStore}
+                projectsStore={projectsStore}
+              />
+            ) : (
+              <EmptyState hasProject={!!activeProject} />
+            )}
           </div>
         </div>
       </div>
@@ -215,6 +220,25 @@ function PersonaSkillsReview({
   const owner = projectRoot ? personaSkillsOwner(projectRoot) : null;
   const ownPending =
     owner && isPendingChangeOwned(pending ?? null, owner) ? pending : null;
+
+  // A persona-skills change staged for a DIFFERENT workspace is unreachable —
+  // this dialog only ever shows the active project's — while it still blocks
+  // the KödHarness pane. It is ours and re-stageable, so cancel it.
+  useEffect(() => {
+    const stale = pending ?? null;
+    if (!stale || stale.owner.surface !== "skills") return;
+    if (projectRoot && stale.owner.scopeId === projectRoot) return;
+    const cancel = harness.getState().cancelPendingChange;
+    if (typeof cancel === "function") cancel(stale.owner);
+  }, [harness, pending, projectRoot]);
+
+  // Once the staged install is confirmed or cancelled, its notice is history.
+  const hadPending = useRef(false);
+  useEffect(() => {
+    if (hadPending.current && !ownPending) onDismissNotice();
+    hadPending.current = !!ownPending;
+  }, [ownPending, onDismissNotice]);
+
   if (!notice && !ownPending) return null;
   return (
     <div className="shrink-0 border-b border-border px-3 py-2">

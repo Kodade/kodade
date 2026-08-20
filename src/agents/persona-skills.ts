@@ -21,7 +21,11 @@ export type PersonaSkillPlan = {
   notice: string | null;
 };
 
-const EMPTY: PersonaSkillPlan = { skillIds: [], targetIds: [], notice: null };
+// Fresh arrays each time: a shared constant would hand callers the same mutable
+// arrays.
+function empty(): PersonaSkillPlan {
+  return { skillIds: [], targetIds: [], notice: null };
+}
 
 // Statuses that mean the skill is present and usable: nothing to install.
 // "update" counts as present — a persona run installs, it never upgrades a
@@ -33,10 +37,10 @@ export function planPersonaSkills(
   model: KodSkillsModel | null,
   providerLabel: string = persona.providerId,
 ): PersonaSkillPlan {
-  if (persona.skills.length === 0) return EMPTY;
+  if (persona.skills.length === 0) return empty();
   if (!model) {
     return {
-      ...EMPTY,
+      ...empty(),
       notice: `Couldn't check installed KödSkills, so this agent's skills weren't installed for ${providerLabel}. The run still launches.`,
     };
   }
@@ -48,7 +52,7 @@ export function planPersonaSkills(
   );
   if (targets.length === 0) {
     return {
-      ...EMPTY,
+      ...empty(),
       notice: `${providerLabel} has no managed KödSkills folder, so this agent's skills weren't installed. The run still launches.`,
     };
   }
@@ -59,14 +63,21 @@ export function planPersonaSkills(
 
   const install: string[] = [];
   const blocked: string[] = [];
+  // Installable into some of the provider's skills folders but not all of them
+  // (e.g. one folder already holds a conflicting skill of the same name).
+  const partial: string[] = [];
   for (const skillId of persona.skills) {
     if (!known.has(skillId)) continue;
     const cells = model.cells.filter(
       (cell) => cell.skillId === skillId && targetIds.has(cell.targetId),
     );
     if (cells.length === 0) continue;
+    const stuck = cells.filter(
+      (cell) => cell.status !== "ready" && !PRESENT.has(cell.status),
+    );
     if (cells.some((cell) => cell.status === "ready")) {
       install.push(skillId);
+      if (stuck.length > 0) partial.push(skillId);
       continue;
     }
     if (!cells.some((cell) => PRESENT.has(cell.status))) blocked.push(skillId);
@@ -79,6 +90,9 @@ export function planPersonaSkills(
   if (blocked.length > 0) {
     problems.push(`${blocked.join(", ")} can't be installed automatically (conflicting or externally managed files)`);
   }
+  if (partial.length > 0) {
+    problems.push(`${partial.join(", ")} ${plural(partial, "installs", "install")} into only some of ${providerLabel}'s skills folders`);
+  }
 
   return {
     skillIds: install,
@@ -87,7 +101,7 @@ export function planPersonaSkills(
       problems.length === 0
         ? null
         // Skill ids are identifiers, so the sentence never starts with one.
-        : `Some skills weren't installed: ${problems.join("; ")}. The run still launches.`,
+        : `Some skills need attention: ${problems.join("; ")}. The run still launches.`,
   };
 }
 

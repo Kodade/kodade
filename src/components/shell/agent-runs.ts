@@ -16,7 +16,11 @@
 import type { StoreApi } from "zustand/vanilla";
 import type { ProjectsState } from "../../store/projects";
 import type { KodworkState } from "../../kodwork/store";
-import type { HarnessState, PendingChangeOwner } from "../../store/harness";
+import {
+  isPendingChangeOwned,
+  type HarnessState,
+  type PendingChangeOwner,
+} from "../../store/harness";
 import type { AgentsState } from "../../agents/agents-store";
 import type { AgentPersona } from "../../agents/persona";
 import { personaDraftInput } from "../../agents/persona-run";
@@ -95,26 +99,32 @@ async function stagePersonaSkills(
   if (!projectRoot) {
     return `This agent's skills weren't installed — open a workspace folder first. The run still launches.`;
   }
+  const owner = personaSkillsOwner(projectRoot);
   try {
-    // Reuse the picker's own model: load it if the editor hasn't already.
-    if (!harness.getState().kodSkills) {
-      await harness.getState().loadKodSkills(projectRoot);
-    }
+    // Always re-inspect: a cached model goes stale the moment a skill is
+    // installed (here or from the KödHarness pane). It is one scan.
+    await harness.getState().loadKodSkills(projectRoot);
     const plan = planPersonaSkills(persona, harness.getState().kodSkills ?? null, label);
     if (plan.skillIds.length === 0) return plan.notice;
 
+    // Staging replaces whatever is staged (stageBatch has no owner check), so a
+    // foreign un-confirmed change must never be clobbered by a launch. Our own
+    // leftover from an earlier launch is safe to drop — staging is re-runnable.
+    const staged = harness.getState().pendingChange ?? null;
+    // Read the title first: isPendingChangeOwned is a type predicate, so the
+    // "not ours" branch would otherwise narrow `staged` away entirely.
+    const stagedTitle = staged?.title ?? "";
+    if (staged && !isPendingChangeOwned(staged, owner)) {
+      return `This agent's KödSkills weren't installed — finish or cancel the pending “${stagedTitle}” change first. The run still launches.`;
+    }
+    if (staged) harness.getState().cancelPendingChange(owner);
+
     await harness
       .getState()
-      .prepareKodSkills(
-        "install",
-        plan.skillIds,
-        plan.targetIds,
-        projectRoot,
-        personaSkillsOwner(projectRoot),
-      );
+      .prepareKodSkills("install", plan.skillIds, plan.targetIds, projectRoot, owner);
     // Staging can legitimately produce nothing (licence gating, no adapter);
     // the store records why in mutationError. Surface it, don't swallow it.
-    if (!harness.getState().pendingChange) {
+    if (!isPendingChangeOwned(harness.getState().pendingChange ?? null, owner)) {
       const reason = harness.getState().mutationError;
       return `${plan.skillIds.join(", ")} couldn't be staged for install${reason ? `: ${reason}` : ""}. The run still launches.`;
     }
