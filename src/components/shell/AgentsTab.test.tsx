@@ -271,6 +271,40 @@ describe("AgentsTab", () => {
     expect(host.textContent).toContain("no longer open");
   });
 
+  it("surfaces a non-blocking skills notice in the run area after a launch", async () => {
+    const { store } = agents();
+    await store.getState().load();
+    const made = await store.getState().createPersona(APP, {
+      providerId: "claude",
+      name: "Reviewer",
+      prompt: "Review the code",
+      skills: ["code-review"],
+    });
+    // A pack with no target claude can write to: the run must still launch.
+    const harness = fakeHarness({
+      pack: { skills: [{ id: "code-review", description: "" }] },
+      targets: [],
+      cells: [],
+    });
+    const work = fakeWork();
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={work}
+        projectsStore={fakeProjects()}
+        harness={harness}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
+    await click(button(host, "Prepare run"));
+
+    expect(work.getState().openTask).toHaveBeenCalledWith("task-1", "p1");
+    const notice = host.querySelector('[data-testid="persona-skills-notice"]');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("no managed KödSkills folder");
+  });
+
   it("shows a persisted project persona on first open (no empty-scope race)", async () => {
     const storage = new MockStorage();
     // Seed a workspace-scoped persona through a separate store instance.

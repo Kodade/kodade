@@ -57,7 +57,7 @@ export type McpTarget = {
 // and project/workspace scope that created it. A different pane may leave the
 // staged change alone, but must not present or apply it as its own.
 export type PendingChangeOwner = {
-  surface: "harness" | "memory" | "connections";
+  surface: "harness" | "memory" | "connections" | "skills";
   scopeId: string;
 };
 
