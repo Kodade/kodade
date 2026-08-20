@@ -24,6 +24,7 @@ import {
   type RetentionReport,
   type Tombstone,
   type WorkspaceContext,
+  type WorkspaceKnowledgeSurface,
   type WorkingMemoryStatus,
   type WorkspaceProjectMapping,
 } from "./contract";
@@ -52,6 +53,17 @@ export const tauriMemory: MemoryIpc = {
     invoke<WorkspaceProjectMapping | null>(CMD.memoryWorkspaceProjectMapping, {
       workspaceId,
     }),
+  workspaceKnowledgeSurface: (workspaceId) =>
+    invoke<WorkspaceKnowledgeSurface | null>(
+      CMD.memoryWorkspaceKnowledgeSurface,
+      { workspaceId },
+    ),
+  enableLocalKnowledge: (workspaceId) =>
+    invoke<WorkspaceKnowledgeSurface>(CMD.memoryEnableLocalKnowledge, {
+      workspaceId,
+    }),
+  disableLocalKnowledge: (workspaceId) =>
+    invoke<void>(CMD.memoryDisableLocalKnowledge, { workspaceId }),
   mapWorkspaceToProject: (
     workspaceId,
     expectedProjectId,

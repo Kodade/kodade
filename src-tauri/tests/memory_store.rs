@@ -1569,7 +1569,7 @@ fn schema_version_6_fixture_backfills_activity_sequence_without_reordering_histo
     );
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
 }
 
@@ -1660,7 +1660,7 @@ fn concurrent_first_open_serializes_the_complete_migration_sequence() {
         .expect("query migrations")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect migrations");
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 }
 
 macro_rules! historical_schema_upgrade_test {
@@ -1817,7 +1817,7 @@ macro_rules! historical_schema_upgrade_test {
             drop(store);
             assert_eq!(
                 schema_versions(project.db()),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
             );
         }
     };
@@ -1854,7 +1854,7 @@ fn schema_version_10_adds_the_rebuildable_project_document_index() {
     assert_eq!(project_documents, 1);
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
 }
 
@@ -1942,7 +1942,7 @@ fn schema_version_11_fixture_adds_portable_projection_columns_and_kind_backfill(
     assert_eq!(canonical_columns, 4);
     assert_eq!(
         schema_versions(project.db()),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
 }
 

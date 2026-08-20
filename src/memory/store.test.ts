@@ -56,6 +56,9 @@ function mockMemoryIpc(): MemoryIpc {
     projectsVault: vi.fn().mockResolvedValue(null),
     registerProjectsVault: vi.fn(),
     workspaceProjectMapping: vi.fn().mockResolvedValue(null),
+    workspaceKnowledgeSurface: vi.fn().mockResolvedValue(null),
+    enableLocalKnowledge: vi.fn(),
+    disableLocalKnowledge: vi.fn(),
     mapWorkspaceToProject: vi.fn(),
     projectWorkspaceMappings: vi.fn().mockResolvedValue([]),
     previewProjectScaffold: vi.fn(),
@@ -127,6 +130,30 @@ function mockMemoryIpc(): MemoryIpc {
 }
 
 describe("memory store", () => {
+  it("resolves the workspace knowledge surface without loading it implicitly", async () => {
+    const ipc = mockMemoryIpc();
+    const surface = {
+      workspaceId: workspace.id,
+      mode: "local" as const,
+      projectId: "kodade",
+      projectDisplayName: "Ködade",
+      knowledgeRoot: "/work/kodade/.kodade/knowledge",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    ipc.workspaceKnowledgeSurface = vi.fn().mockResolvedValue(surface);
+    const store = createMemoryStore({ ipc });
+
+    await store.getState().openWorkspace("/work/kodade");
+    // Opening a workspace must not touch the knowledge surface in this slice.
+    expect(ipc.workspaceKnowledgeSurface).not.toHaveBeenCalled();
+    expect(store.getState().knowledgeSurface).toBeNull();
+
+    expect(await store.getState().loadKnowledgeSurface()).toEqual(surface);
+    expect(ipc.workspaceKnowledgeSurface).toHaveBeenCalledWith(workspace.id);
+    expect(store.getState().knowledgeSurface).toEqual(surface);
+  });
+
   it("activates project working memory and refreshes its timeline", async () => {
     const ipc = mockMemoryIpc();
     const working = {

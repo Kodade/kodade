@@ -14,6 +14,7 @@ const plan: ProjectScaffoldPlan = {
   workspaceId: "ws_portable",
   projectId: "portable-project",
   projectDisplayName: "Portable project",
+  mode: "vault",
   vaultRoot: "vault-root",
   fingerprint: "abc123",
   operations: [

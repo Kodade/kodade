@@ -17,7 +17,7 @@ use super::{
     MemorySearchHit, MemoryStore, MutationProvenance, NewActivity, NewCheckpoint, NewMemory, Page,
     ProjectScaffoldApply, ProjectScaffoldPlan, ProjectsVault, RetentionReport, RetentionSettings,
     Tombstone, WorkingMemoryMode, WorkingMemoryStatus, Workspace, WorkspaceContext,
-    WorkspaceProjectMapping,
+    WorkspaceKnowledgeSurface, WorkspaceProjectMapping,
 };
 
 #[derive(Serialize)]
@@ -290,6 +290,39 @@ pub async fn memory_workspace_project_mapping(
 ) -> Result<Option<WorkspaceProjectMapping>, String> {
     run_memory(app, move |store| {
         store.workspace_project_mapping(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_workspace_knowledge_surface(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<Option<WorkspaceKnowledgeSurface>, String> {
+    run_memory(app, move |store| {
+        store.workspace_knowledge_surface(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_enable_local_knowledge(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<WorkspaceKnowledgeSurface, String> {
+    run_memory(app, move |store| {
+        store.enable_local_knowledge(&workspace_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn memory_disable_local_knowledge(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<(), String> {
+    run_memory(app, move |store| {
+        store.disable_local_knowledge(&workspace_id)
     })
     .await
 }

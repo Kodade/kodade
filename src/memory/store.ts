@@ -15,6 +15,7 @@ import type {
   Page,
   RetentionSettings,
   WorkspaceContext,
+  WorkspaceKnowledgeSurface,
   WorkingMemoryMode,
   WorkingMemoryStatus,
 } from "../ipc/contract";
@@ -35,6 +36,9 @@ export type MemoryState = {
   workspace: MemoryWorkspace | null;
   context: WorkspaceContext | null;
   workingMemory: WorkingMemoryStatus | null;
+  // Model-layer only in this slice: nothing in the UI reads it yet, and
+  // loading a workspace does not fetch it.
+  knowledgeSurface: WorkspaceKnowledgeSurface | null;
   checkpoints: CheckpointSearchHit[];
   checkpointTotal: number;
   results: MemorySearchHit[];
@@ -69,6 +73,8 @@ export type MemoryState = {
     exportExisting: boolean,
   ): Promise<WorkingMemoryStatus | null>;
   syncWorking(): Promise<void>;
+  // Resolve the workspace knowledge surface ("vault" or "local") on demand.
+  loadKnowledgeSurface(): Promise<WorkspaceKnowledgeSurface | null>;
   // The visible KödMem settings surface owns this lifecycle: it starts polling
   // on mount and stops on unmount, while the interval stays in the store so
   // tests can prove it never runs while Settings is hidden.
@@ -296,6 +302,7 @@ export function createMemoryStore(deps: {
       workspace: null,
       context: null,
       workingMemory: null,
+      knowledgeSurface: null,
       checkpoints: [],
       checkpointTotal: 0,
       results: [],
@@ -341,6 +348,7 @@ export function createMemoryStore(deps: {
               workspace: null,
               context: null,
               workingMemory: null,
+              knowledgeSurface: null,
               checkpoints: [],
               checkpointTotal: 0,
               deleted: [],
@@ -557,6 +565,22 @@ export function createMemoryStore(deps: {
           if (ownsWorkspace(scope)) set({ error: errorMessage(error) });
         } finally {
           finishSaving();
+        }
+      },
+
+      async loadKnowledgeSurface() {
+        const scope = workspaceScope();
+        if (!scope) return null;
+        try {
+          const surface = await deps.ipc.workspaceKnowledgeSurface(
+            scope.workspaceId,
+          );
+          if (!ownsWorkspace(scope)) return null;
+          set({ knowledgeSurface: surface });
+          return surface;
+        } catch (error) {
+          if (ownsWorkspace(scope)) set({ error: errorMessage(error) });
+          return null;
         }
       },
 

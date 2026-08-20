@@ -89,6 +89,9 @@ export const CMD = {
   memoryProjectsVault: "memory_projects_vault",
   memoryRegisterProjectsVault: "memory_register_projects_vault",
   memoryWorkspaceProjectMapping: "memory_workspace_project_mapping",
+  memoryWorkspaceKnowledgeSurface: "memory_workspace_knowledge_surface",
+  memoryEnableLocalKnowledge: "memory_enable_local_knowledge",
+  memoryDisableLocalKnowledge: "memory_disable_local_knowledge",
   memoryMapWorkspaceToProject: "memory_map_workspace_to_project",
   memoryProjectWorkspaceMappings: "memory_project_workspace_mappings",
   memoryPreviewProjectScaffold: "memory_preview_project_scaffold",
@@ -762,6 +765,21 @@ export type ProjectsVault = {
   updatedAt: number;
 };
 
+// Where a workspace keeps its durable knowledge. Legacy configs store no mode:
+// a projects-vault mapping resolves to "vault", and a workspace with neither a
+// mapping nor a local config has no knowledge surface at all.
+export type KnowledgeSurfaceMode = "vault" | "local";
+
+export type WorkspaceKnowledgeSurface = {
+  workspaceId: string;
+  mode: KnowledgeSurfaceMode;
+  projectId: string;
+  projectDisplayName: string;
+  knowledgeRoot: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type WorkspaceProjectMapping = {
   workspaceId: string;
   projectId: string;
@@ -784,6 +802,9 @@ export type ProjectScaffoldPlan = {
   workspaceId: string;
   projectId: string;
   projectDisplayName: string;
+  mode: KnowledgeSurfaceMode;
+  // Base directory the operation paths resolve against: the vault root for
+  // vault surfaces, the workspace root for local surfaces.
   vaultRoot: string;
   fingerprint: string;
   operations: ScaffoldOperation[];
@@ -1191,6 +1212,11 @@ export interface MemoryIpc {
   workspaceProjectMapping(
     workspaceId: string,
   ): Promise<WorkspaceProjectMapping | null>;
+  workspaceKnowledgeSurface(
+    workspaceId: string,
+  ): Promise<WorkspaceKnowledgeSurface | null>;
+  enableLocalKnowledge(workspaceId: string): Promise<WorkspaceKnowledgeSurface>;
+  disableLocalKnowledge(workspaceId: string): Promise<void>;
   mapWorkspaceToProject(
     workspaceId: string,
     expectedProjectId: string | null,

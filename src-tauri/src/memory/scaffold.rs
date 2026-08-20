@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::projects::{KnowledgeSurfaceMode, WorkspaceKnowledgeSurface};
 use super::{MemoryError, MemoryStore, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,9 @@ pub struct ProjectScaffoldPlan {
     pub workspace_id: String,
     pub project_id: String,
     pub project_display_name: String,
+    pub mode: KnowledgeSurfaceMode,
+    /// Base directory the operation paths resolve against: the vault root for
+    /// vault surfaces, the workspace root for local surfaces.
     pub vault_root: String,
     pub fingerprint: String,
     pub operations: Vec<ScaffoldOperation>,
@@ -66,6 +70,19 @@ struct RequiredArtifact {
     content: Option<String>,
 }
 
+/// One artifact resolved against the plan base directory.
+struct PlannedArtifact {
+    relative_path: String,
+    path: PathBuf,
+    kind: ScaffoldOperationKind,
+    content: Option<String>,
+    is_project_note: bool,
+}
+
+/// A local knowledge surface owns its whole directory, so it ships a
+/// self-ignoring `.gitignore` instead of touching the user's own ignore file.
+const LOCAL_GITIGNORE: &str = "*\n";
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ScaffoldPolicy {
@@ -90,43 +107,38 @@ struct ProjectAuthorityMarker {
 
 impl MemoryStore {
     pub fn preview_project_scaffold(&self, workspace_id: &str) -> Result<ProjectScaffoldPlan> {
-        let mapping = self
-            .workspace_project_mapping(workspace_id)?
+        let surface = self
+            .workspace_knowledge_surface(workspace_id)?
             .ok_or_else(|| {
                 MemoryError::InvalidInput(
                     "map this workspace to a logical project before setting up project knowledge"
                         .into(),
                 )
             })?;
-        validate_project_display_name(&mapping.project_display_name)?;
-        let vault = self.projects_vault()?.ok_or_else(|| {
-            MemoryError::InvalidInput(
-                "register an Obsidian projects vault before setting up project knowledge".into(),
-            )
-        })?;
-        let project_relative = format!("10-Projects/{}", mapping.project_id);
-        let project_root = Path::new(&vault.canonical_root)
-            .join("10-Projects")
-            .join(&mapping.project_id);
-        let mut required = required_artifacts(&mapping.project_id, &mapping.project_display_name)?;
-        required.insert(
-            0,
-            RequiredArtifact {
-                suffix: String::new(),
-                kind: ScaffoldOperationKind::CreateDirectory,
-                content: None,
-            },
-        );
+        validate_project_display_name(&surface.project_display_name)?;
+        // The plan base directory: relative operation paths resolve against it.
+        // Vault surfaces use the vault root; local surfaces use the workspace.
+        let base = match surface.mode {
+            KnowledgeSurfaceMode::Vault => {
+                let vault = self.projects_vault()?.ok_or_else(|| {
+                    MemoryError::InvalidInput(
+                        "register an Obsidian projects vault before setting up project knowledge"
+                            .into(),
+                    )
+                })?;
+                PathBuf::from(vault.canonical_root)
+            }
+            KnowledgeSurfaceMode::Local => self
+                .workspace(workspace_id)
+                .map(|workspace| PathBuf::from(workspace.canonical_root))?,
+        };
+        let planned = planned_artifacts(&surface, &base)?;
 
-        let mut observations = Vec::with_capacity(required.len());
+        let mut observations = Vec::with_capacity(planned.len());
         let mut operations = Vec::new();
-        for artifact in required {
-            let path = artifact_path(&project_root, &artifact.suffix);
-            let relative_path = if artifact.suffix.is_empty() {
-                project_relative.clone()
-            } else {
-                format!("{project_relative}/{}", artifact.suffix)
-            };
+        for artifact in planned {
+            let path = artifact.path;
+            let relative_path = artifact.relative_path;
             match std::fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
                     return Err(MemoryError::InvalidInput(format!(
@@ -155,8 +167,8 @@ impl MemoryStore {
                             "project knowledge file is unreadable at {relative_path}: {error}"
                         ))
                     })?;
-                    if artifact.suffix == "Project.md" {
-                        validate_project_identity(&bytes, &mapping.project_id)?;
+                    if artifact.is_project_note {
+                        validate_project_identity(&bytes, &surface.project_id)?;
                     }
                     observations.push(PathObservation {
                         relative_path,
@@ -191,20 +203,22 @@ impl MemoryStore {
             }
         }
 
+        let base = base.to_string_lossy().into_owned();
         let fingerprint = serde_json::to_vec(&PlanFingerprint {
             schema: 1,
             workspace_id,
-            project_id: &mapping.project_id,
-            project_display_name: &mapping.project_display_name,
-            vault_root: &vault.canonical_root,
+            project_id: &surface.project_id,
+            project_display_name: &surface.project_display_name,
+            vault_root: &base,
             observations: &observations,
             operations: &operations,
         })?;
         Ok(ProjectScaffoldPlan {
             workspace_id: workspace_id.into(),
-            project_id: mapping.project_id,
-            project_display_name: mapping.project_display_name,
-            vault_root: vault.canonical_root,
+            project_id: surface.project_id,
+            project_display_name: surface.project_display_name,
+            mode: surface.mode,
+            vault_root: base,
             fingerprint: sha256_hex(&fingerprint),
             operations,
         })
@@ -240,6 +254,11 @@ impl MemoryStore {
 
     pub fn project_obsidian_uri(&self, workspace_id: &str) -> Result<String> {
         let plan = self.preview_project_scaffold(workspace_id)?;
+        if plan.mode == KnowledgeSurfaceMode::Local {
+            return Err(MemoryError::InvalidInput(
+                "local knowledge lives in the workspace, not in an Obsidian vault".into(),
+            ));
+        }
         let project_note_relative = format!("10-Projects/{}/Project.md", plan.project_id);
         if plan
             .operations
@@ -385,6 +404,63 @@ fn artifact_path(project_root: &Path, suffix: &str) -> PathBuf {
     } else {
         project_root.join(suffix)
     }
+}
+
+/// Resolve every scaffold artifact against the plan base. Vault surfaces get
+/// `10-Projects/<id>/…` exactly as before; local surfaces get
+/// `.kodade/knowledge/…` plus the self-ignoring `.gitignore`.
+fn planned_artifacts(
+    surface: &WorkspaceKnowledgeSurface,
+    base: &Path,
+) -> Result<Vec<PlannedArtifact>> {
+    let (parents, project_relative) = match surface.mode {
+        KnowledgeSurfaceMode::Vault => (Vec::new(), format!("10-Projects/{}", surface.project_id)),
+        KnowledgeSurfaceMode::Local => {
+            (vec![".kodade".to_string()], ".kodade/knowledge".to_string())
+        }
+    };
+    let project_root = base.join(project_relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+
+    let mut planned = Vec::new();
+    for parent in parents {
+        planned.push(PlannedArtifact {
+            path: base.join(&parent),
+            relative_path: parent,
+            kind: ScaffoldOperationKind::CreateDirectory,
+            content: None,
+            is_project_note: false,
+        });
+    }
+    planned.push(PlannedArtifact {
+        path: project_root.clone(),
+        relative_path: project_relative.clone(),
+        kind: ScaffoldOperationKind::CreateDirectory,
+        content: None,
+        is_project_note: false,
+    });
+    if surface.mode == KnowledgeSurfaceMode::Local {
+        planned.push(PlannedArtifact {
+            path: project_root.join(".gitignore"),
+            relative_path: format!("{project_relative}/.gitignore"),
+            kind: ScaffoldOperationKind::CreateFile,
+            content: Some(LOCAL_GITIGNORE.into()),
+            is_project_note: false,
+        });
+    }
+    // Both surfaces share one scaffold policy, so a local Project.md keeps the
+    // "projects-vault" authority marker verbatim. That string means "this
+    // folder is the portable KödMem authority" and is retained for portable
+    // format compatibility; it is not a claim about Obsidian.
+    for artifact in required_artifacts(&surface.project_id, &surface.project_display_name)? {
+        planned.push(PlannedArtifact {
+            path: artifact_path(&project_root, &artifact.suffix),
+            relative_path: format!("{project_relative}/{}", artifact.suffix),
+            kind: artifact.kind,
+            content: artifact.content,
+            is_project_note: artifact.suffix == "Project.md",
+        });
+    }
+    Ok(planned)
 }
 
 fn validate_project_display_name(project_name: &str) -> Result<()> {

@@ -57,6 +57,38 @@ describe("typed memory IPC", () => {
     });
   });
 
+  it("round-trips the workspace knowledge surface without reshaping it", async () => {
+    const surface = {
+      workspaceId: "ws_1",
+      mode: "local" as const,
+      projectId: "kodade",
+      projectDisplayName: "Ködade",
+      knowledgeRoot: "/work/kodade/.kodade/knowledge",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    invoke
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(surface)
+      .mockResolvedValueOnce(undefined);
+
+    expect(await tauriMemory.workspaceKnowledgeSurface("ws_1")).toBeNull();
+    expect(await tauriMemory.enableLocalKnowledge("ws_1")).toEqual(surface);
+    await tauriMemory.disableLocalKnowledge("ws_1");
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      CMD.memoryWorkspaceKnowledgeSurface,
+      { workspaceId: "ws_1" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(2, CMD.memoryEnableLocalKnowledge, {
+      workspaceId: "ws_1",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, CMD.memoryDisableLocalKnowledge, {
+      workspaceId: "ws_1",
+    });
+  });
+
   it("passes optimistic revisions and export destinations without reshaping paths", async () => {
     invoke.mockResolvedValue(undefined);
     const revision: MemoryRevision = {

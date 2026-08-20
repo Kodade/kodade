@@ -1348,9 +1348,7 @@ fn required_content_hash(value: Option<&str>) -> Result<&str> {
 }
 
 pub(super) fn validate_project_root(location: &ProjectLocation) -> Result<()> {
-    let canonical_vault = PathBuf::from(super::projects::validate_projects_vault_root(
-        &location.vault_root,
-    )?);
+    let container = super::projects::validate_knowledge_container(location)?;
     let metadata = std::fs::symlink_metadata(&location.project_root).map_err(|error| {
         MemoryError::InvalidInput(format!("mapped project folder is unavailable: {error}"))
     })?;
@@ -1360,9 +1358,9 @@ pub(super) fn validate_project_root(location: &ProjectLocation) -> Result<()> {
         ));
     }
     let canonical_project = std::fs::canonicalize(&location.project_root)?;
-    if !canonical_project.starts_with(canonical_vault.join("10-Projects")) {
+    if !canonical_project.starts_with(&container) {
         return Err(MemoryError::InvalidInput(
-            "mapped project folder escapes the registered projects vault".into(),
+            super::projects::knowledge_escape_message(location.mode, "mapped project"),
         ));
     }
     Ok(())
