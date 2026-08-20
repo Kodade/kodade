@@ -29,8 +29,8 @@ export function TitleBar() {
   const browserPaneCapable = useStore(capabilitiesStore, (state) =>
     browserPaneAvailable(state.capabilities),
   );
-  // v2 shell (issue #62): compiled out of public builds, and off until the
-  // user switches it on.
+  // v2 shell (issues #62/#65): shipped and on by default; the title-bar
+  // action below is the escape hatch back to the classic v1 layout.
   const shellFeature = RELEASE_MANIFEST.features.shell;
   const shellV2Enabled = useStore(appStore, (s) => s.shellV2Enabled);
   const activeTab = useStore(appStore, (s) => s.shellLayout.activeTab);
@@ -58,10 +58,13 @@ export function TitleBar() {
       )}
       <div className="flex h-full items-stretch">
         {shellFeature && (
-          // Development-only escape hatch: always visible, in both states, so
-          // the v1 shell is always one click away.
+          // v2.0.0 escape hatch back to the classic v1 shell: always visible,
+          // in both states, so either layout is one click away. Planned for
+          // retirement one release after v2.0.0.
           <TitleAction
-            label="Ködade v2 shell"
+            label={
+              shellV2Enabled ? "Use the classic layout" : "Use the tabbed layout"
+            }
             onClick={() =>
               appStore.getState().setShellV2Enabled(!shellV2Enabled)
             }

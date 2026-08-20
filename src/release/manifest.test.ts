@@ -8,7 +8,7 @@ describe("release manifest", () => {
       voice: false,
       ssh: false,
       work: true,
-      shell: false,
+      shell: true, // graduated in v2.0.0 (#65)
       browser: false,
     });
   });

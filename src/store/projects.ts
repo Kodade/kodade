@@ -264,10 +264,16 @@ export type PersistedDoc = {
   // owns the validation and tolerates any shape, including the legacy v1
   // `layout` array it falls back to on a user's first v2 boot.
   shell?: unknown;
-  // Optional and additive (still STORAGE_VERSION 1): whether the v2 shell is
-  // switched on. Development builds only — the manifest gates the surface, so
-  // a `true` here does nothing in a public build. Absent/invalid = false.
+  // Optional and additive (still STORAGE_VERSION 1): LEGACY. Every build since
+  // the v2 shell landed wrote this field on every persist, so a `false` here
+  // usually just means "this user never turned the development shell on" — it
+  // is NOT an opt-out. Still written for older builds that read it; hydration
+  // reads shellV1Fallback instead.
   shellV2?: boolean;
+  // Optional and additive (still STORAGE_VERSION 1): the v2.0.0 escape hatch
+  // (issue #65). `true` means the user explicitly asked for the classic v1
+  // shell. Absent means the v2 default.
+  shellV1Fallback?: boolean;
   // Optional and additive (still STORAGE_VERSION 1): the Ködade background
   // prompt (issue #63). Absent means "on, with no override" — the default
   // text ships in harness/ambient.ts, never in this document, so improving it
@@ -809,7 +815,8 @@ export function createProjectsStore(deps: StoreDeps) {
           remoteTargets,
           sessions: sessionsDoc,
           ...(shellLayoutPersisted ? { shell: shellLayout } : {}),
-          shellV2: shellV2Enabled,
+          shellV2: shellV2Enabled, // legacy field, kept for older builds
+          shellV1Fallback: !shellV2Enabled,
         };
         try {
           await deps.storage.write(JSON.stringify(doc));
@@ -1028,7 +1035,7 @@ export function createProjectsStore(deps: StoreDeps) {
       activeSessionByProject: {},
       layout: undefined,
       shellLayout: defaultShellLayout(), // v2 shell geometry (issue #62)
-      shellV2Enabled: false, // v2 shell stays off until it is switched on
+      shellV2Enabled: true, // v2 tabbed shell is the v2.0 default (issue #65)
       theme: "system", // system-following by default (resolved by the theme store)
       chatProvider: DEFAULT_CHAT_PROVIDER,
       sidebarMode: "full",
@@ -1281,15 +1288,24 @@ export function createProjectsStore(deps: StoreDeps) {
               )
                 ? docShellLayout
                 : s.shellLayout;
-              // Monotonic: an enable made before the read landed survives it.
-              // The mirror case (disabling v2 pre-hydration, then hydrating a
-              // doc that had it on) re-enables — accepted, because this is a
-              // development-only toggle one click away from being flipped back.
-              const shellV2Enabled = s.shellV2Enabled || doc.shellV2 === true;
+              // v2 shell gating (issue #65). The v2 shell is the default now,
+              // and only the NEW `shellV1Fallback` field can turn it off.
+              // Legacy `shellV2: false` must NOT be read as an opt-out: every
+              // build since the shell landed wrote that field on every persist
+              // while the default was off, so nearly every upgrading user has a
+              // `false` on disk that only means "never switched the dev shell
+              // on". Reading it would strand them on the v1 shell.
+              // Same shape as ambientPromptEnabled below: a change made in this
+              // session (pre-hydration disable) outranks the document; an
+              // absent field means the default; a legacy `shellV2: true` still
+              // enables, which is what that user already had.
+              const shellV2Enabled = !s.shellV2Enabled
+                ? false
+                : doc.shellV2 === true || doc.shellV1Fallback !== true;
               // Background prompt (#63). An absent field means "on, default
               // text"; a change made in this session outranks the document,
-              // like theme/sidebar above. Same accepted edge as the shellV2
-              // note: a pre-hydration change back TO the default (re-enabling,
+              // like theme/sidebar above. Same accepted edge as the v2 shell
+              // above: a pre-hydration change back TO the default (re-enabling,
               // or clearing the override) is indistinguishable from an
               // untouched store, so a document that disagrees wins — one click
               // away from being flipped back, in the direction of the user's

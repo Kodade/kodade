@@ -28,9 +28,10 @@ export function releaseManifestFor(profile: ReleaseProfile): ReleaseManifest {
       // this manifest so older persisted layouts still fail closed on builds
       // that explicitly disable it, without tying it to unrelated dev tools.
       work: true,
-      // The v2 tabbed shell (issue #62) is still being built. Unlike `work` it
-      // is a plain development feature: public builds compile without it.
-      shell: enabled,
+      // The v2 tabbed shell graduated into the supported product in v2.0.0.
+      // Keep it in this manifest so a build that explicitly disables it still
+      // fails closed, without tying the shell to unrelated dev tools.
+      shell: true,
       // The embedded KödBrowser pane (issue #62) is archived: public builds
       // ship without it, and the code stays here so it can be revived.
       browser: enabled,

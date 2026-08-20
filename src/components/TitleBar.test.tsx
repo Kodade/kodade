@@ -55,14 +55,14 @@ describe("TitleBar", () => {
     ).toBeNull();
   });
 
-  // The v2 shell (#62) is a development feature; these tests run on the
-  // development profile, where the toggle is compiled in.
-  it("keeps the shell tabs out of the title bar until the v2 shell is switched on", () => {
+  // The v2 shell shipped in v2.0.0 (#65); the escape hatch back to the classic
+  // layout stays in the title bar for one release.
+  it("keeps the shell tabs out of the title bar while the classic layout is in use", () => {
     act(() => root.render(<TitleBar />));
 
     expect(container.querySelector('header [role="tablist"]')).toBeNull();
     expect(
-      container.querySelector('header button[aria-label="Ködade v2 shell"]'),
+      container.querySelector('header button[aria-label="Use the tabbed layout"]'),
     ).not.toBeNull();
   });
 
@@ -133,12 +133,12 @@ describe("TitleBar", () => {
     expect(document.activeElement).toBe(tabs[0]);
   });
 
-  it("always offers the development toggle back to the v1 shell", () => {
+  it("always offers the escape hatch back to the classic layout", () => {
     act(() => appStore.setState({ shellV2Enabled: true }));
     act(() => root.render(<TitleBar />));
 
     const toggle = container.querySelector<HTMLButtonElement>(
-      'header button[aria-label="Ködade v2 shell"]',
+      'header button[aria-label="Use the classic layout"]',
     )!;
     act(() => toggle.click());
     expect(appStore.getState().shellV2Enabled).toBe(false);
