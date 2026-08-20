@@ -14,6 +14,7 @@ import {
   type ProjectsState,
 } from "./projects";
 import { canOpenLoginTerminal, openLoginTerminal } from "../providers/login";
+import { projectTerminalGroups } from "../components/sidebar/terminals";
 import { remoteProjectId, type RemoteTarget } from "../ssh/model";
 
 // Fake registry that records opens/closes/writes (the store never sees xterm).
@@ -72,7 +73,7 @@ function predicateState(
   } as ProjectsState;
 }
 
-describe("canOpenLoginTerminal — chat-first truth table (before slice 3)", () => {
+describe("canOpenLoginTerminal — login availability truth table", () => {
   it("no active project → false", () => {
     expect(canOpenLoginTerminal(predicateState({ activeProjectId: null }))).toBe(
       false,
@@ -103,7 +104,10 @@ describe("canOpenLoginTerminal — chat-first truth table (before slice 3)", () 
     ).toBe(true);
   });
 
-  it("local project with a non-chat terminal selected → false (before)", () => {
+  // Slice 3 intentionally changes these two: a login shell hosts at project
+  // scope, so an active project can open one with a non-chat terminal selected
+  // or with nothing selected. Recorded here as the new (after) behavior.
+  it("local project with a non-chat terminal selected → true (after slice 3)", () => {
     expect(
       canOpenLoginTerminal(
         predicateState({
@@ -112,10 +116,10 @@ describe("canOpenLoginTerminal — chat-first truth table (before slice 3)", () 
           sessions: [{ id: "term-1", projectId: "p1", name: "zsh 1" }],
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("local project with nothing selected → false (before)", () => {
+  it("local project with nothing selected → true (after slice 3)", () => {
     expect(
       canOpenLoginTerminal(
         predicateState({
@@ -124,11 +128,11 @@ describe("canOpenLoginTerminal — chat-first truth table (before slice 3)", () 
           sessions: [],
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 
-describe("launchInSession — chat-first hosting (before slice 3)", () => {
+describe("launchInSession — chat-owned and project-scoped hosting", () => {
   it("chat selected → hosts a terminal owned by that chat and types the command", async () => {
     const { store, opens, writes } = makeStore();
     await store.getState().addProject("/repos/alpha");
@@ -167,35 +171,45 @@ describe("launchInSession — chat-first hosting (before slice 3)", () => {
     ]);
   });
 
-  it("no session selected → throws 'could not create a terminal session' (before)", async () => {
-    const { store, opens } = makeStore();
-    await store.getState().addProject("/repos/alpha");
-    // v2 shell opens no session on project add, so nothing is selected. With no
-    // selected session at all, the launcher can't tell the caller to pick a
-    // chat, so it reports the generic creation failure.
-    expect(store.getState().activeSessionByProject).toEqual({});
-
-    await expect(
-      store.getState().launchInSession("claude", "claude"),
-    ).rejects.toThrow("could not create a terminal session");
-    expect(opens).toHaveLength(0);
-  });
-
-  it("a non-chat session selected → throws the same chat-first error (before)", async () => {
-    const { store, opens } = makeStore();
+  // Slice 3 intentionally changes this: with no chat selected the launcher now
+  // hosts a project-scoped standalone terminal instead of throwing. Recorded
+  // here as the new (after) behavior.
+  it("no session selected → hosts a project-scoped terminal (after slice 3)", async () => {
+    const { store, opens, writes } = makeStore();
     await store.getState().addProject("/repos/alpha");
     const projectId = store.getState().projects[0].id;
-    // Force a non-chat session to be the selected one. Normal selection would
-    // normalize back to a chat, so record the raw predicate the launcher sees.
+    // v2 shell opens no session on project add, so nothing is selected.
+    expect(store.getState().activeSessionByProject).toEqual({});
+
+    await store.getState().launchInSession("claude", "claude");
+
+    const terminal = store
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+    // A standalone terminal (no chat/work owner), selected so the login shows.
+    expect(terminal.workspaceId).toBeUndefined();
+    expect(store.getState().activeSessionByProject[projectId]).toBe(terminal.id);
+    expect(opens).toEqual([{ id: terminal.id, cwd: "/repos/alpha" }]);
+    expect(writes).toEqual([{ id: terminal.id, data: "claude\r" }]);
+  });
+
+  // Slice 3 intentionally changes this: a non-chat selection now reuses that
+  // standalone terminal instead of throwing. Recorded as the new behavior.
+  it("a non-chat terminal selected → reuses it at project scope (after slice 3)", async () => {
+    const { store, opens, writes } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
     store.setState({
       sessions: [{ id: "term-1", projectId, name: "zsh 1" }],
       activeSessionByProject: { [projectId]: "term-1" },
     });
 
-    await expect(
-      store.getState().launchInSession("claude", "claude"),
-    ).rejects.toThrow("select a chat before starting an agent");
-    expect(opens).toHaveLength(0);
+    await store.getState().launchInSession("claude", "claude");
+
+    // No new session created — the selected standalone terminal is the host.
+    expect(store.getState().sessions).toHaveLength(1);
+    expect(opens).toHaveLength(0); // reused host was never (re)opened here
+    expect(writes).toEqual([{ id: "term-1", data: "claude\r" }]);
   });
 
   it("no active project → throws 'open a project first'", async () => {
@@ -206,14 +220,99 @@ describe("launchInSession — chat-first hosting (before slice 3)", () => {
   });
 });
 
-describe("openLoginTerminal — chat-first availability (before slice 3)", () => {
-  it("no chat open → openLoginTerminal rejects because it has no host (before)", async () => {
-    const { store, opens } = makeStore();
+describe("openLoginTerminal — project-scope availability (after slice 3)", () => {
+  // Slice 3 intentionally changes this: with no chat open the login terminal
+  // now hosts at project scope and types the provider's login command.
+  it("no chat open → openLoginTerminal opens a project-scoped login shell", async () => {
+    const { store, opens, writes } = makeStore();
     await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
 
-    await expect(openLoginTerminal(store, "claude")).rejects.toThrow(
-      "could not create a terminal session",
+    await openLoginTerminal(store, "claude");
+
+    const terminal = store
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+    expect(terminal.workspaceId).toBeUndefined();
+    expect(store.getState().activeSessionByProject[projectId]).toBe(terminal.id);
+    expect(opens).toEqual([{ id: terminal.id, cwd: "/repos/alpha" }]);
+    // "claude" provider's login command (see providers/catalog).
+    expect(writes).toEqual([{ id: terminal.id, data: "claude auth login\r" }]);
+  });
+
+  // An agent run (a KödWork task) is a plain child process, but its login
+  // terminal used to require a chat. It now hosts at project scope: a
+  // persona-prepared task whose provider needs login can sign in with zero
+  // chat threads in the project.
+  it("agent run with no chats → openLoginTerminal hosts a login shell", async () => {
+    const { store, opens, writes } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    // The run itself: a background work session, no PTY, no chat.
+    const taskId = store.getState().addWorkSession(projectId)!;
+    expect(store.getState().sessions.find((s) => s.id === taskId)?.kind).toBe(
+      "work",
     );
-    expect(opens).toHaveLength(0);
+    expect(store.getState().sessions.some(isChatSession)).toBe(false);
+
+    await openLoginTerminal(store, "claude");
+
+    const terminal = store
+      .getState()
+      .sessions.find(
+        (session) => session.id !== taskId && !isChatSession(session),
+      )!;
+    expect(terminal.kind).toBeUndefined(); // a real PTY terminal
+    expect(terminal.workspaceId).toBeUndefined(); // project-scoped, not embedded
+    expect(opens).toEqual([{ id: terminal.id, cwd: "/repos/alpha" }]);
+    expect(writes).toEqual([{ id: terminal.id, data: "claude auth login\r" }]);
+  });
+});
+
+describe("project-scoped login terminal — sidebar visibility and cleanup", () => {
+  it("appears as a standalone terminal group and cleans up on close", async () => {
+    const { store, closes } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+
+    await openLoginTerminal(store, "claude");
+    const terminal = store
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+
+    // Both shells render this projection; the login terminal shows as its own
+    // standalone group (root), not embedded under a chat or task.
+    const groups = projectTerminalGroups(store.getState().sessions, projectId);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].root.id).toBe(terminal.id);
+    expect(groups[0].children).toHaveLength(0);
+
+    // Killable and cleaned up like any terminal: registry.close + removed.
+    await store.getState().closeSession(terminal.id);
+    expect(closes).toContain(terminal.id);
+    expect(
+      store.getState().sessions.some((session) => session.id === terminal.id),
+    ).toBe(false);
+    expect(
+      projectTerminalGroups(store.getState().sessions, projectId),
+    ).toHaveLength(0);
+  });
+
+  it("is first-class selectable in the chat-first runtime", async () => {
+    const { store } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+
+    await openLoginTerminal(store, "claude");
+    const terminal = store
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+
+    // Navigate away, then click the terminal's sidebar row: it selects itself
+    // (a chat-owned terminal would normalize back to its chat instead).
+    const chatId = store.getState().addChatThread(projectId, "codex")!;
+    expect(store.getState().activeSessionByProject[projectId]).toBe(chatId);
+    await store.getState().activateSession(projectId, terminal.id);
+    expect(store.getState().activeSessionByProject[projectId]).toBe(terminal.id);
   });
 });

@@ -19,7 +19,7 @@ import {
   loginCommandFor,
   supportsChat,
 } from "../../providers/catalog";
-import { openLoginTerminal } from "../../providers/login";
+import { canOpenLoginTerminal, openLoginTerminal } from "../../providers/login";
 import { SettingsCard, SettingsRow } from "./SettingsCard";
 
 export function ProvidersSection({
@@ -60,6 +60,11 @@ export function ProvidersSection({
         isChatSession(session),
     );
   });
+  // A login terminal now hosts at project scope, so the sign-in button only
+  // needs an open project — not a selected chat (v2.0 P4 slice 3). The Ollama
+  // start button below is a separate server-start affordance and keeps its own
+  // chat gate.
+  const canLogInHere = useStore(appStore, canOpenLoginTerminal);
   const ollama = useStore(chatThreadsStore, (state) => state.ollama);
 
   const chatProviders = AVAILABLE_PROVIDERS.filter(supportsChat);
@@ -179,29 +184,25 @@ export function ProvidersSection({
                   <button
                     type="button"
                     onClick={() => onLogin(provider.id)}
-                    disabled={!hasActiveChat}
+                    disabled={!canLogInHere}
                     aria-describedby={
-                      hasActiveChat ? undefined : `chat-login-guidance-${provider.id}`
+                      canLogInHere ? undefined : `chat-login-guidance-${provider.id}`
                     }
                     title={
-                      hasActiveChat
+                      canLogInHere
                         ? `Open a terminal running ${loginCommandFor(provider)}`
-                        : activeProjectId
-                          ? "Select a KödChat thread first"
-                          : "Open a project and select a KödChat thread first"
+                        : "Open a project first"
                     }
                     className="rounded border border-border px-2 py-1 text-text hover:bg-surface-hover disabled:opacity-40"
                   >
                     open a terminal to log in
                   </button>
-                  {!hasActiveChat && (
+                  {!canLogInHere && (
                     <span
                       id={`chat-login-guidance-${provider.id}`}
                       className="text-right text-[10px] text-text-dim"
                     >
-                      {activeProjectId
-                        ? "Select a KödChat thread before opening a login terminal."
-                        : "Open a project and select a KödChat thread before opening a login terminal."}
+                      Open a project before opening a login terminal.
                     </span>
                   )}
                 </div>

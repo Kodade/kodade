@@ -5,26 +5,17 @@
 
 import type { StoreApi } from "zustand/vanilla";
 import type { ProjectsState } from "../store/projects";
-import { isChatSession } from "../store/projects";
 import { AVAILABLE_PROVIDERS, loginCommandFor } from "./catalog";
 import { buildRemoteProgramLaunch } from "../ssh/command";
 import { remoteSessionBase, remoteTargetForProjectId } from "../ssh/model";
 
-// True when a login terminal has somewhere to open. The chat-first desktop
-// shell hangs every local PTY off the selected chat thread, so a project with
-// no chat selected has no terminal host yet; a remote project always opens its
-// own session. Callers disable the login affordance rather than let it fail.
+// True when a login terminal has somewhere to open. A login shell now hosts at
+// project scope, so any active project can open one whether or not a chat is
+// selected (v2.0 P4 slice 3); a remote project always opens its own session.
+// Only a project-less state has no host. Callers disable the login affordance
+// rather than let it fail.
 export function canOpenLoginTerminal(state: ProjectsState): boolean {
-  const projectId = state.activeProjectId;
-  if (!projectId) return false;
-  if (remoteTargetForProjectId(state.remoteTargets, projectId)) return true;
-  const sessionId = state.activeSessionByProject[projectId];
-  return state.sessions.some(
-    (session) =>
-      session.id === sessionId &&
-      session.projectId === projectId &&
-      isChatSession(session),
-  );
+  return state.activeProjectId !== null;
 }
 
 // Rejects when there is no terminal to open into (see canOpenLoginTerminal) so

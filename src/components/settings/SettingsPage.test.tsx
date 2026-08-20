@@ -753,8 +753,27 @@ describe("settings page", () => {
     expect(onLogin).toHaveBeenCalledWith("claude");
   });
 
-  it("requires an active KödChat thread before offering a login terminal", async () => {
+  // Slice 3: a login terminal hosts at project scope, so an open project with
+  // no chat can still sign in. Only a project-less state disables the button.
+  it("offers a login terminal from an open project even with no chat selected", async () => {
     const onLogin = vi.fn();
+    // beforeEach sets an active project with no selected chat.
+    await render(<ProvidersSection onLogin={onLogin} />);
+
+    const button = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find(
+      (candidate) =>
+        candidate.textContent?.trim() === "open a terminal to log in",
+    );
+    expect(button?.disabled).toBe(false);
+    await act(async () => button?.click());
+    expect(onLogin).toHaveBeenCalledWith("claude");
+  });
+
+  it("requires an open project before offering a login terminal", async () => {
+    const onLogin = vi.fn();
+    appStore.setState({ activeProjectId: null, projects: [] });
     await render(<ProvidersSection onLogin={onLogin} />);
 
     const button = Array.from(
@@ -765,7 +784,7 @@ describe("settings page", () => {
     );
     expect(button?.disabled).toBe(true);
     expect(container?.textContent).toContain(
-      "Select a KödChat thread before opening a login terminal.",
+      "Open a project before opening a login terminal.",
     );
     await act(async () => button?.click());
     expect(onLogin).not.toHaveBeenCalled();

@@ -71,7 +71,7 @@ function TaskFailure({
             aria-describedby={canLogIn ? undefined : guidanceId}
             title={
               !canLogIn
-                ? "Open a chat in this project first"
+                ? "Open a project first"
                 : provider
                   ? `Open a terminal running ${loginCommandFor(provider)}`
                   : "Open a terminal to log in"
@@ -82,7 +82,7 @@ function TaskFailure({
           </button>
           {!canLogIn && (
             <p id={guidanceId} className="mt-1 text-[10px] text-text-dim">
-              Open a chat in this project before opening a login terminal.
+              Open a project before opening a login terminal.
             </p>
           )}
         </>

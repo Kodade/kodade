@@ -261,12 +261,17 @@ describe("KodworkPane", () => {
     },
   );
 
-  // The chat-first shell has no PTY host until a chat is selected, so the
-  // button says so instead of failing on click.
-  it("disables the login terminal with guidance when only a task is open", async () => {
+  // Slice 3: the login terminal hosts at project scope, so a task can sign in
+  // with no chat thread in the project — the button is enabled and clicking it
+  // opens a project-scoped login shell.
+  it("opens a project-scoped login terminal when only a task is open", async () => {
     const workStore = await signedOutTask("claude", "Not logged in.");
     const { store: projectsStore, registry, projectId } = await projectsSetup();
     projectsStore.getState().addWorkSession(projectId);
+    // No chat threads exist in the project.
+    expect(
+      projectsStore.getState().sessions.some((s) => s.kind === "chat"),
+    ).toBe(false);
 
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -281,15 +286,17 @@ describe("KodworkPane", () => {
     const button = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.includes("log in"),
     )!;
-    expect(button.disabled).toBe(true);
-    const guidance = card.querySelector(`#${button.getAttribute("aria-describedby")}`);
-    expect(guidance?.textContent).toContain("Open a chat in this project");
+    expect(button.disabled).toBe(false);
 
     await act(async () => {
       button.click();
       await Promise.resolve();
     });
-    expect(registry.write).not.toHaveBeenCalled();
+    for (let i = 0; i < 4; i++) await act(async () => await Promise.resolve());
+
+    expect(registry.write.mock.calls.map(([, data]) => data)).toContain(
+      "claude auth login\r",
+    );
   });
 
   it("keeps an ordinary failure a plain error with no login affordance", async () => {
