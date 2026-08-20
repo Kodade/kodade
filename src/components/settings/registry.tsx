@@ -14,8 +14,8 @@ import { DEFAULT_CHAT_PROVIDER } from "../../store/projects";
 import { DEFAULT_LOCAL_MODEL_PREFERENCES } from "../../local/models";
 import { DEFAULT_VOICE_PREFERENCES } from "../../voice/models";
 import { AdvancedSection } from "./AdvancedSection";
-import { ChatSection } from "./ChatSection";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
+import { ProvidersSection } from "./ProvidersSection";
 import { MemorySection } from "./MemorySection";
 import { ChatIcon, ChipIcon, MemoryGlyph, SlidersIcon } from "./icons";
 
@@ -51,9 +51,9 @@ export const SETTINGS_SECTIONS = [
   {
     id: "providers",
     label: "providers",
-    description: "Which agents answer your chats, and where new ones start.",
+    description: "Installed agent CLIs, sign-in, and where new chats start.",
     icon: ChatIcon,
-    Content: ChatSection,
+    Content: ProvidersSection,
     restoreDefaults: () =>
       appStore.getState().setChatProvider(DEFAULT_CHAT_PROVIDER),
   },

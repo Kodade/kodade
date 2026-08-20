@@ -153,6 +153,12 @@ export type Provider = {
   name: string; // display label on the chip
   bin: string; // executable probed with `<bin> --version` and launched
   launch: string; // command typed into the terminal to start it
+  // The CLI's own sign-in command. Every shipped agent CLI has a one-purpose
+  // login flow, so this is the command Ködade types instead of dropping the
+  // user into a TUI to find sign-in themselves. Omitted only by a provider
+  // with no sign-in at all (Ollama, bundled KödLocal). Ködade types it into a
+  // real terminal — it never sees or stores the credential.
+  login?: string;
   install: string; // where to get it, shown when it's missing
   // KödChat (issue #163): omit for a CLI with no structured headless mode.
   stream?: ProviderStream;
@@ -251,6 +257,7 @@ export const PROVIDERS: Provider[] = [
     name: "Claude Code",
     bin: "claude",
     launch: "claude",
+    login: "claude auth login",
     install: "https://docs.anthropic.com/en/docs/claude-code",
     // Verified against the shipped CLI: `--output-format stream-json` requires
     // `--print` and `--verbose`; `--include-partial-messages` adds the token
@@ -360,6 +367,7 @@ export const PROVIDERS: Provider[] = [
     name: "Codex",
     bin: "codex",
     launch: "codex",
+    login: "codex login",
     install: "https://github.com/openai/codex",
     // Verified against the shipped CLI. `codex exec` reads its prompt from
     // stdin when none is given as an argument; the resume subcommand needs an
@@ -432,6 +440,7 @@ export const PROVIDERS: Provider[] = [
     name: "Grok Build",
     bin: "grok",
     launch: "grok",
+    login: "grok login",
     install: "https://docs.x.ai/build",
     // `--output-format streaming-json` emits a structured stream; the prompt
     // is piped through `--prompt-file /dev/stdin`, and `--resume <id>`
@@ -500,6 +509,7 @@ export const PROVIDERS: Provider[] = [
     name: "OpenCode",
     bin: "opencode",
     launch: "opencode",
+    login: "opencode auth login",
     install: "https://opencode.ai",
     // Verified against OpenCode 1.18.15: `opencode run --format json` accepts
     // piped stdin, reports raw JSON events, and resumes with `--session`.
@@ -624,6 +634,19 @@ export function supportsChat(provider: Provider): boolean {
 
 export function isOllamaChat(provider: Provider | undefined): boolean {
   return provider?.chat?.kind === "ollama";
+}
+
+// What Ködade types into a terminal to get a provider signed in: the CLI's own
+// sign-in command, falling back to a bare launch for a provider that has no
+// sign-in flow. KödSSH runs the same line on the remote host.
+export function loginCommandFor(provider: Provider, remote = false): string {
+  if (!remote || !provider.remote) return provider.login ?? provider.launch;
+  // A renamed remote binary (bundled KödLocal) falls back to a bare remote
+  // launch. Deliberate today-only simplification: KödLocal has no login flow,
+  // so there is no command to rewrite for the remote binary name.
+  return provider.remote.bin === provider.bin
+    ? (provider.login ?? provider.remote.launch)
+    : provider.remote.launch;
 }
 
 // Trim raw `--version` stdout to a short token for the chip. CLIs print wildly

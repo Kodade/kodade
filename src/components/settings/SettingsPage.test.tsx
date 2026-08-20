@@ -22,7 +22,7 @@ import { PROVIDERS, supportsChat } from "../../providers/catalog";
 import { TerminalPane } from "../TerminalPane";
 import { releaseManifestFor } from "../../release/manifest";
 import { AdvancedSection } from "./AdvancedSection";
-import { ChatSection } from "./ChatSection";
+import { ProvidersSection } from "./ProvidersSection";
 import { SettingsEntry } from "./SettingsEntry";
 import { SettingsPage } from "./SettingsPage";
 
@@ -149,7 +149,7 @@ describe("settings page", () => {
     expect(settingsViewStore.getState().section).toBe("providers");
     expect(navLink("providers")?.getAttribute("aria-current")).toBe("page");
     expect(navLink("ködchat")).toBeUndefined();
-    expect(container?.textContent).toContain("agents that can chat");
+    expect(container?.textContent).toContain("agent CLIs");
   });
 
   it("redirects the retired keybindings deep link to general", async () => {
@@ -693,11 +693,11 @@ describe("settings page", () => {
     expect(markup).not.toContain("agent CLIs");
   });
 
-  // --- KödChat section (issue #163) ---
+  // --- Providers section (issues #163, #63) ---
 
-  it("refreshes agent CLI status from the unified KödChat section", async () => {
+  it("refreshes agent CLI status from the Providers section", async () => {
     const onRefresh = vi.fn();
-    await render(<ChatSection onRefresh={onRefresh} />);
+    await render(<ProvidersSection onRefresh={onRefresh} />);
 
     const refresh = Array.from(
       container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
@@ -708,7 +708,7 @@ describe("settings page", () => {
   });
 
   it("marks providers without a stream recipe as terminal only", async () => {
-    await render(<ChatSection />);
+    await render(<ProvidersSection />);
 
     // Only the two verified dialects can answer a chat thread; the rest are
     // labelled rather than silently missing.
@@ -736,7 +736,7 @@ describe("settings page", () => {
       ],
       activeSessionByProject: { project: "chat-project" },
     });
-    await render(<ChatSection onLogin={onLogin} />);
+    await render(<ProvidersSection onLogin={onLogin} />);
 
     const buttons = Array.from(
       container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
@@ -747,14 +747,15 @@ describe("settings page", () => {
     expect(buttons).toHaveLength(1);
 
     await act(async () => buttons[0].click());
-    // The provider's own interactive command, in a real terminal — Kodade
-    // never proxies the credential.
-    expect(onLogin).toHaveBeenCalledWith("claude", "claude");
+    // The shared login helper turns the provider id into that CLI's own
+    // sign-in command, in a real terminal — Kodade never proxies the
+    // credential (see providers/login.ts and catalog.test.ts).
+    expect(onLogin).toHaveBeenCalledWith("claude");
   });
 
   it("requires an active KödChat thread before offering a login terminal", async () => {
     const onLogin = vi.fn();
-    await render(<ChatSection onLogin={onLogin} />);
+    await render(<ProvidersSection onLogin={onLogin} />);
 
     const button = Array.from(
       container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
@@ -771,7 +772,7 @@ describe("settings page", () => {
   });
 
   it("refreshes Ollama explicitly and after opening its start terminal", async () => {
-    const onLogin = vi.fn(async () => undefined);
+    const onStartOllama = vi.fn(async () => undefined);
     const refresh = vi
       .spyOn(chatStore.getState(), "refreshOllama")
       .mockResolvedValue(undefined);
@@ -786,7 +787,7 @@ describe("settings page", () => {
       ],
       activeSessionByProject: { project: "chat-project" },
     });
-    await render(<ChatSection onLogin={onLogin} />);
+    await render(<ProvidersSection onStartOllama={onStartOllama} />);
 
     const button = (label: string) =>
       [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
@@ -799,7 +800,7 @@ describe("settings page", () => {
       button("start Ollama")?.click();
       await Promise.resolve();
     });
-    expect(onLogin).toHaveBeenCalledWith("ollama serve", "ollama");
+    expect(onStartOllama).toHaveBeenCalledWith("ollama serve", "ollama");
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
@@ -811,14 +812,14 @@ describe("settings page", () => {
         message: null,
       },
     });
-    await render(<ChatSection />);
+    await render(<ProvidersSection />);
     expect(container?.textContent).not.toContain("start Ollama");
     expect(container?.textContent).toContain("refresh models");
   });
 
   it("persists the default provider for new chats", async () => {
     appStore.setState({ chatProvider: "claude" });
-    await render(<ChatSection />);
+    await render(<ProvidersSection />);
 
     const select = container?.querySelector<HTMLSelectElement>(
       'select[aria-label="Default provider for new chats"]',

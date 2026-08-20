@@ -19,13 +19,77 @@ import {
   type KodworkToolLine,
 } from "../../kodwork/model";
 import type { AgentPlanItem } from "../../agents/contract";
+import type { ProjectsState } from "../../store/projects";
 import {
   ACCESS_LEVELS,
   AVAILABLE_PROVIDERS,
+  loginCommandFor,
   type ChatAccessLevel,
 } from "../../providers/catalog";
+import { canOpenLoginTerminal, openLoginTerminal } from "../../providers/login";
 import { ComposerMenu } from "../chat/ComposerMenu";
 import { ProviderLogo } from "../chat/ProviderLogo";
+
+// A task failure, with the one remedy that isn't "try again": an auth failure
+// offers the provider's own sign-in flow in a real terminal, exactly like
+// KödChat's transcript auth card. Ködade never handles the credential.
+//
+// The login terminal opens against the project's selected chat, so when there
+// is no chat to host it the button is disabled with guidance instead of
+// failing on click — the same treatment Settings → Providers gives it.
+function TaskFailure({
+  task,
+  projectsStore,
+  className = "",
+}: {
+  task: KodworkTask;
+  projectsStore: StoreApi<ProjectsState>;
+  className?: string;
+}) {
+  const canLogIn = useStore(projectsStore, canOpenLoginTerminal);
+  if (!task.error) return null;
+  const guidanceId = `kodwork-login-guidance-${task.id}`;
+  const provider = AVAILABLE_PROVIDERS.find((entry) => entry.id === task.providerId);
+  return (
+    <div
+      data-testid={task.needsLogin ? "kodwork-auth-card" : "kodwork-error"}
+      className={className}
+    >
+      <p className="whitespace-pre-wrap break-words text-xs text-[var(--kd-error)]">
+        {task.error}
+      </p>
+      {task.needsLogin && (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              void openLoginTerminal(projectsStore, task.providerId).catch(
+                (error) => console.error("kodade: login terminal failed", error),
+              );
+            }}
+            disabled={!canLogIn}
+            aria-describedby={canLogIn ? undefined : guidanceId}
+            title={
+              !canLogIn
+                ? "Open a chat in this project first"
+                : provider
+                  ? `Open a terminal running ${loginCommandFor(provider)}`
+                  : "Open a terminal to log in"
+            }
+            className="mt-2 rounded border border-border px-2 py-1 text-xs text-text hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            Open a terminal to log in
+          </button>
+          {!canLogIn && (
+            <p id={guidanceId} className="mt-1 text-[10px] text-text-dim">
+              Open a chat in this project before opening a login terminal.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 // Only CLIs with a verified headless stream can run a background task; Ollama
 // (HTTP chat, no tool loop) is intentionally absent.
@@ -54,9 +118,11 @@ const STATE_CLASS: Record<KodworkTask["state"], string> = {
 export function KodworkPane({
   taskId,
   workStore = kodworkStore,
+  projectsStore = appStore,
 }: {
   taskId: string;
   workStore?: StoreApi<KodworkState>;
+  projectsStore?: StoreApi<ProjectsState>;
 }) {
   const task = useStore(workStore, (s) => s.tasks[taskId]);
 
@@ -70,9 +136,9 @@ export function KodworkPane({
   return (
     <div className="absolute inset-0 flex flex-col overflow-y-auto bg-bg">
       {task.state === "draft" ? (
-        <TaskComposer task={task} workStore={workStore} />
+        <TaskComposer task={task} workStore={workStore} projectsStore={projectsStore} />
       ) : (
-        <TaskProgress task={task} workStore={workStore} />
+        <TaskProgress task={task} workStore={workStore} projectsStore={projectsStore} />
       )}
     </div>
   );
@@ -83,12 +149,14 @@ export function KodworkPane({
 function TaskComposer({
   task,
   workStore,
+  projectsStore,
 }: {
   task: KodworkTask;
   workStore: StoreApi<KodworkState>;
+  projectsStore: StoreApi<ProjectsState>;
 }) {
   const projectPath = useStore(
-    appStore,
+    projectsStore,
     (s) => s.projects.find((project) => project.id === task.projectId)?.path ?? null,
   );
   const provider = TASK_PROVIDERS.find((entry) => entry.id === task.providerId);
@@ -195,9 +263,7 @@ function TaskComposer({
       {templatesLoading && <p className="mt-2 text-[10px] text-text-dim">Loading installed skill templates…</p>}
       {templatesError && <p className="mt-2 text-[10px] text-text-dim">Skill templates unavailable: {templatesError}</p>}
       <ScheduleEditor task={task} workStore={workStore} />
-      {task.error && (
-        <p className="mt-3 text-xs text-[var(--kd-error)]">{task.error}</p>
-      )}
+      <TaskFailure task={task} projectsStore={projectsStore} className="mt-3" />
 
       {task.deniedTools.length > 0 && (
         <section className="mt-4 rounded-lg border border-amber-400/40 bg-amber-400/5 px-3 py-2">
@@ -215,9 +281,11 @@ function TaskComposer({
 function TaskProgress({
   task,
   workStore,
+  projectsStore,
 }: {
   task: KodworkTask;
   workStore: StoreApi<KodworkState>;
+  projectsStore: StoreApi<ProjectsState>;
 }) {
   const running = task.state === "running";
   const live = running || task.permissionRequest !== null;
@@ -330,11 +398,7 @@ function TaskProgress({
         </p>
       )}
 
-      {task.error && (
-        <p className="mt-4 whitespace-pre-wrap break-words text-xs text-[var(--kd-error)]">
-          {task.error}
-        </p>
-      )}
+      <TaskFailure task={task} projectsStore={projectsStore} className="mt-4" />
 
       {task.permissionRequest && (
         <PermissionPrompt task={task} workStore={workStore} />

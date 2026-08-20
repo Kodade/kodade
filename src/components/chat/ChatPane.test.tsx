@@ -682,6 +682,56 @@ describe("ChatPane", () => {
     expect(host.querySelector('[data-testid="chat-error-card"]')).toBeNull();
   });
 
+  // Signing in has to be reachable from the chat surface for EVERY provider —
+  // the settings pane is a convenience, not the only door (issue #63).
+  it.each([
+    ["claude", "Invalid API key · Please run /login", "claude auth login"],
+    ["codex", "stream error: unauthorized; run `codex login`", "codex login"],
+    ["grok", "Error: authentication failed (401)", "grok login"],
+    ["opencode", "Error: OpenRouter API key is missing.", "opencode auth login"],
+  ])(
+    "renders the auth card and runs %s's own login command in a terminal",
+    async (providerId, stderr, loginCommand) => {
+      const {
+        host,
+        root,
+        projectsStore,
+        chatThreadsStore,
+        agent,
+        projectId,
+        terminalRegistry,
+      } = await mount();
+      mounted = root;
+
+      await act(async () => {
+        const threadId = projectsStore.getState().addChatThread(projectId, providerId)!;
+        await chatThreadsStore.getState().openThread(threadId, projectId, providerId);
+        await chatThreadsStore.getState().send(threadId, "hello");
+        // Not starts[0]: a provider with model discovery (OpenCode) spawns a
+        // probe first, so the chat turn is the most recent start.
+        agent.exit(agent.starts.at(-1)!.id, 1, stderr);
+      });
+
+      const card = host.querySelector('[data-testid="chat-auth-card"]');
+      expect(card?.textContent).toContain(stderr);
+
+      const login = [
+        ...host.querySelectorAll<HTMLButtonElement>(
+          '[data-testid="chat-auth-card"] button',
+        ),
+      ].find((button) => button.textContent?.includes("log in"))!;
+      await act(async () => {
+        login.click();
+        await Promise.resolve();
+      });
+      for (let i = 0; i < 4; i++) await act(async () => await Promise.resolve());
+
+      expect(
+        terminalRegistry.write.mock.calls.map(([, data]) => data),
+      ).toContain(`${loginCommand}\r`);
+    },
+  );
+
   // The login escape hatch must still work when the host owns the terminal:
   // the split never renders there, so the pane asks instead of opening one.
   it("asks its host for a terminal on an auth failure when the toggle is suppressed", async () => {

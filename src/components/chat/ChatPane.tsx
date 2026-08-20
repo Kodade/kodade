@@ -36,11 +36,8 @@ import { AVAILABLE_PROVIDERS, isOllamaChat } from "../../providers/catalog";
 import { chatLinkTarget } from "../../browser/link-target";
 import { capabilitiesStore } from "../../platform/capabilities";
 import { openMarkdownLink } from "../../markdown/links";
-import { buildRemoteProgramLaunch } from "../../ssh/command";
-import {
-  remoteSessionBase,
-  remoteTargetForProjectId,
-} from "../../ssh/model";
+import { openLoginTerminal } from "../../providers/login";
+import { remoteTargetForProjectId } from "../../ssh/model";
 
 // Falls back only when a thread's own provider can't be determined; the
 // user's chosen default (settings) drives NEW threads.
@@ -251,7 +248,9 @@ export function ChatPane({
                     } else {
                       onTerminalRequest?.();
                     }
-                    void openLoginTerminal(projectsStore, thread.providerId);
+                    void openLoginTerminal(projectsStore, thread.providerId).catch(
+                      (error) => console.error("kodade: login terminal failed", error),
+                    );
                   }}
                 />
               </div>
@@ -477,34 +476,6 @@ function providerForSession(session: { name: string } | null): string {
 
 function startThread(store: StoreApi<ProjectsState>, projectId: string): void {
   store.getState().addChatThread(projectId, store.getState().chatProvider);
-}
-
-// The auth escape hatch: open a real terminal running the provider's own login
-// flow. Kodade wraps that flow; it never sees or stores the credential.
-async function openLoginTerminal(
-  store: StoreApi<ProjectsState>,
-  providerId: string,
-): Promise<void> {
-  const provider = AVAILABLE_PROVIDERS.find(
-    (candidate) => candidate.id === providerId,
-  );
-  if (!provider) return;
-  try {
-    const state = store.getState();
-    const target = state.activeProjectId
-      ? remoteTargetForProjectId(state.remoteTargets, state.activeProjectId)
-      : null;
-    await state.launchInSession(
-      target
-        ? buildRemoteProgramLaunch(
-            provider.remote?.launch ?? provider.launch,
-          )
-        : provider.launch,
-      target ? remoteSessionBase(provider.id) : provider.id,
-    );
-  } catch (error) {
-    console.error("kodade: KödChat login terminal failed", error);
-  }
 }
 
 function TerminalToggle({

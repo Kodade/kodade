@@ -1,9 +1,12 @@
-// KödChat settings: which CLIs can answer a chat thread, whether they're
-// installed and signed in, and which one new threads start on.
+// The Providers settings section: the agent CLIs Ködade knows about, whether
+// each one is installed, a sign-in shortcut for the ones that are, and which
+// provider a new chat starts on.
 //
-// The login button is the same affordance as the transcript's auth card: it
-// opens a real terminal running the provider's own login command. Kodade wraps
-// that flow and never sees or stores the credential.
+// Signing in is not gated on this pane. An auth failure inside a chat thread
+// (or a KödWork task) offers the same login button inline, so these buttons are
+// a convenience — the same affordance in the place you keep provider state.
+// Either way it opens a real terminal running the provider's own login
+// command; Ködade wraps that flow and never sees or stores the credential.
 
 import { useStore } from "zustand";
 import { appStore, chatStore, providersStore } from "../../store/appStore";
@@ -13,22 +16,32 @@ import { isChatSession } from "../../store/projects";
 import {
   AVAILABLE_PROVIDERS,
   isOllamaChat,
+  loginCommandFor,
   supportsChat,
 } from "../../providers/catalog";
+import { openLoginTerminal } from "../../providers/login";
 import { SettingsCard, SettingsRow } from "./SettingsCard";
 
-export function ChatSection({
-  onLogin = (launch, providerId) =>
+export function ProvidersSection({
+  // Sign-in goes through the same shared helper the chat and KödWork surfaces
+  // use, so a remote project gets the remote-aware command and session.
+  onLogin = (providerId) =>
+    openLoginTerminal(appStore, providerId).catch((error) => {
+      console.error("kodade: login terminal failed", error);
+    }),
+  // Ollama has no sign-in; its button starts the local server instead.
+  onStartOllama = (command, providerId) =>
     appStore
       .getState()
-      .launchInSession(launch, providerId)
+      .launchInSession(command, providerId)
       .catch((error) => {
-        console.error("kodade: KödChat login terminal failed", error);
+        console.error("kodade: Ollama start terminal failed", error);
       }),
   onRefresh = () => providersStore.getState().detectAll(),
   chatThreadsStore = chatStore,
 }: {
-  onLogin?: (launch: string, providerId: string) => void | Promise<void>;
+  onLogin?: (providerId: string) => void | Promise<void>;
+  onStartOllama?: (command: string, providerId: string) => void | Promise<void>;
   onRefresh?: () => void | Promise<void>;
   chatThreadsStore?: StoreApi<ChatState>;
 } = {}) {
@@ -54,7 +67,7 @@ export function ChatSection({
   return (
     <div className="space-y-4 text-xs">
       <SettingsCard
-        title="agents that can chat"
+        title="agent CLIs"
         action={
           <button
             type="button"
@@ -107,7 +120,7 @@ export function ChatSection({
                         type="button"
                         onClick={() => {
                           void Promise.resolve()
-                            .then(() => onLogin("ollama serve", provider.id))
+                            .then(() => onStartOllama("ollama serve", provider.id))
                             .then(() => chatThreadsStore.getState().refreshOllama())
                             .catch((error) => {
                               console.error("kodade: Ollama start terminal failed", error);
@@ -165,14 +178,14 @@ export function ChatSection({
                 <div className="flex max-w-52 flex-col items-end gap-1">
                   <button
                     type="button"
-                    onClick={() => onLogin(provider.launch, provider.id)}
+                    onClick={() => onLogin(provider.id)}
                     disabled={!hasActiveChat}
                     aria-describedby={
                       hasActiveChat ? undefined : `chat-login-guidance-${provider.id}`
                     }
                     title={
                       hasActiveChat
-                        ? `Open a terminal running ${provider.launch}`
+                        ? `Open a terminal running ${loginCommandFor(provider)}`
                         : activeProjectId
                           ? "Select a KödChat thread first"
                           : "Open a project and select a KödChat thread first"
@@ -228,11 +241,11 @@ export function ChatSection({
       </SettingsCard>
 
       <p className="px-1 text-[11px] text-text-dim">
-        KödChat runs CLI agents headlessly and reads their structured output.
-        Each thread's access level — picked in the composer, from plan-only to
-        full access — controls what a turn may read, edit, and run. Turns
-        inherit the sign-in you already did in that CLI. Ollama is different:
-        it uses only your local HTTP chat service and cannot read files or run tools.
+        Ködade runs these CLIs headlessly and reads their structured output, so
+        every turn inherits the sign-in you already did in that CLI. If one is
+        signed out mid-chat, the thread says so and offers the same login
+        terminal right there. Ollama is different: it uses only your local HTTP
+        chat service and cannot read files or run tools.
       </p>
     </div>
   );

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Signing an agent CLI in now lives in the surface where it fails. When a chat
+  turn or a KödWork task stops because the CLI is signed out, the thread or
+  task says so and offers a terminal running that CLI's own sign-in command —
+  `claude auth login`, `codex login`, `grok login`, or `opencode auth login` —
+  so every provider lands on its login flow instead of a TUI, and nothing
+  routes through settings to get working again. Where a login terminal has
+  nowhere to open yet, the button says so instead of failing silently. Ködade
+  still never sees or stores the credential. Settings → Providers keeps the
+  provider identity it is for: which agent CLIs are detected and at what
+  version, where to install a missing one, the same sign-in shortcut, and which
+  provider a new chat starts on.
 - New KödMem setups keep project knowledge in a git-ignored
   `.kodade/knowledge` directory inside the project, with zero setup: enabling
   KödMem for a project now creates the knowledge surface and its files in the

@@ -4,7 +4,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveLocations } from "../harness/locations";
 import { releaseManifestFor } from "../release/manifest";
-import { availableProviders, PROVIDERS, versionToken } from "./catalog";
+import {
+  availableProviders,
+  loginCommandFor,
+  PROVIDERS,
+  versionToken,
+} from "./catalog";
 
 describe("versionToken", () => {
   it("pulls a dotted version out of common banner shapes", () => {
@@ -31,6 +36,28 @@ describe("provider catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(bins).size).toBe(bins.length);
     expect(ids).toEqual(["claude", "codex", "grok", "opencode", "ollama", "kodade-local"]);
+  });
+
+  // Sign-in is reachable from a chat thread, so the command Ködade types has
+  // to actually start each CLI's own login flow (issue #63).
+  it("knows how every chat provider signs in", () => {
+    const command = (id: string) =>
+      loginCommandFor(PROVIDERS.find((provider) => provider.id === id)!);
+    // Every shipped CLI has a one-purpose sign-in flow, so none of them is
+    // dropped into a TUI to hunt for the login screen.
+    expect(command("claude")).toBe("claude auth login");
+    expect(command("grok")).toBe("grok login");
+    expect(command("codex")).toBe("codex login");
+    expect(command("opencode")).toBe("opencode auth login");
+  });
+
+  it("runs the same sign-in line on a remote host, minus a renamed binary", () => {
+    const opencode = PROVIDERS.find((provider) => provider.id === "opencode")!;
+    const local = PROVIDERS.find((provider) => provider.id === "kodade-local")!;
+    expect(loginCommandFor(opencode, true)).toBe("opencode auth login");
+    // KödLocal ships as a differently named remote binary, so the remote
+    // launch wins over any local login line.
+    expect(loginCommandFor(local, true)).toBe(local.remote?.launch);
   });
 
   it("omits KödLocal from the public provider surface", () => {

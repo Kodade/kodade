@@ -1,10 +1,81 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockAgentIpc, MockStorage } from "../../ipc/mock";
+import { appStore } from "../../store/appStore";
+import { createProjectsStore } from "../../store/projects";
 import { newTask } from "../../kodwork/model";
-import type { KodworkState } from "../../kodwork/store";
+import { createKodworkStore, type KodworkState } from "../../kodwork/store";
 import { KodworkPane } from "./KodworkPane";
+
+// The module-global app store is shared by every suite in the process; these
+// tests select projects and sessions on it, so snapshot and put it back.
+let appSnapshot: ReturnType<typeof appStore.getState>;
+beforeEach(() => {
+  appSnapshot = appStore.getState();
+});
+afterEach(() => {
+  appStore.setState(appSnapshot, true);
+});
+
+// Minimal terminal registry: records what a launch actually types into a PTY.
+function fakeRegistry() {
+  return {
+    open: vi.fn(),
+    ready: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    write: vi.fn(async (_id: string, _data: string) => undefined),
+    sync: vi.fn(),
+  };
+}
+
+// A real projects store with one project, exactly as the desktop runtime
+// builds it (PTYs hang off a chat thread, nothing auto-starts).
+async function projectsSetup() {
+  const registry = fakeRegistry();
+  const store = createProjectsStore({
+    storage: new MockStorage(),
+    registry,
+    autoStartTerminal: false,
+    newId: (() => {
+      let n = 0;
+      return () => `s-${++n}`;
+    })(),
+  });
+  await store.getState().hydrate();
+  await store.getState().addProject("/repo");
+  return { store, registry, projectId: store.getState().projects[0].id };
+}
+
+// A real KödWork store driven through the real adapters: the only fake is the
+// process. Returns a task that failed the way a signed-out CLI fails.
+async function signedOutTask(providerId: string, stderr: string) {
+  const agent = new MockAgentIpc();
+  const store = createKodworkStore({
+    agent,
+    storage: new MockStorage(),
+    memory: {
+      resolveWorkspace: async () => null,
+      checkpoint: async () => ({ id: "cp-1" }) as never,
+    },
+    projectRoot: () => "/repo",
+    enabled: () => true,
+    newId: (() => {
+      let n = 0;
+      return () => `id-${++n}`;
+    })(),
+    now: () => 1_000,
+    persistDebounceMs: 0,
+  });
+  await store.getState().start();
+  await store.getState().openTask("t1", "project-1");
+  store.getState().setOutcome("t1", "tidy the docs folder");
+  store.getState().setProvider("t1", providerId);
+  await store.getState().startTask("t1");
+  agent.exit(agent.starts.at(-1)!.id, 1, stderr);
+  return store;
+}
 
 function progressStore() {
   const task = {
@@ -141,5 +212,103 @@ describe("KodworkPane", () => {
     expect(host.textContent).toContain("Reject & continue");
     expect(host.textContent).toContain("Restore output");
     expect(host.querySelector<HTMLButtonElement>('button[title="Continue this task"]')?.disabled).toBe(true);
+  });
+
+  // KödWork hits the same signed-out CLI as KödChat, so it offers the same
+  // remedy in place instead of sending the user to settings (issue #63). The
+  // failure travels the real route: CLI stderr → adapter → engine's auth
+  // classifier → kodwork store → this card.
+  it.each([
+    ["claude", "Invalid API key · Please run /login", "claude auth login"],
+    ["codex", "stream error: unauthorized; run `codex login`", "codex login"],
+    ["grok", "Error: authentication failed (401)", "grok login"],
+    ["opencode", "Error: OpenRouter API key is missing.", "opencode auth login"],
+  ])(
+    "runs %s's own login command in a real terminal when a task is signed out",
+    async (providerId, stderr, command) => {
+      const workStore = await signedOutTask(providerId, stderr);
+      expect(workStore.getState().tasks.t1).toMatchObject({ needsLogin: true });
+
+      // A selected chat thread is what hosts the login PTY.
+      const { store: projectsStore, registry, projectId } = await projectsSetup();
+      projectsStore.getState().addChatThread(projectId, providerId);
+
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      mounted = createRoot(host);
+      act(() =>
+        mounted?.render(
+          <KodworkPane taskId="t1" workStore={workStore} projectsStore={projectsStore} />,
+        ),
+      );
+
+      const card = host.querySelector('[data-testid="kodwork-auth-card"]');
+      expect(card?.textContent).toContain(stderr);
+      const button = [...card!.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.includes("log in"),
+      )!;
+      expect(button.disabled).toBe(false);
+
+      await act(async () => {
+        button.click();
+        await Promise.resolve();
+      });
+      for (let i = 0; i < 4; i++) await act(async () => await Promise.resolve());
+
+      expect(registry.write.mock.calls.map(([, data]) => data)).toContain(
+        `${command}\r`,
+      );
+    },
+  );
+
+  // The chat-first shell has no PTY host until a chat is selected, so the
+  // button says so instead of failing on click.
+  it("disables the login terminal with guidance when only a task is open", async () => {
+    const workStore = await signedOutTask("claude", "Not logged in.");
+    const { store: projectsStore, registry, projectId } = await projectsSetup();
+    projectsStore.getState().addWorkSession(projectId);
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() =>
+      mounted?.render(
+        <KodworkPane taskId="t1" workStore={workStore} projectsStore={projectsStore} />,
+      ),
+    );
+
+    const card = host.querySelector('[data-testid="kodwork-auth-card"]')!;
+    const button = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.includes("log in"),
+    )!;
+    expect(button.disabled).toBe(true);
+    const guidance = card.querySelector(`#${button.getAttribute("aria-describedby")}`);
+    expect(guidance?.textContent).toContain("Open a chat in this project");
+
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+    expect(registry.write).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ordinary failure a plain error with no login affordance", async () => {
+    const workStore = await signedOutTask("claude", "segmentation fault");
+    const { store: projectsStore, projectId } = await projectsSetup();
+    projectsStore.getState().addChatThread(projectId, "claude");
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() =>
+      mounted?.render(
+        <KodworkPane taskId="t1" workStore={workStore} projectsStore={projectsStore} />,
+      ),
+    );
+
+    expect(host.querySelector('[data-testid="kodwork-auth-card"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kodwork-error"]')?.textContent).toContain(
+      "segmentation fault",
+    );
   });
 });
