@@ -125,6 +125,20 @@ describe("createPersonaStore", () => {
     expect(reopened.list(APP)).toStrictEqual([made]);
   });
 
+  it("get() returns a cloned persona by id, or null for a miss", async () => {
+    const { store } = setup();
+    await store.load();
+    const made = await store.create(APP, { providerId: "claude", skills: ["s1"] });
+    const got = store.get(APP, made.id);
+    expect(got).toStrictEqual(made);
+    // A clone: mutating the result cannot reach store state.
+    got!.skills.push("mutated");
+    expect(store.get(APP, made.id)!.skills).toStrictEqual(["s1"]);
+    // Wrong scope and unknown id both miss.
+    expect(store.get(PROJ_A, made.id)).toBeNull();
+    expect(store.get(APP, "nope")).toBeNull();
+  });
+
   it("deep-copies list results so callers cannot mutate store state", async () => {
     const { store } = setup();
     await store.load();

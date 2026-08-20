@@ -45,6 +45,9 @@ export type PersonaStore = {
   load(): Promise<void>;
   // A snapshot of every persona in one scope.
   list(scope: PersonaScope): AgentPersona[];
+  // One persona by id from a scope, or null when it isn't there. Cloned, so a
+  // caller cannot mutate stored state through the returned object.
+  get(scope: PersonaScope, id: string): AgentPersona | null;
   // Mint and persist a new persona in the scope.
   create(scope: PersonaScope, input: PersonaInput): Promise<AgentPersona>;
   // Patch an existing persona; returns null when the id isn't in that scope.
@@ -132,6 +135,11 @@ export function createPersonaStore(deps: PersonaStoreDeps): PersonaStore {
     list(scope) {
       // Deep copy so a caller cannot mutate a stored persona (or the array).
       return bucket(scope).map((persona) => structuredClone(persona));
+    },
+
+    get(scope, id) {
+      const persona = bucket(scope).find((entry) => entry.id === id);
+      return persona ? structuredClone(persona) : null;
     },
 
     async create(scope, input) {

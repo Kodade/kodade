@@ -28,6 +28,8 @@ import { createMemoryStore } from "../memory/store";
 import { rootsWithGitCheckpointEvents } from "../memory/commit-observer";
 import { createChatStore } from "../chat/store";
 import { createKodworkStore } from "../kodwork/store";
+import { createPersonaStore } from "../agents/persona-store";
+import { createAgentsStore } from "../agents/agents-store";
 import { createKodworkLedger } from "../kodwork/ledger";
 import { createKodworkPresence } from "../kodwork/presence";
 import { tauriKodworkPresencePlatform } from "../kodwork/tauri-presence";
@@ -720,6 +722,13 @@ export const kodworkStore = createKodworkStore({
       ),
   },
 });
+
+// Agent personas (#64). The persona store owns the versioned personas.json
+// document on the same confined app-data surface KödChat and KödWork use; the
+// agents store is the React-subscribable mirror the Agents tab renders from.
+// Additive metadata only — no run engine wiring lives here.
+export const personaStore = createPersonaStore({ storage: tauriStorage });
+export const agentsStore = createAgentsStore({ store: personaStore });
 
 const kodworkPresence = createKodworkPresence({
   platform: tauriKodworkPresencePlatform,

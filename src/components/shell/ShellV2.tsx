@@ -20,9 +20,9 @@ import {
 } from "react-resizable-panels";
 import { useStore } from "zustand";
 import { EditorPane } from "../EditorPane";
-import { Pane } from "../Pane";
 import { WorkspaceFilesPane } from "../WorkspaceFilesPane";
 import { appStore, filesStore } from "../../store/appStore";
+import { AgentsTab } from "./AgentsTab";
 import { CodeTab } from "./CodeTab";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
 import { WorkspacesSidebar } from "./WorkspacesSidebar";
@@ -125,12 +125,7 @@ export function ShellV2() {
   const tabs: KeepAliveTab[] = [
     {
       id: "agents",
-      render: () => (
-        <Placeholder
-          title="agents"
-          line="Agents arrive here in a later update."
-        />
-      ),
+      render: () => <AgentsTab />,
     },
     {
       id: "code",
@@ -192,17 +187,6 @@ export function ShellV2() {
         labelledBy={shellTabButtonId}
       />
     </div>
-  );
-}
-
-// Placeholder tab body. Deliberately plain: it exists so the switcher is real.
-function Placeholder({ title, line }: { title: string; line: string }) {
-  return (
-    <Pane title={title}>
-      <div className="flex h-full items-center justify-center p-6 text-center text-xs text-text-dim">
-        {line}
-      </div>
-    </Pane>
   );
 }
 
