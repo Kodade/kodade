@@ -279,6 +279,10 @@ describe("settings page", () => {
     const createWorkspace = memoryStore.getState().createWorkspace;
     const startPolling = memoryStore.getState().startPolling;
     const stopPolling = memoryStore.getState().stopPolling;
+    const original = {
+      setUpLocalKnowledge: memoryStore.getState().setUpLocalKnowledge,
+      loadKnowledgeSurface: memoryStore.getState().loadKnowledgeSurface,
+    };
     const enabledWorkspace = {
       id: "ws_project",
       canonicalRoot: "/repo",
@@ -291,7 +295,18 @@ describe("settings page", () => {
       createdAt: 1,
       updatedAt: 1,
     };
+    const localSurface = {
+      workspaceId: enabledWorkspace.id,
+      mode: "local" as const,
+      projectId: "kodade",
+      projectDisplayName: "kodade",
+      knowledgeRoot: "/repo/.kodade/knowledge",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const calls: string[] = [];
     const enable = vi.fn().mockImplementation(async () => {
+      calls.push("createWorkspace");
       memoryStore.setState({
         workspace: enabledWorkspace,
         context: {
@@ -308,10 +323,18 @@ describe("settings page", () => {
       });
       return enabledWorkspace;
     });
+    const setUpLocalKnowledge = vi.fn().mockImplementation(async () => {
+      calls.push("setUpLocalKnowledge");
+      memoryStore.setState({ knowledgeSurface: localSurface });
+      return localSurface;
+    });
     memoryStore.setState({
       workspace: null,
+      knowledgeSurface: null,
       openWorkspace: vi.fn().mockResolvedValue(null),
       createWorkspace: enable,
+      setUpLocalKnowledge,
+      loadKnowledgeSurface: vi.fn().mockResolvedValue(localSurface),
       startPolling: vi.fn(),
       stopPolling: vi.fn(),
     });
@@ -332,6 +355,7 @@ describe("settings page", () => {
     expect(memory?.textContent).toContain("Enable KödMem");
     expect(memory?.textContent).toContain("kodade-memory.sqlite3");
     expect(memory?.textContent).toContain("outside the repo");
+    expect(memory?.textContent).toContain(".kodade/knowledge");
     expect(memory?.textContent).not.toContain(
       "Project context that survives agent sessions.",
     );
@@ -341,18 +365,137 @@ describe("settings page", () => {
     await act(async () => {
       activate?.click();
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
     expect(enable).toHaveBeenCalledWith("/repo", "kodade", null);
+    // Zero setup: registration first, then the local surface and its scaffold.
+    expect(calls).toEqual(["createWorkspace", "setUpLocalKnowledge"]);
     expect(
       container?.querySelector('input[aria-label="search KödMem"]'),
     ).not.toBeNull();
+    const surface = container?.querySelector(
+      '[data-knowledge-surface="local"]',
+    );
+    expect(surface?.textContent).toContain("/repo/.kodade/knowledge");
     memoryStore.setState({
       workspace: null,
+      knowledgeSurface: null,
       openWorkspace,
       createWorkspace,
+      setUpLocalKnowledge: original.setUpLocalKnowledge,
+      loadKnowledgeSurface: original.loadKnowledgeSurface,
       startPolling,
       stopPolling,
     });
+  });
+
+  it("keeps KödMem usable and retryable when project knowledge setup fails", async () => {
+    const original = {
+      openWorkspace: memoryStore.getState().openWorkspace,
+      createWorkspace: memoryStore.getState().createWorkspace,
+      setUpLocalKnowledge: memoryStore.getState().setUpLocalKnowledge,
+      loadKnowledgeSurface: memoryStore.getState().loadKnowledgeSurface,
+      startPolling: memoryStore.getState().startPolling,
+      stopPolling: memoryStore.getState().stopPolling,
+    };
+    const enabledWorkspace = {
+      id: "ws_project",
+      canonicalRoot: "/repo",
+      displayName: "kodade",
+      color: null,
+      capturePaused: false,
+      activityRetentionDays: 30,
+      auditRetentionDays: 30,
+      tombstoneRetentionDays: 30,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const localSurface = {
+      workspaceId: enabledWorkspace.id,
+      mode: "local" as const,
+      projectId: "kodade",
+      projectDisplayName: "kodade",
+      knowledgeRoot: "/repo/.kodade/knowledge",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    // Enabling succeeded; only the scaffold failed, exactly as the store
+    // reports it.
+    const setUpLocalKnowledge = vi.fn().mockImplementation(async () => {
+      memoryStore.setState({
+        knowledgeSurface: localSurface,
+        error: "project knowledge path is inaccessible at .kodade/knowledge",
+      });
+      return null;
+    });
+    memoryStore.setState({
+      workspace: null,
+      knowledgeSurface: null,
+      error: null,
+      openWorkspace: vi.fn().mockResolvedValue(null),
+      createWorkspace: vi.fn().mockImplementation(async () => {
+        memoryStore.setState({
+          workspace: enabledWorkspace,
+          context: {
+            workspace: enabledWorkspace,
+            latestCheckpoint: null,
+            pinnedDecisions: [],
+            openTasks: [],
+            recentMemories: [],
+          },
+        });
+        return enabledWorkspace;
+      }),
+      setUpLocalKnowledge,
+      loadKnowledgeSurface: vi.fn().mockResolvedValue(null),
+      startPolling: vi.fn(),
+      stopPolling: vi.fn(),
+    });
+    appStore.setState({
+      activeProjectId: "project",
+      projects: [{ id: "project", name: "kodade", path: "/repo" }],
+    });
+    settingsViewStore.setState({ section: "memory" });
+
+    await render(<SettingsPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const activate = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent === "Enable KödMem");
+    await act(async () => {
+      activate?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The workspace registration survives: the dashboard is there...
+    expect(
+      container?.querySelector('input[aria-label="search KödMem"]'),
+    ).not.toBeNull();
+    // ...the surface is shown as local, never as "no surface yet"...
+    const panel = container?.querySelector('[data-knowledge-surface="local"]');
+    expect(panel?.textContent).toContain("/repo/.kodade/knowledge");
+    expect(panel?.querySelector('[role="alert"]')?.textContent).toContain(
+      "inaccessible",
+    );
+    // ...and the knowledge files are retryable from the same action.
+    const retry = Array.from(
+      panel?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent === "Retry knowledge files");
+    expect(retry).toBeDefined();
+    await act(async () => {
+      retry?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(setUpLocalKnowledge).toHaveBeenCalledTimes(2);
+
+    memoryStore.setState({ workspace: null, error: null, ...original });
   });
 
   it("relinks moved project memory by stored identity after its old folder disappears", async () => {

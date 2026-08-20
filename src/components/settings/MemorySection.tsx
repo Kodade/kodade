@@ -1,18 +1,33 @@
 import { useEffect, useState } from "react";
 import { useStore } from "zustand";
-import type { MemoryWorkspace } from "../../ipc/contract";
+import type { MemoryIpc, MemoryWorkspace } from "../../ipc/contract";
 import { memory as memoryIpc } from "../../ipc/transport";
 import { nativeEquals } from "../../platform/native-path";
 import { appStore, memoryStore } from "../../store/appStore";
 import { MemoryPane } from "../MemoryPane";
-import { ProjectsVaultSetup } from "./ProjectsVaultSetup";
+import { KnowledgeSurfacePanel } from "./KnowledgeSurfacePanel";
+import type { ProjectsVaultIpc } from "./ProjectsVaultSetup";
 
 type SetupState = "checking" | "disabled" | "enabling" | "ready";
 
-export function MemorySection() {
+export type MemorySectionIpc = ProjectsVaultIpc & Pick<MemoryIpc, "databasePath">;
+
+export function MemorySection({
+  ipc = memoryIpc,
+}: {
+  ipc?: MemorySectionIpc;
+} = {}) {
   const activeProjectId = useStore(appStore, (state) => state.activeProjectId);
   const projects = useStore(appStore, (state) => state.projects);
   const workspace = useStore(memoryStore, (state) => state.workspace);
+  const knowledgeSurface = useStore(
+    memoryStore,
+    (state) => state.knowledgeSurface,
+  );
+  const knowledgeSurfaceError = useStore(
+    memoryStore,
+    (state) => state.knowledgeSurfaceError,
+  );
   const error = useStore(memoryStore, (state) => state.error);
   const project =
     projects.find((candidate) => candidate.id === activeProjectId) ?? null;
@@ -29,10 +44,17 @@ export function MemorySection() {
   const [relinkCandidates, setRelinkCandidates] = useState<MemoryWorkspace[]>(
     [],
   );
+  // The knowledge step is tracked separately from workspace registration: a
+  // failure here must never make the workspace itself look unusable.
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
+  const [resolvedSurfaceFor, setResolvedSurfaceFor] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
-    void memoryIpc
+    void ipc
       .databasePath()
       .then((path) => {
         if (!cancelled) setDatabasePath(path);
@@ -41,7 +63,33 @@ export function MemorySection() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [ipc]);
+
+  // Read-only resolution of the existing surface. Workspaces registered before
+  // local knowledge existed are never upgraded here — only by the explicit
+  // action in the panel.
+  useEffect(() => {
+    if (!workspaceMatches || !workspace || setupState !== "ready") return;
+    if (resolvedSurfaceFor === workspace.id) return;
+    let cancelled = false;
+    void memoryStore
+      .getState()
+      .loadKnowledgeSurface()
+      .then(() => {
+        if (!cancelled) setResolvedSurfaceFor(workspace.id);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceMatches, workspace?.id, setupState, resolvedSurfaceFor]);
+
+  // Re-resolve after something else changed the surface: a saved vault mapping
+  // turns a bare workspace into a vault one, and a failed resolve is retryable.
+  const resolveSurface = async (workspaceId: string) => {
+    await memoryStore.getState().loadKnowledgeSurface();
+    setResolvedSurfaceFor(workspaceId);
+  };
 
   useEffect(() => {
     if (!project) return;
@@ -80,18 +128,70 @@ export function MemorySection() {
     };
   }, [project?.id, project?.path, workspaceMatches]);
 
+  // Enable + scaffold, the zero-setup default. Registration comes first so a
+  // knowledge failure can never orphan it; the surface step is then retryable
+  // from the panel and `enable_local_knowledge` is idempotent.
+  const setUpKnowledge = async (workspaceId: string) => {
+    setKnowledgeBusy(true);
+    setKnowledgeError(null);
+    const surface = await memoryStore.getState().setUpLocalKnowledge();
+    if (!surface) {
+      setKnowledgeError(
+        memoryStore.getState().error ??
+          "Setting up project knowledge failed. KödMem is still enabled for this project.",
+      );
+    }
+    setResolvedSurfaceFor(workspaceId);
+    setKnowledgeBusy(false);
+  };
+
   const enable = async () => {
     if (!project || setupState === "enabling") return;
     setSetupState("enabling");
+    let registered: MemoryWorkspace;
     try {
-      await memoryStore
+      registered = await memoryStore
         .getState()
         .createWorkspace(project.path, project.name, project.color ?? null);
-      setSetupState("ready");
     } catch {
       setSetupState("disabled");
+      return;
     }
+    setSetupState("ready");
+    await setUpKnowledge(registered.id);
   };
+
+  const switchToVault = async () => {
+    if (!workspace || knowledgeBusy) return;
+    setKnowledgeBusy(true);
+    setKnowledgeError(null);
+    const switched = await memoryStore.getState().turnOffLocalKnowledge();
+    if (!switched) {
+      setKnowledgeError(
+        memoryStore.getState().error ?? "Switching to vault sync failed.",
+      );
+    }
+    setKnowledgeBusy(false);
+  };
+
+  // Until the surface is resolved the panel shows a placeholder, so a local or
+  // vault workspace never flashes the "no knowledge surface yet" copy.
+  const knowledgePanel =
+    workspaceMatches && workspace ? (
+      <KnowledgeSurfacePanel
+        workspace={workspace}
+        surface={knowledgeSurface}
+        busy={knowledgeBusy}
+        loading={resolvedSurfaceFor !== workspace.id}
+        error={knowledgeError}
+        resolveError={knowledgeSurfaceError}
+        onSetUpLocal={() => void setUpKnowledge(workspace.id)}
+        onSwitchToVault={() => void switchToVault()}
+        onRetryResolve={() => void resolveSurface(workspace.id)}
+        onMappingChanged={() => void resolveSurface(workspace.id)}
+        ipc={ipc}
+      />
+    ) : null;
 
   const relinkFrom = async (existing: MemoryWorkspace) => {
     if (!project || setupState === "enabling") return;
@@ -125,7 +225,7 @@ export function MemorySection() {
         data-settings-memory="true"
         className="flex h-full min-h-0 flex-col"
       >
-        <ProjectsVaultSetup workspace={null} />
+        <KnowledgeSurfacePanel workspace={null} surface={null} ipc={ipc} />
         <div className="flex flex-1 items-center justify-center text-xs text-text-dim">
           Open a project to set up KödMem.
         </div>
@@ -136,7 +236,7 @@ export function MemorySection() {
   if (workspaceMatches && setupState === "ready") {
     return (
       <div data-settings-memory="true" className="flex h-full min-h-0 flex-col">
-        <ProjectsVaultSetup workspace={workspace} />
+        {knowledgePanel}
         <div className="min-h-0 flex-1">
           <MemoryPane workspaceId={workspace.id} databasePath={databasePath} />
         </div>
@@ -149,12 +249,13 @@ export function MemorySection() {
       data-settings-memory="true"
       className="flex h-full min-h-0 flex-col"
     >
-      <ProjectsVaultSetup workspace={null} />
+      <KnowledgeSurfacePanel workspace={null} surface={null} ipc={ipc} />
       <div className="m-auto w-full max-w-lg rounded border border-border bg-surface p-5">
         <div className="text-sm font-medium text-text">{project.name}</div>
         <p className="mt-1 text-xs text-text-dim">
           Memory for this project. Stored outside the repo to keep it out of Git
-          and sync.
+          and sync. Enabling also sets up project knowledge in a git-ignored
+          <code className="ml-1">.kodade/knowledge</code> directory.
         </p>
         <p className="mt-2 break-all font-mono text-[10px] text-text-dim">
           {databasePath ?? "Ködade app data/kodade-memory.sqlite3"}

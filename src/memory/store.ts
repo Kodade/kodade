@@ -36,9 +36,13 @@ export type MemoryState = {
   workspace: MemoryWorkspace | null;
   context: WorkspaceContext | null;
   workingMemory: WorkingMemoryStatus | null;
-  // Model-layer only in this slice: nothing in the UI reads it yet, and
-  // loading a workspace does not fetch it.
+  // Resolved on demand by the KödMem settings surface. Loading a workspace
+  // never resolves or creates it, so existing setups stay exactly as they are.
   knowledgeSurface: WorkspaceKnowledgeSurface | null;
+  // Set when resolving the surface itself failed. Kept apart from
+  // `knowledgeSurface: null`, which means "this workspace has no surface" —
+  // the two states read very differently in the UI.
+  knowledgeSurfaceError: string | null;
   checkpoints: CheckpointSearchHit[];
   checkpointTotal: number;
   results: MemorySearchHit[];
@@ -75,6 +79,12 @@ export type MemoryState = {
   syncWorking(): Promise<void>;
   // Resolve the workspace knowledge surface ("vault" or "local") on demand.
   loadKnowledgeSurface(): Promise<WorkspaceKnowledgeSurface | null>;
+  // Zero-setup default: enable the local surface and immediately apply its
+  // scaffold (preview → apply). Returns null and sets `error` when either step
+  // fails; the workspace itself stays usable and the call can be retried.
+  setUpLocalKnowledge(): Promise<WorkspaceKnowledgeSurface | null>;
+  // Explicit local → vault step. Files under .kodade/knowledge stay on disk.
+  turnOffLocalKnowledge(): Promise<boolean>;
   // The visible KödMem settings surface owns this lifecycle: it starts polling
   // on mount and stops on unmount, while the interval stays in the store so
   // tests can prove it never runs while Settings is hidden.
@@ -303,6 +313,7 @@ export function createMemoryStore(deps: {
       context: null,
       workingMemory: null,
       knowledgeSurface: null,
+      knowledgeSurfaceError: null,
       checkpoints: [],
       checkpointTotal: 0,
       results: [],
@@ -349,6 +360,7 @@ export function createMemoryStore(deps: {
               context: null,
               workingMemory: null,
               knowledgeSurface: null,
+              knowledgeSurfaceError: null,
               checkpoints: [],
               checkpointTotal: 0,
               deleted: [],
@@ -367,6 +379,10 @@ export function createMemoryStore(deps: {
             workspace: context.workspace,
             context,
             workingMemory,
+            // Never carried across a workspace switch; the settings surface
+            // resolves it again for the workspace it is showing.
+            knowledgeSurface: null,
+            knowledgeSurfaceError: null,
             checkpoints: checkpoints.items,
             checkpointTotal: checkpoints.total,
             audit: audit.items,
@@ -408,6 +424,8 @@ export function createMemoryStore(deps: {
               workspace: context.workspace,
               context,
               workingMemory,
+              knowledgeSurface: null,
+              knowledgeSurfaceError: null,
               checkpoints: checkpoints.items,
               checkpointTotal: checkpoints.total,
               audit: audit.items,
@@ -501,6 +519,8 @@ export function createMemoryStore(deps: {
             workspace: context.workspace,
             context,
             workingMemory,
+            knowledgeSurface: null,
+            knowledgeSurfaceError: null,
             checkpoints: checkpoints.items,
             checkpointTotal: checkpoints.total,
             audit: audit.items,
@@ -576,11 +596,68 @@ export function createMemoryStore(deps: {
             scope.workspaceId,
           );
           if (!ownsWorkspace(scope)) return null;
-          set({ knowledgeSurface: surface });
+          set({ knowledgeSurface: surface, knowledgeSurfaceError: null });
+          return surface;
+        } catch (error) {
+          // A failed resolve is not "no surface": keep the two apart so the UI
+          // never offers a setup action to a workspace that may already have
+          // one.
+          if (ownsWorkspace(scope)) {
+            set({
+              error: errorMessage(error),
+              knowledgeSurface: null,
+              knowledgeSurfaceError: errorMessage(error),
+            });
+          }
+          return null;
+        }
+      },
+
+      async setUpLocalKnowledge() {
+        const scope = workspaceScope();
+        if (!scope) return null;
+        const finishSaving = await beginSaving(scope);
+        try {
+          // Enabling is idempotent, so a retry after a scaffold failure picks
+          // up the surface that already exists and only re-applies the plan.
+          const surface = await deps.ipc.enableLocalKnowledge(
+            scope.workspaceId,
+          );
+          // Published before the scaffold runs: once the surface exists, the
+          // workspace really is local, even if creating its files then fails.
+          if (ownsWorkspace(scope)) {
+            set({ knowledgeSurface: surface, knowledgeSurfaceError: null });
+          }
+          const plan = await deps.ipc.previewProjectScaffold(scope.workspaceId);
+          if (plan.operations.length > 0) {
+            await deps.ipc.applyProjectScaffold(
+              scope.workspaceId,
+              plan.fingerprint,
+            );
+          }
+          if (!ownsWorkspace(scope)) return null;
           return surface;
         } catch (error) {
           if (ownsWorkspace(scope)) set({ error: errorMessage(error) });
           return null;
+        } finally {
+          finishSaving();
+        }
+      },
+
+      async turnOffLocalKnowledge() {
+        const scope = workspaceScope();
+        if (!scope) return false;
+        const finishSaving = await beginSaving(scope);
+        try {
+          await deps.ipc.disableLocalKnowledge(scope.workspaceId);
+          if (ownsWorkspace(scope)) set({ knowledgeSurface: null });
+          return true;
+        } catch (error) {
+          if (ownsWorkspace(scope)) set({ error: errorMessage(error) });
+          return false;
+        } finally {
+          finishSaving();
         }
       },
 

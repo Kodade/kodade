@@ -113,6 +113,11 @@ pub(crate) fn validate_local_knowledge_root(root: &Path) -> Result<PathBuf> {
     std::fs::canonicalize(root).map_err(Into::into)
 }
 
+/// One knowledge surface per workspace: the refusal a vault mapping gives a
+/// workspace that already keeps its knowledge locally.
+const LOCAL_SURFACE_BLOCKS_MAPPING: &str =
+    "this workspace uses local project knowledge; turn it off before mapping it to a projects vault";
+
 /// Confinement failure wording, kept byte-identical for vault surfaces.
 pub(crate) fn knowledge_escape_message(mode: KnowledgeSurfaceMode, label: &str) -> String {
     match mode {
@@ -187,6 +192,18 @@ impl MemoryStore {
         })
     }
 
+    /// The stored local knowledge config for a workspace, if it has one. Vault
+    /// surfaces are derived from the mapping and never appear here.
+    fn local_knowledge_config(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<WorkspaceKnowledgeSurface>> {
+        self.run_with_recovery(|| {
+            let connection = self.connection()?;
+            local_knowledge_surface_with_connection(&connection, workspace_id)
+        })
+    }
+
     /// Resolve the knowledge surface for a workspace without writing anything.
     /// Legacy configs carry no stored mode: a mapping resolves to `Vault`, and
     /// a workspace with neither mapping nor local config has no surface at all.
@@ -195,11 +212,7 @@ impl MemoryStore {
         workspace_id: &str,
     ) -> Result<Option<WorkspaceKnowledgeSurface>> {
         validate_no_likely_credential("workspace id", workspace_id)?;
-        let local = self.run_with_recovery(|| {
-            let connection = self.connection()?;
-            local_knowledge_surface_with_connection(&connection, workspace_id)
-        })?;
-        if let Some(local) = local {
+        if let Some(local) = self.local_knowledge_config(workspace_id)? {
             return Ok(Some(local));
         }
         let Some(mapping) = self.workspace_project_mapping(workspace_id)? else {
@@ -227,10 +240,7 @@ impl MemoryStore {
     /// local workspace returns its existing surface untouched.
     pub fn enable_local_knowledge(&self, workspace_id: &str) -> Result<WorkspaceKnowledgeSurface> {
         validate_no_likely_credential("workspace id", workspace_id)?;
-        if let Some(existing) = self.run_with_recovery(|| {
-            let connection = self.connection()?;
-            local_knowledge_surface_with_connection(&connection, workspace_id)
-        })? {
+        if let Some(existing) = self.local_knowledge_config(workspace_id)? {
             return Ok(existing);
         }
         if self.workspace_project_mapping(workspace_id)?.is_some() {
@@ -291,11 +301,7 @@ impl MemoryStore {
     /// has no surface at all. Files under the knowledge root are left alone.
     pub fn disable_local_knowledge(&self, workspace_id: &str) -> Result<()> {
         validate_no_likely_credential("workspace id", workspace_id)?;
-        let Some(surface) = self.run_with_recovery(|| {
-            let connection = self.connection()?;
-            local_knowledge_surface_with_connection(&connection, workspace_id)
-        })?
-        else {
+        let Some(surface) = self.local_knowledge_config(workspace_id)? else {
             if self.workspace_project_mapping(workspace_id)?.is_some() {
                 return Err(MemoryError::InvalidInput(
                     "this workspace uses a projects vault; change its mapping instead of disabling local knowledge"
@@ -372,6 +378,14 @@ impl MemoryStore {
             ));
         }
         validate_no_likely_credential("logical project display name", project_display_name)?;
+        // Refused before the lock work below, which would otherwise report the
+        // local knowledge root instead of the real reason. The same check runs
+        // again inside the transaction, where it is race-free.
+        if self.local_knowledge_config(workspace_id)?.is_some() {
+            return Err(MemoryError::InvalidInput(
+                LOCAL_SURFACE_BLOCKS_MAPPING.into(),
+            ));
+        }
         let vault = self.projects_vault()?.ok_or_else(|| {
             MemoryError::InvalidInput(
                 "register an Obsidian projects vault before mapping a workspace".into(),
@@ -444,6 +458,17 @@ impl MemoryStore {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
+            // One knowledge surface per workspace, enforced from both
+            // directions: `enable_local_knowledge` refuses a vault-mapped
+            // workspace, and a local surface refuses a vault mapping. Without
+            // this a workspace could hold both rows at once, and
+            // `workspace_knowledge_surface` would silently prefer the local
+            // config while a vault mapping looked active. Re-checked here in
+            // the immediate transaction so a concurrent enable cannot slip
+            // between the pre-flight check and this write.
+            if local_knowledge_surface_with_connection(&transaction, workspace_id)?.is_some() {
+                return Err(MemoryError::InvalidInput(LOCAL_SURFACE_BLOCKS_MAPPING.into()));
+            }
             // A local-surface project owns workspace-local files; it can never
             // become a vault mapping target.
             if existing_project

@@ -345,6 +345,72 @@ fn a_local_project_id_can_never_become_a_vault_mapping_target() {
     );
 }
 
+#[test]
+fn a_local_workspace_cannot_also_hold_a_vault_mapping() {
+    let fixture = VaultFixture::load();
+    let local_root = fixture._temp.path().join("both-state-checkout");
+    fs::create_dir(&local_root).expect("local checkout");
+    let local_root = fs::canonicalize(&local_root).expect("canonical local checkout");
+    let local_workspace = fixture
+        .store
+        .register_workspace(&local_root, "Both state", None)
+        .expect("local workspace");
+    fixture
+        .store
+        .enable_local_knowledge(&local_workspace.id)
+        .expect("enable local");
+
+    // Mapping a locally-configured workspace onto a fresh vault project would
+    // leave both rows in place, so it is refused outright.
+    let error = fixture
+        .store
+        .map_workspace_to_project(
+            &local_workspace.id,
+            None,
+            "both-state-vault",
+            "Both state vault",
+        )
+        .expect_err("a local workspace is not a mapping target");
+    assert!(
+        error.to_string().contains("local project knowledge"),
+        "unexpected error: {error}"
+    );
+
+    // Exactly one surface survives the refusal, and no vault folder was made.
+    let surface = fixture
+        .store
+        .workspace_knowledge_surface(&local_workspace.id)
+        .expect("surface query")
+        .expect("local surface");
+    assert_eq!(surface.mode, KnowledgeSurfaceMode::Local);
+    assert!(fixture
+        .store
+        .workspace_project_mapping(&local_workspace.id)
+        .expect("mapping query")
+        .is_none());
+    assert!(!fixture
+        .vault
+        .join("10-Projects")
+        .join("both-state-vault")
+        .exists());
+
+    // Turning local knowledge off clears the way for the vault mapping.
+    fixture
+        .store
+        .disable_local_knowledge(&local_workspace.id)
+        .expect("disable local");
+    let mapping = fixture
+        .store
+        .map_workspace_to_project(
+            &local_workspace.id,
+            None,
+            "both-state-vault",
+            "Both state vault",
+        )
+        .expect("vault mapping after disabling local knowledge");
+    assert_eq!(mapping.project_id, "both-state-vault");
+}
+
 // -- local knowledge surface -------------------------------------------------
 
 struct LocalFixture {
