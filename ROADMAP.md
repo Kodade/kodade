@@ -6,6 +6,12 @@ This file states the public product boundary.
 ## Supported
 
 - macOS Apple Silicon on macOS 13 or newer
+- The tabbed workspace shell — Agents, Code, and Editor tabs with a persistent
+  workspace sidebar; tabs keep running in the background. The classic 1.x
+  layout remains available as an escape hatch for one release.
+- Agent personas and runs in the Agents tab, prepared onto KödWork, with
+  MCP Connections from a curated catalog or custom entries installed into the
+  CLI's own config through reviewed changes — strictly bring-your-own-key
 - KödChat with Claude Code, Codex, Grok Build, and OpenCode through their
   official CLIs. OpenCode models are discovered per local project from the
   installed CLI, with Default retained and no bundled model catalog.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.0 - 2026-08-20
 
 - The tabbed layout is now how Ködade opens. Projects, terminals, files, the
   editor, and agents live behind Agents, Code, and Editor tabs in the title

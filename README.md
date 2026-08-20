@@ -16,15 +16,23 @@
 
 ## Status
 
-Ködade 1.7.1 is the current public macOS Apple Silicon release. It is
+Ködade 2.0.0 is the current public macOS Apple Silicon release. It is
 Developer ID signed, Apple-notarized, and Gatekeeper-verified. Download it from
-the [Releases page](https://github.com/Kodade/kodade/releases/tag/v1.7.1).
+the [Releases page](https://github.com/Kodade/kodade/releases/tag/v2.0.0).
 
 The supported package targets **Apple Silicon Macs running macOS 13 or newer**.
 Windows support is under active development; Linux is planned.
 
 ## What Ködade does
 
+- **The tabbed workspace** is how Ködade opens: Agents, Code, and Editor tabs
+  in the title bar with one persistent workspace sidebar, and every tab keeps
+  running in the background while you work in another. The classic four-pane
+  layout from 1.x stays one click away for one more release.
+- **The Agents tab** builds reusable agent personas — a provider, a system
+  prompt, KödSkills, and attached MCP Connections — and prepares runs from
+  them as normal KödWork background tasks with the same durable progress,
+  scoped permissions, and review.
 - **KödChat** provides a chat-first interface for Claude Code, Codex, Grok
   Build, and OpenCode through their official CLIs, with compact work summaries,
   inline edited-file review, and a resizable terminal split owned by the

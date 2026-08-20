@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "kodade"
-version = "1.7.1"
+version = "2.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
