@@ -17,7 +17,6 @@ import { WorkspaceFilesPane } from "./components/WorkspaceFilesPane";
 import {
   layoutToSizes,
   shouldPersistLayout,
-  sizesToLayout,
   sizesToRestoredLayout,
   type PanelId,
 } from "./components/layout";
@@ -27,6 +26,18 @@ import { appStore, initApp, sshStore } from "./store/appStore";
 import { settingsViewStore } from "./store/settingsView";
 import { listenForSshFocusRefresh } from "./ssh/refresh";
 import { RELEASE_MANIFEST } from "./release/manifest";
+
+// Panels whose saved-zero width has to be restored. A rail (sidebar) or a
+// collapsed files pane keeps its fixed width instead.
+function expandedPanels(
+  sidebarMode: "full" | "rail",
+  filesCollapsed: boolean,
+): PanelId[] {
+  const expand: PanelId[] = [];
+  if (sidebarMode === "full") expand.push("sidebar");
+  if (!filesCollapsed) expand.push("files");
+  return expand;
+}
 
 // Shared separator styling for the three pane boundaries.
 const SEP =
@@ -55,11 +66,11 @@ export default function App() {
   const sidebarMode = useStore(appStore, (s) => s.sidebarMode);
   const filesCollapsed = useStore(appStore, (s) => s.filesCollapsed);
   const settingsOpen = useStore(settingsViewStore, (s) => s.section !== null);
-  // v2 tabbed shell (issue #62): compiled out of public builds and off by
-  // default in development, so the shipping shell below is untouched. Flipping
-  // this toggle DOES reparent the terminal hosts (the registry re-adopts them
-  // into the new tree) — acceptable for a development-only switch, and the
-  // reason the tab host itself never unmounts a tab.
+  // The tabbed shell is the default since v2.0.0 (#65); the classic shell
+  // below is the escape hatch, kept for one release. Switching DOES reparent
+  // the terminal hosts (the registry re-adopts them into the new tree), which
+  // is why this is a deliberate title-bar choice rather than something the app
+  // does on its own — and why the tab host itself never unmounts a tab.
   const shellV2Enabled = useStore(appStore, (s) => s.shellV2Enabled);
   const shellV2 = RELEASE_MANIFEST.features.shell && shellV2Enabled;
   const groupRef = useRef<GroupImperativeHandle | null>(null);
@@ -72,11 +83,17 @@ export default function App() {
   // constraints lift. Deliberately NOT a keyed remount: the terminal hosts
   // live outside React in the session registry, and remounting the group
   // would reparent live xterm canvases mid-session (a WKWebView/WebGL hazard).
+  //
+  // `shellV2` is a dependency because this Group is UNMOUNTED while the tabbed
+  // shell renders: coming back through the escape hatch mounts a fresh group,
+  // and without this the user would land on factory pane widths and overwrite
+  // their saved layout with the first drag. `defaultLayout` below carries the
+  // same saved sizes so the mount itself is already correct.
   useEffect(() => {
-    const expand: PanelId[] = [];
-    if (sidebarMode === "full") expand.push("sidebar");
-    if (!filesCollapsed) expand.push("files");
-    const target = sizesToRestoredLayout(savedLayout, expand);
+    const target = sizesToRestoredLayout(
+      savedLayout,
+      expandedPanels(sidebarMode, filesCollapsed),
+    );
     groupRef.current?.setLayout(target);
 
     // react-resizable-panels reconciles a rail's old fixed 44px constraint
@@ -89,7 +106,7 @@ export default function App() {
       if (!filesCollapsed) filesRef.current?.resize(`${target.files}%`);
     });
     return () => cancelAnimationFrame(frame);
-  }, [savedLayout, sidebarMode, filesCollapsed]);
+  }, [savedLayout, sidebarMode, filesCollapsed, shellV2]);
 
   // Persist only user-driven changes (drag/keyboard). Programmatic setLayout
   // (the effect above) and initial mount report isUserInteraction=false, so
@@ -119,7 +136,12 @@ export default function App() {
           <Group
             groupRef={groupRef}
             className="min-h-0 min-w-0 max-w-full flex-1 overflow-hidden"
-            defaultLayout={sizesToLayout(undefined)}
+            // Mount with the user's saved sizes, not the factory ones: this
+            // group remounts whenever the escape hatch flips.
+            defaultLayout={sizesToRestoredLayout(
+              savedLayout,
+              expandedPanels(sidebarMode, filesCollapsed),
+            )}
             onLayoutChanged={onLayoutChanged}
           >
             {/* Left/right visibility is controlled only by their buttons. Drag

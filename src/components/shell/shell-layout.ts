@@ -37,8 +37,8 @@ const CODE_EXPAND_TARGETS: readonly CodeExpandTarget[] = [
 // enforces — one source of truth for the split bounds.
 export const SPLIT_MIN = 10;
 export const SPLIT_MAX = 90;
-const SIDEBAR_MIN = 8;
-const SIDEBAR_MAX = 40;
+export const SIDEBAR_MIN = 8;
+export const SIDEBAR_MAX = 40;
 
 // v1 persisted array order (see ../layout.ts PERSISTED_PANEL_IDS):
 // [sidebar, terminal, files, editor].

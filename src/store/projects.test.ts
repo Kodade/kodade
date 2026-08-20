@@ -3114,8 +3114,8 @@ describe("v2 shell state (#62)", () => {
     await store.getState().hydrate();
 
     expect(store.getState().shellLayout.sidebarPct).toBe(22);
-    // Absent shellV2 leaves the v2 shell switched off.
-    expect(store.getState().shellV2Enabled).toBe(false);
+    // Absent fields mean the v2.0 default: the v2 shell is on.
+    expect(store.getState().shellV2Enabled).toBe(true);
   });
 
   it("defaults the v2 shell layout when the document has neither field", async () => {
@@ -3130,7 +3130,8 @@ describe("v2 shell state (#62)", () => {
     await store.getState().hydrate();
 
     expect(store.getState().shellLayout.activeTab).toBe("code");
-    expect(store.getState().shellV2Enabled).toBe(false);
+    // Invalid legacy flag, no fallback field: still the v2.0 default.
+    expect(store.getState().shellV2Enabled).toBe(true);
   });
 
   it("persists a new shell layout and rejects a malformed one", async () => {
@@ -3169,6 +3170,8 @@ describe("v2 shell state (#62)", () => {
     // document, or later sidebar resizes would never reach the first v2 boot.
     expect(JSON.parse(storage.doc!)).not.toHaveProperty("shell");
 
+    // Actually using the v2 shell (off and back on) freezes the layout doc.
+    store.getState().setShellV2Enabled(false);
     store.getState().setShellV2Enabled(true);
     await store.getState().flushPersistence();
     expect((JSON.parse(storage.doc!) as PersistedDoc).shell).toMatchObject({
@@ -3181,6 +3184,7 @@ describe("v2 shell state (#62)", () => {
     const doc = JSON.parse(storage.doc!) as PersistedDoc;
     expect(doc.shell).toMatchObject({ version: 2 });
     expect(doc.shellV2).toBe(false);
+    expect(doc.shellV1Fallback).toBe(true);
   });
 
   it("keeps persisting a shell document that was already on disk", async () => {
@@ -3203,10 +3207,124 @@ describe("v2 shell state (#62)", () => {
 
   it("persists the v2 shell toggle", async () => {
     const { store, storage } = makeStore();
+    expect(store.getState().shellV2Enabled).toBe(true);
+
+    store.getState().setShellV2Enabled(false);
+    await store.getState().flushPersistence();
+    let doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.shellV1Fallback).toBe(true);
+    expect(doc.shellV2).toBe(false);
+
     store.getState().setShellV2Enabled(true);
     await store.getState().flushPersistence();
+    doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.shellV1Fallback).toBe(false);
+    expect(doc.shellV2).toBe(true);
+  });
+
+  // v2.0 default flip (#65). The legacy `shellV2` field was written on EVERY
+  // persist while the default was off, so a `false` there is not an opt-out.
+  it("gives an upgrading user the v2 shell despite a legacy shellV2: false", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: false,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
 
     expect(store.getState().shellV2Enabled).toBe(true);
-    expect((JSON.parse(storage.doc!) as PersistedDoc).shellV2).toBe(true);
+  });
+
+  it("honors the explicit v1 escape hatch", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: false,
+      shellV1Fallback: true,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  it("lets an explicit fallback outrank a legacy shellV2: true", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: true,
+      shellV1Fallback: true,
+    } satisfies PersistedDoc);
+    const { store } = makeStore(storage);
+    await store.getState().hydrate();
+
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  it("keeps a pre-hydration switch to the classic shell", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+    } satisfies PersistedDoc);
+    storage.deferRead = true;
+    const { store } = makeStore(storage);
+
+    const hydrateP = store.getState().hydrate(); // disk read pending
+    store.getState().setShellV2Enabled(false); // user acts NOW
+    storage.resolveRead();
+    await hydrateP;
+
+    expect(store.getState().shellV2Enabled).toBe(false);
+  });
+
+  // The mirror of the disable race, and the reason session intent is recorded
+  // even when the click doesn't change the value: the default is already true,
+  // so this click is a no-op against state and only the intent flag keeps
+  // hydration from re-applying the saved opt-out.
+  it("keeps a pre-hydration switch back to the tabbed shell", async () => {
+    const storage = new MockStorage();
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      shellV2: false,
+      shellV1Fallback: true,
+    } satisfies PersistedDoc);
+    storage.deferRead = true;
+    const { store } = makeStore(storage);
+
+    const hydrateP = store.getState().hydrate(); // disk read pending
+    store.getState().setShellV2Enabled(true); // user acts NOW
+    storage.resolveRead();
+    await hydrateP;
+
+    expect(store.getState().shellV2Enabled).toBe(true);
+    // And the choice reaches disk, so it survives the next restart.
+    await store.getState().flushPersistence();
+    expect(
+      (JSON.parse(storage.doc!) as PersistedDoc).shellV1Fallback,
+    ).toBe(false);
+  });
+
+  it("round-trips the escape hatch through persistence", async () => {
+    const { store, storage } = makeStore();
+    store.getState().setShellV2Enabled(false);
+    await store.getState().flushPersistence();
+    expect(
+      (JSON.parse(storage.doc!) as PersistedDoc).shellV1Fallback,
+    ).toBe(true);
+
+    const { store: reloaded } = makeStore(storage);
+    await reloaded.getState().hydrate();
+    expect(reloaded.getState().shellV2Enabled).toBe(false);
   });
 });

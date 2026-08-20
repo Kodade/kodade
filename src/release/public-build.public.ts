@@ -23,7 +23,7 @@ describe("compiled public surface", () => {
       false,
       false,
       true,
-      false,
+      true,
       false,
     ]);
   });
@@ -35,8 +35,8 @@ describe("compiled public surface", () => {
     expect(RELEASE_MANIFEST.features.work).toBe(true);
   });
 
-  it("compiles without the v2 tabbed shell (#62)", () => {
-    expect(RELEASE_MANIFEST.features.shell).toBe(false);
+  it("ships the v2 tabbed shell as the supported product (#65)", () => {
+    expect(RELEASE_MANIFEST.features.shell).toBe(true);
   });
 
   it("compiles without the archived embedded browser (#62)", () => {

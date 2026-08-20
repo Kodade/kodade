@@ -264,10 +264,19 @@ export type PersistedDoc = {
   // owns the validation and tolerates any shape, including the legacy v1
   // `layout` array it falls back to on a user's first v2 boot.
   shell?: unknown;
-  // Optional and additive (still STORAGE_VERSION 1): whether the v2 shell is
-  // switched on. Development builds only — the manifest gates the surface, so
-  // a `true` here does nothing in a public build. Absent/invalid = false.
+  // Optional and additive (still STORAGE_VERSION 1): LEGACY. Every build since
+  // the v2 shell landed wrote this field on every persist, so a `false` here
+  // usually just means "this user never turned the development shell on" — it
+  // is NOT an opt-out. Still written for older builds that read it; hydration
+  // reads shellV1Fallback instead.
   shellV2?: boolean;
+  // Optional and additive (still STORAGE_VERSION 1): the v2.0.0 escape hatch
+  // (issue #65). `true` means the user explicitly asked for the classic v1
+  // shell. Absent means the v2 default. Accepted downgrade edge: a 1.7.x build
+  // rebuilds this document from its own state and drops the field, so a
+  // 2.0 -> 1.7 -> 2.0 round trip silently discards the opt-out and lands the
+  // user back on the tabbed shell — one click from being set again.
+  shellV1Fallback?: boolean;
   // Optional and additive (still STORAGE_VERSION 1): the Ködade background
   // prompt (issue #63). Absent means "on, with no override" — the default
   // text ships in harness/ambient.ts, never in this document, so improving it
@@ -384,8 +393,9 @@ export type ProjectsState = {
   // Record the v2 shell's layout (active tab, splits) and persist debounced.
   // Rejects a document isShellLayout doesn't accept.
   setShellLayout(next: ShellLayout): void;
-  // Turn the v2 shell on/off. Development-only affordance; the release
-  // manifest still decides whether the shell exists in this build.
+  // Switch between the tabbed shell (default) and the classic v1 shell — the
+  // v2.0.0 escape hatch (#65). The release manifest still decides whether the
+  // tabbed shell exists in this build at all.
   setShellV2Enabled(enabled: boolean): void;
   setTheme(theme: string): void;
   // Record which provider new KödChat threads start on. Existing threads keep
@@ -738,10 +748,17 @@ export function createProjectsStore(deps: StoreDeps) {
     // the single source of geometry: writing a derived `shell` on every save
     // would freeze the sidebar width at whatever it was on the first boot of
     // ANY build, and later v1 resizes would never reach the real first v2 boot.
-    // Set when the document already had a `shell`, and when the user enables
-    // the shell or moves it. Sticky once set — switching v2 back off must not
-    // discard the layout it remembered.
+    // Set when the document already had a `shell`, and when the user picks the
+    // tabbed shell or moves it. Sticky once set — switching back to the classic
+    // shell must not discard the layout it remembered.
     let shellLayoutPersisted = false;
+
+    // Whether the user has used the shell escape hatch in THIS session (#65).
+    // Recorded even when the click doesn't change the value, because the
+    // default is now `true`: an opted-out user clicking "Use the tabbed layout"
+    // before the disk read lands makes no state change, and without this flag
+    // hydration would apply their saved shellV1Fallback and undo the click.
+    let shellChoiceMadeThisSession = false;
 
     // Persisted session identities not yet revived (hydrated from disk, waiting
     // for their project's first ensureSession). Consumed one-shot per boot;
@@ -809,7 +826,8 @@ export function createProjectsStore(deps: StoreDeps) {
           remoteTargets,
           sessions: sessionsDoc,
           ...(shellLayoutPersisted ? { shell: shellLayout } : {}),
-          shellV2: shellV2Enabled,
+          shellV2: shellV2Enabled, // legacy field, kept for older builds
+          shellV1Fallback: !shellV2Enabled,
         };
         try {
           await deps.storage.write(JSON.stringify(doc));
@@ -1028,7 +1046,7 @@ export function createProjectsStore(deps: StoreDeps) {
       activeSessionByProject: {},
       layout: undefined,
       shellLayout: defaultShellLayout(), // v2 shell geometry (issue #62)
-      shellV2Enabled: false, // v2 shell stays off until it is switched on
+      shellV2Enabled: true, // v2 tabbed shell is the v2.0 default (issue #65)
       theme: "system", // system-following by default (resolved by the theme store)
       chatProvider: DEFAULT_CHAT_PROVIDER,
       sidebarMode: "full",
@@ -1281,15 +1299,26 @@ export function createProjectsStore(deps: StoreDeps) {
               )
                 ? docShellLayout
                 : s.shellLayout;
-              // Monotonic: an enable made before the read landed survives it.
-              // The mirror case (disabling v2 pre-hydration, then hydrating a
-              // doc that had it on) re-enables — accepted, because this is a
-              // development-only toggle one click away from being flipped back.
-              const shellV2Enabled = s.shellV2Enabled || doc.shellV2 === true;
+              // v2 shell gating (issue #65). The tabbed shell is the default
+              // now, and only the NEW `shellV1Fallback` field can turn it off.
+              // Legacy `shellV2: false` must NOT be read as an opt-out: every
+              // build since the shell landed wrote that field on every persist
+              // while the default was off, so nearly every upgrading user has a
+              // `false` on disk that only means "never switched the dev shell
+              // on". Reading it would strand them on the classic shell — so it
+              // is ignored here entirely (persist still writes it for older
+              // builds), and an explicit fallback always outranks it.
+              // Session intent wins in BOTH directions, unlike the
+              // one-directional rules below: the flag is set by the escape
+              // hatch even when the click doesn't change the value, so a click
+              // that races the disk read is never silently reverted.
+              const shellV2Enabled = shellChoiceMadeThisSession
+                ? s.shellV2Enabled
+                : doc.shellV1Fallback !== true;
               // Background prompt (#63). An absent field means "on, default
               // text"; a change made in this session outranks the document,
-              // like theme/sidebar above. Same accepted edge as the shellV2
-              // note: a pre-hydration change back TO the default (re-enabling,
+              // like theme/sidebar above. Same accepted edge as the v2 shell
+              // above: a pre-hydration change back TO the default (re-enabling,
               // or clearing the override) is indistinguishable from an
               // untouched store, so a document that disagrees wins — one click
               // away from being flipped back, in the direction of the user's
@@ -1913,14 +1942,18 @@ export function createProjectsStore(deps: StoreDeps) {
         persistDebounced();
       },
 
-      // Switch the v2 shell on/off (development builds only).
+      // The v2.0 escape hatch: tabbed shell on, classic v1 shell off (#65).
       setShellV2Enabled(shellV2Enabled: boolean) {
-        if (get().shellV2Enabled === shellV2Enabled) return;
-        // Turning the shell ON hands it ownership of its own geometry; the v1
-        // layout stops being the fallback from here on.
+        // Intent first, and unconditionally: a click that agrees with the
+        // current value still has to outrank a document that disagrees, or a
+        // pre-hydration choice would be undone when the read lands.
+        shellChoiceMadeThisSession = true;
+        // Choosing the tabbed shell hands it ownership of its own geometry;
+        // the v1 layout stops being the fallback from here on.
         if (shellV2Enabled) shellLayoutPersisted = true;
-        set({ shellV2Enabled });
+        if (get().shellV2Enabled !== shellV2Enabled) set({ shellV2Enabled });
         // Same rule as theme/sidebar: never persist before hydration settles.
+        // Runs even for a no-op change so the choice reaches disk.
         void persistAfterHydration();
       },
 

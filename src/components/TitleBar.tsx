@@ -29,8 +29,8 @@ export function TitleBar() {
   const browserPaneCapable = useStore(capabilitiesStore, (state) =>
     browserPaneAvailable(state.capabilities),
   );
-  // v2 shell (issue #62): compiled out of public builds, and off until the
-  // user switches it on.
+  // v2 shell (issues #62/#65): shipped and on by default; the title-bar
+  // action below is the escape hatch back to the classic v1 layout.
   const shellFeature = RELEASE_MANIFEST.features.shell;
   const shellV2Enabled = useStore(appStore, (s) => s.shellV2Enabled);
   const activeTab = useStore(appStore, (s) => s.shellLayout.activeTab);
@@ -58,16 +58,30 @@ export function TitleBar() {
       )}
       <div className="flex h-full items-stretch">
         {shellFeature && (
-          // Development-only escape hatch: always visible, in both states, so
-          // the v1 shell is always one click away.
-          <TitleAction
-            label="Ködade v2 shell"
-            onClick={() =>
-              appStore.getState().setShellV2Enabled(!shellV2Enabled)
-            }
+          // v2.0.0 escape hatch back to the classic v1 shell: always visible,
+          // in both states, so either layout is one click away. Planned for
+          // retirement one release after v2.0.0.
+          //
+          // Deliberately fenced off from the tab-opening cluster on its right
+          // (own divider plus a gap): this button reparents the whole workspace,
+          // so it must not sit flush against "open github".
+          <div
+            data-shell-switch
+            className="mr-2 flex h-full items-stretch border-r border-border"
           >
-            <ShellToggleIcon active={shellV2Enabled} />
-          </TitleAction>
+            <TitleAction
+              label={
+                shellV2Enabled
+                  ? "Use the classic layout"
+                  : "Use the tabbed layout"
+              }
+              onClick={() =>
+                appStore.getState().setShellV2Enabled(!shellV2Enabled)
+              }
+            >
+              <ShellToggleIcon active={shellV2Enabled} />
+            </TitleAction>
+          </div>
         )}
         {browserPaneCapable && (
           <TitleAction
@@ -159,8 +173,8 @@ function ShellTabPills({
   );
 }
 
-// Simple state-carrying glyph for the development shell toggle: filled when the
-// v2 shell is on, outlined when it isn't.
+// Simple state-carrying glyph for the layout switch: filled when the tabbed
+// shell is on, outlined while the classic layout is in use.
 function ShellToggleIcon({ active }: { active: boolean }) {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
