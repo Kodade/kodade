@@ -187,4 +187,39 @@ describe("AgentsTab connections", () => {
     await click(section.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
     expect(host.querySelector('[data-testid="persona-connection-notice"]')).toBeNull();
   });
+
+  it("prunes a dangling connection id on save and shows it as a removable chip", async () => {
+    const { store, connections, connSource } = await setupStores();
+    await store.getState().load();
+    const projectScope: PersonaScope = { kind: "project", projectId: "p1" };
+    const connId = connections.getState().connectionsFor(PROJ)[0].id;
+    // A persona referencing one valid connection plus a ghost id (a connection
+    // that was deleted). Load stays non-destructive, so the ghost persists on
+    // disk until an explicit save prunes it.
+    const persona = await store.getState().createPersona(projectScope, {
+      providerId: "claude",
+      name: "Helper",
+      connections: [connId, "ghost-id"],
+    });
+
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={fakeHarness()}
+        connections={connections}
+        connectionSource={connSource}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+
+    await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${persona!.id}"]`)!);
+    // The ghost id surfaces as a removable "unknown connection" chip.
+    expect(host.querySelector('[data-testid="persona-unknown-connections"]')).not.toBeNull();
+
+    await click(button(host, "Save"));
+    // The dangling id is pruned; the valid one survives.
+    expect(store.getState().getPersona(projectScope, persona!.id)?.connections).toStrictEqual([connId]);
+  });
 });

@@ -65,12 +65,17 @@ export function ConnectionsManager({
   const probes = useMemo(() => probesFromInventory(inventory), [inventory]);
   const pendingOwner = connectionsOwner(projectRoot);
   const harnessPending = useStore(harness, (s) => s.pendingChange);
+  const preparing = useStore(harness, (s) => s.preparing);
   const applying = useStore(harness, (s) => s.applying);
   const mutationError = useStore(harness, (s) => s.mutationError);
   const ownPending = isPendingChangeOwned(harnessPending, pendingOwner) ? harnessPending : null;
+  // An install is in flight (staging the plan) or already staged for review.
+  const installBusy = preparing || applying || ownPending !== null;
 
   // Detected MCP config targets across both scopes (same source as the KödHarness
-  // add-server form) and a scan so install-state probes are current.
+  // add-server form). Install-state probes come from the inventory the persona
+  // editor already scanned, and confirmPendingChange rescans after an install, so
+  // the manager deliberately does NOT trigger its own scan here (no double scan).
   useEffect(() => {
     let stopped = false;
     const list = harness.getState().listMcpTargets;
@@ -85,7 +90,6 @@ export function ConnectionsManager({
       .catch(() => {
         if (!stopped) setTargets([]);
       });
-    void harness.getState().rescanScope("project", projectRoot);
     return () => {
       stopped = true;
     };
@@ -140,6 +144,7 @@ export function ConnectionsManager({
             probes={probes}
             targets={targets}
             projectRoot={projectRoot}
+            installBusy={installBusy}
             onRemove={(id) => void connections.getState().removeConnection(scope, id)}
             onInstall={(connection, scoped) => {
               const mapping = mapConnectionToTarget(connection, scoped.target);
@@ -167,6 +172,20 @@ export function ConnectionsManager({
         {state.mutationError && (
           <p role="alert" className="mt-2 text-[11px] text-[var(--kd-error)]">
             {state.mutationError}
+          </p>
+        )}
+
+        {/* An install that failed to even stage (e.g. the server name already
+            exists in the target config) sets mutationError but leaves no pending
+            change, so it would otherwise be invisible. Surface it here, the same
+            way HarnessTools does. */}
+        {mutationError && !ownPending && (
+          <p
+            role="alert"
+            data-testid="connection-install-error"
+            className="mt-2 text-[11px] text-[var(--kd-error)]"
+          >
+            {mutationError}
           </p>
         )}
 
@@ -212,6 +231,7 @@ function RegisteredList({
   probes,
   targets,
   projectRoot,
+  installBusy,
   onRemove,
   onInstall,
 }: {
@@ -220,9 +240,14 @@ function RegisteredList({
   probes: ReturnType<typeof probesFromInventory>;
   targets: ScopedMcpTarget[] | null;
   projectRoot: string;
+  installBusy: boolean;
   onRemove: (id: string) => void;
   onInstall: (connection: AgentConnection, target: ScopedMcpTarget) => void;
 }) {
+  // Which connection's remove button is armed (first click), so removal takes
+  // two clicks — the same confirm discipline the persona editor uses.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
   if (list.length === 0) {
     return <p className="text-text-dim">No connections yet. Add one from the catalog or a custom server.</p>;
   }
@@ -230,6 +255,7 @@ function RegisteredList({
     <ul className="space-y-2">
       {list.map((connection) => {
         const installs = source.installedState(connection, probes);
+        const arming = confirmingId === connection.id;
         return (
           <li key={connection.id} className="rounded border border-border bg-bg p-2">
             <div className="flex items-start justify-between gap-2">
@@ -250,14 +276,36 @@ function RegisteredList({
                   <p className="mt-0.5 text-[10px] text-text-dim">Auth: {connection.authNote}</p>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => onRemove(connection.id)}
-                aria-label={`remove ${connection.name}`}
-                className="shrink-0 rounded border border-border px-2 py-0.5 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text"
-              >
-                remove
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                {arming && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingId(null)}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-text-dim hover:text-text"
+                  >
+                    cancel
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!arming) {
+                      setConfirmingId(connection.id);
+                      return;
+                    }
+                    setConfirmingId(null);
+                    onRemove(connection.id);
+                  }}
+                  aria-label={arming ? `confirm remove ${connection.name}` : `remove ${connection.name}`}
+                  className={`rounded border px-2 py-0.5 text-[10px] ${
+                    arming
+                      ? "border-[color-mix(in_srgb,var(--kd-error)_55%,transparent)] text-[var(--kd-error)] hover:bg-[color-mix(in_srgb,var(--kd-error)_12%,transparent)]"
+                      : "border-border text-text-dim hover:bg-surface-hover hover:text-text"
+                  }`}
+                >
+                  {arming ? "confirm remove" : "remove"}
+                </button>
+              </div>
             </div>
 
             {installs.length > 0 && (
@@ -270,6 +318,7 @@ function RegisteredList({
               connection={connection}
               targets={targets}
               projectRoot={projectRoot}
+              installBusy={installBusy}
               onInstall={onInstall}
             />
           </li>
@@ -283,11 +332,13 @@ function TargetInstaller({
   connection,
   targets,
   projectRoot,
+  installBusy,
   onInstall,
 }: {
   connection: AgentConnection;
   targets: ScopedMcpTarget[] | null;
   projectRoot: string;
+  installBusy: boolean;
   onInstall: (connection: AgentConnection, target: ScopedMcpTarget) => void;
 }) {
   const [index, setIndex] = useState(0);
@@ -297,6 +348,7 @@ function TargetInstaller({
   }
   const scoped = targets[index];
   const mapping = scoped ? mapConnectionToTarget(connection, scoped.target) : null;
+  const disabled = !mapping?.ok || installBusy;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <select
@@ -314,12 +366,12 @@ function TargetInstaller({
       </select>
       <button
         type="button"
-        disabled={!mapping?.ok}
+        disabled={disabled}
         title={mapping && !mapping.ok ? mapping.reason : undefined}
         onClick={() => scoped && onInstall(connection, scoped)}
         className="rounded border border-accent px-2 py-1 text-[11px] text-accent hover:bg-surface-hover disabled:cursor-not-allowed disabled:border-border disabled:text-text-dim"
       >
-        Install to CLI config…
+        {installBusy ? "Installing…" : "Install to CLI config…"}
       </button>
       {mapping && !mapping.ok && (
         <span className="text-[10px] text-[var(--kd-warning)]">{mapping.reason}</span>
@@ -474,6 +526,9 @@ function CustomForm({ onCreate }: { onCreate: (input: ConnectionInput) => Promis
           placeholder="e.g. sets MY_TOKEN in your own environment"
           className="rounded border border-border bg-bg px-2 py-1 text-text"
         />
+        <span className="text-[10px] text-text-dim">
+          Notes only — never paste keys or secrets. Ködade doesn't store credentials.
+        </span>
       </label>
       {error && (
         <p role="alert" className="text-[var(--kd-error)]">

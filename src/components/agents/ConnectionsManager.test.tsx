@@ -50,6 +50,7 @@ function fakeHarness() {
   const prepareAddMcpServer = vi.fn<HarnessState["prepareAddMcpServer"]>(async () => {});
   const store = createStore<Partial<HarnessState>>(() => ({
     inventory: null,
+    preparing: false,
     applying: false,
     mutationError: null,
     pendingChange: null,
@@ -130,12 +131,57 @@ describe("ConnectionsManager", () => {
     expect(owner).toStrictEqual({ surface: "connections", scopeId: PROJECT_ROOT });
   });
 
-  it("write-path guard: the connection store only writes its own doc, never CLI config", async () => {
+  it("write-path guard: connection CRUD/attach writes only its own doc, never a config path", async () => {
     const { storage, connections, source } = stores();
     await connections.getState().load();
-    const { store: harness } = fakeHarness();
+    const { store: harness, prepareAddMcpServer } = fakeHarness();
+    const confirmPendingChange = harness.getState().confirmPendingChange as unknown as ReturnType<typeof vi.fn>;
 
     const writeDoc = vi.spyOn(storage, "writeDoc");
+
+    const host = await render(
+      <ConnectionsManager
+        connections={connections}
+        harness={harness}
+        source={source}
+        scope={SCOPE}
+        projectRoot={PROJECT_ROOT}
+        onClose={() => {}}
+      />,
+    );
+
+    // Add a catalog connection (a write), then remove it (another write) — both
+    // are connection-doc mutations, not config changes.
+    await click(button(host, "Add from catalog"));
+    const add = [...host.querySelectorAll("li")]
+      .find((li) => li.textContent?.includes("Notion"))!
+      .querySelector("button");
+    await click(add as HTMLButtonElement);
+    await click(button(host, "remove")); // arm
+    await click(button(host, "confirm remove")); // confirm
+
+    // The connection doc WAS written, and every write went there — nothing else.
+    expect(writeDoc.mock.calls.length).toBeGreaterThan(0);
+    for (const [name] of writeDoc.mock.calls) {
+      expect(name).toBe(connectionDocName);
+    }
+    // No CLI-config write path (prepareAddMcpServer / confirmPendingChange) was
+    // reached by connection CRUD — that only happens on an explicit install.
+    expect(prepareAddMcpServer).not.toHaveBeenCalled();
+    expect(confirmPendingChange).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an install failure that stages no pending change", async () => {
+    const { connections, source } = stores();
+    await connections.getState().load();
+    const { store: harness } = fakeHarness();
+    // prepareAddMcpServer fails to stage: it sets mutationError and leaves
+    // pendingChange null (e.g. the server name already exists in the config).
+    harness.setState({
+      prepareAddMcpServer: vi.fn(async () => {
+        harness.setState({ mutationError: 'an MCP server named "notion" already exists' });
+      }),
+    } as Partial<HarnessState>);
 
     const host = await render(
       <ConnectionsManager
@@ -153,12 +199,39 @@ describe("ConnectionsManager", () => {
       .find((li) => li.textContent?.includes("Notion"))!
       .querySelector("button");
     await click(add as HTMLButtonElement);
+    await click(button(host, "Install to CLI config…"));
 
-    // Every write the manager triggered went to the connections doc only — no
-    // config path was ever written directly (that is prepareAddMcpServer's job).
-    for (const [name] of writeDoc.mock.calls) {
-      expect(name).toBe(connectionDocName);
-    }
+    const error = host.querySelector('[data-testid="connection-install-error"]');
+    expect(error).not.toBeNull();
+    expect(error!.textContent).toContain("already exists");
+  });
+
+  it("shows a busy install button while a change is preparing", async () => {
+    const { connections, source } = stores();
+    await connections.getState().load();
+    const { store: harness } = fakeHarness();
+
+    const host = await render(
+      <ConnectionsManager
+        connections={connections}
+        harness={harness}
+        source={source}
+        scope={SCOPE}
+        projectRoot={PROJECT_ROOT}
+        onClose={() => {}}
+      />,
+    );
+    await click(button(host, "Add from catalog"));
+    const add = [...host.querySelectorAll("li")]
+      .find((li) => li.textContent?.includes("Notion"))!
+      .querySelector("button");
+    await click(add as HTMLButtonElement);
+
+    await act(async () => {
+      harness.setState({ preparing: true } as Partial<HarnessState>);
+    });
+    const install = button(host, "Installing…");
+    expect(install.disabled).toBe(true);
   });
 
   it("disables remote install honestly for a stdio-only toml target", async () => {

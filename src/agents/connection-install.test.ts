@@ -11,6 +11,7 @@ import {
   probesFromInventory,
 } from "./connection-install";
 import type { HarnessInventory } from "../harness/model";
+import { mergeMcpServer, parseByFormat, type McpFormat } from "../harness/merge";
 
 const claudeTarget = { format: "json" as const, keyPath: "mcpServers" };
 const opencodeTarget = { format: "json" as const, keyPath: "mcp" };
@@ -105,6 +106,39 @@ describe("mapConnectionToTarget", () => {
       spec: { name: "bare", config: { command: "kodade-mcp" } },
     });
   });
+});
+
+// Prove a produced spec is actually mergeable: feed it through the real merge
+// engine and confirm the result parses as valid JSON/TOML with the server
+// present and equal to the spec's config — so a mapping can't emit a shape the
+// safe-merge would reject or mangle.
+describe("mapConnectionToTarget → mergeMcpServer round-trip", () => {
+  const cases: {
+    label: string;
+    target: { format: McpFormat; keyPath: string };
+    conn: () => AgentConnection;
+  }[] = [
+    { label: "claude-json stdio", target: claudeTarget, conn: stdio },
+    { label: "claude-json http", target: claudeTarget, conn: http },
+    { label: "opencode-json stdio", target: opencodeTarget, conn: stdio },
+    { label: "opencode-json http", target: opencodeTarget, conn: http },
+    { label: "toml-stdio stdio", target: codexTarget, conn: stdio },
+  ];
+
+  for (const { label, target, conn } of cases) {
+    it(`${label} merges into a valid config with the server present`, () => {
+      const mapping = mapConnectionToTarget(conn(), target);
+      expect(mapping.ok).toBe(true);
+      if (!mapping.ok) return;
+      const merge = mergeMcpServer("", target.format, target.keyPath, mapping.spec);
+      // The produced text parses as its format, and the server key holds exactly
+      // the config the mapping emitted.
+      const root = parseByFormat(merge.after, target.format) as Record<string, unknown>;
+      const map = root[target.keyPath] as Record<string, unknown>;
+      expect(map[mapping.spec.name]).toStrictEqual(mapping.spec.config);
+      expect(merge.touchedKey).toBe(`${target.keyPath}.${mapping.spec.name}`);
+    });
+  }
 });
 
 describe("probesFromInventory", () => {

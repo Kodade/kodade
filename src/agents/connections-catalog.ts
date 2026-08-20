@@ -3,8 +3,10 @@
 // the transport, the auth requirement, and the provenance. Nothing here is
 // invented — a server with no trustworthy official implementation is left out
 // rather than guessed at (see the PR body for the deliberate gaps: fal has no
-// official execution server, and Gmail's official server is preview-gated while
-// the community one was archived).
+// official execution server, Gmail's official server is preview-gated while the
+// community one was archived, and the reference Filesystem server is omitted
+// because it needs per-user directory arguments — add it as a custom stdio
+// connection with your own directories instead).
 //
 // These are DISPLAY entries. Adding one mints an AgentConnection the user can
 // then install into a CLI's own MCP config through the guarded KödHarness review
@@ -128,20 +130,6 @@ export const CONNECTIONS_CATALOG: ConnectionCatalogEntry[] = [
     authNote: "No authentication.",
     provenance: "official vendor",
     docsUrl: "https://github.com/microsoft/playwright-mcp",
-  },
-  {
-    id: "filesystem",
-    name: "Filesystem",
-    serverName: "filesystem",
-    summary: "Read and write files under directories you explicitly allow.",
-    transports: [
-      { kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"] },
-    ],
-    authNote:
-      "No authentication. Access is scoped by the directory arguments — append " +
-      "one or more directory paths before use, or it exposes nothing.",
-    provenance: "MCP reference implementation",
-    docsUrl: "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
   },
   {
     id: "fetch",

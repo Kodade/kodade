@@ -383,6 +383,7 @@ function PersonaEditor({
       ? (s.connections[connectionScopeKey({ kind: "project", projectId })] ?? EMPTY_CONNECTIONS)
       : EMPTY_CONNECTIONS,
   );
+  const connectionsLoaded = useStore(connections, (s) => s.loaded);
   const availableConnections = useMemo(() => {
     const seen = new Set<string>();
     const merged: AgentConnection[] = [];
@@ -393,6 +394,17 @@ function PersonaEditor({
     }
     return merged;
   }, [projectConnections, appConnections]);
+  const knownConnectionIds = useMemo(
+    () => new Set(availableConnections.map((c) => c.id)),
+    [availableConnections],
+  );
+  // Attached ids that no longer resolve to a registered connection (deleted, or
+  // moved out of scope). Surfaced as removable chips so they're visible, and
+  // pruned on save so a persona never re-persists a dead reference.
+  const unknownConnectionIds = useMemo(
+    () => (connectionsLoaded ? connectionIds.filter((id) => !knownConnectionIds.has(id)) : []),
+    [connectionsLoaded, connectionIds, knownConnectionIds],
+  );
 
   // Install-state probes come from a KödHarness project scan; used to warn (only)
   // when an attached connection isn't installed for the run's provider.
@@ -431,7 +443,13 @@ function PersonaEditor({
   };
 
   const save = async (): Promise<string | null> => {
-    const changes = { name, providerId, prompt, skills: skillIds, connections: connectionIds };
+    // Prune dangling ids on save (only once connections have loaded, so a save
+    // during the initial async load can't wipe a valid reference). Load itself
+    // stays non-destructive — the ids survive on disk until an explicit save.
+    const connectionsToSave = connectionsLoaded
+      ? connectionIds.filter((id) => knownConnectionIds.has(id))
+      : connectionIds;
+    const changes = { name, providerId, prompt, skills: skillIds, connections: connectionsToSave };
     if (personaId) {
       const updated = await store.getState().updatePersona(scope, personaId, changes);
       return updated?.id ?? null;
@@ -596,8 +614,9 @@ function PersonaEditor({
           </p>
           {availableConnections.length === 0 ? (
             <p className="mt-1 text-[11px] leading-relaxed text-text-dim">
-              No connections registered yet. Use “Manage connections…” to add one from the catalog
-              or a custom MCP server.
+              {projectPath
+                ? "No connections registered yet. Use “Manage connections…” to add one from the catalog or a custom MCP server."
+                : "No connections registered yet. Open a project to add connections from the catalog or a custom MCP server."}
             </p>
           ) : (
             <ul className="mt-1 grid gap-1 sm:grid-cols-2">
@@ -621,6 +640,29 @@ function PersonaEditor({
                 </li>
               ))}
             </ul>
+          )}
+          {unknownConnectionIds.length > 0 && (
+            <div className="mt-2" data-testid="persona-unknown-connections">
+              <p className="text-[10px] leading-relaxed text-text-dim">
+                Attached connections that no longer exist. They're pruned when you save; remove
+                them here to tidy up now.
+              </p>
+              <ul className="mt-1 flex flex-wrap gap-1">
+                {unknownConnectionIds.map((id) => (
+                  <li key={id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleConnection(id)}
+                      aria-label={`remove unknown connection ${id}`}
+                      className="flex items-center gap-1 rounded border border-[color-mix(in_srgb,var(--kd-warning)_45%,transparent)] px-2 py-0.5 text-[10px] text-[var(--kd-warning)] hover:bg-[color-mix(in_srgb,var(--kd-warning)_12%,transparent)]"
+                    >
+                      unknown connection
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </fieldset>
 

@@ -16,7 +16,6 @@ const ALLOWED_IDS = [
   "notion",
   "context7",
   "playwright",
-  "filesystem",
   "fetch",
 ] as const;
 

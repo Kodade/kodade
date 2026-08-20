@@ -12,8 +12,7 @@
 // fabricating a config shape that would silently not work.
 
 import type { McpServerSpec } from "../harness/merge";
-import type { McpServerDetail } from "../harness/model";
-import type { HarnessInventory } from "../harness/model";
+import type { HarnessInventory, McpServerDetail } from "../harness/model";
 import type { McpTarget } from "../store/harness";
 import { catalogEntry } from "./connections-catalog";
 import type { AgentConnection, ConnectionTransport } from "./connection";
@@ -80,8 +79,8 @@ function configFor(
         enabled: true,
       };
     case "toml-stdio":
-      // Codex/Grok config.toml has no verified remote MCP transport — only a
-      // stdio [mcp_servers.*] with command/args. Refuse remote honestly.
+      // Codex/Grok config.toml has no verified remote MCP transport for this CLI
+      // — only a stdio [mcp_servers.*] with command/args. Refuse remote honestly.
       if (transport.kind === "http") return null;
       return transport.args.length > 0
         ? { command: transport.command, args: transport.args }
@@ -104,7 +103,7 @@ export function mapConnectionToTarget(
     return {
       ok: false,
       reason:
-        "This CLI's config has no remote MCP transport — install a stdio " +
+        "No verified remote MCP transport for this CLI — install a stdio " +
         "connection, or configure the remote server with the CLI's own tooling.",
     };
   }
