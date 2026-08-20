@@ -14,7 +14,7 @@ export type VoiceModel = {
   // is entitled. The free tiers (base.en/small.en) leave this false/absent, so
   // free-tier behavior is untouched when entitlements are empty.
   pro?: boolean;
-  // Expert-matrix guidance (Settings → voice input → advanced). Novices never
+  // Expert-matrix guidance (Settings → Advanced → KödWhisper). Novices never
   // see these fields; the expert view renders them alongside the checksum.
   speed: string;
   accuracy: string;

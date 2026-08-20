@@ -11,12 +11,17 @@ import {
   filesStore,
   memoryStore,
   providersStore,
+  sshStore,
   themeStore,
+  voiceStore,
 } from "../../store/appStore";
 import { settingsViewStore } from "../../store/settingsView";
 import { DEFAULT_LOCAL_MODEL_PREFERENCES } from "../../local/models";
+import { DEFAULT_VOICE_PREFERENCES } from "../../voice/models";
 import { PROVIDERS, supportsChat } from "../../providers/catalog";
 import { TerminalPane } from "../TerminalPane";
+import { releaseManifestFor } from "../../release/manifest";
+import { AdvancedSection } from "./AdvancedSection";
 import { ChatSection } from "./ChatSection";
 import { SettingsEntry } from "./SettingsEntry";
 import { SettingsPage } from "./SettingsPage";
@@ -87,25 +92,36 @@ describe("settings page", () => {
     expect(settingsViewStore.getState().section).toBe("general");
   });
 
-  it("lists every section and opens on general", async () => {
+  it("lists exactly the four sections and opens on general", async () => {
     await render(<SettingsPage />);
 
-    for (const label of [
+    const links = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>(
+        "[data-settings-nav-link]",
+      ) ?? [],
+    );
+    expect(links.map((link) => link.dataset.settingsNavLink)).toEqual([
       "general",
-      "ködchat",
-      "ködharness",
+      "providers",
+      "memory",
+      "advanced",
+    ]);
+    expect(links.map((link) => link.textContent?.trim())).toEqual([
+      "general",
+      "providers",
       "ködmem",
-      "ködlocal",
-      "ködwhisper",
-      "ködssh",
-      "keybindings",
-    ]) {
-      expect(navLink(label)).not.toBeUndefined();
-    }
-    expect(navLink("providers")).toBeUndefined();
+      "advanced",
+    ]);
     expect(navLink("general")?.getAttribute("aria-current")).toBe("page");
     expect(container?.textContent).toContain("appearance");
     expect(container?.textContent).toContain("theme");
+  });
+
+  it("keeps keybindings on the general page", async () => {
+    await render(<SettingsPage />);
+
+    expect(container?.textContent).toContain("keybindings");
+    expect(container?.textContent).toContain("shortcuts");
   });
 
   it("falls back from a stale deep link", async () => {
@@ -117,32 +133,111 @@ describe("settings page", () => {
     });
 
     expect(settingsViewStore.getState().section).toBe("general");
-    expect(container?.textContent).toContain("Appearance and workspace chrome.");
+    expect(container?.textContent).toContain(
+      "Appearance, workspace chrome, and keyboard shortcuts.",
+    );
   });
 
-  it("redirects the retired providers section to KödChat", async () => {
-    settingsViewStore.setState({ section: "providers" as never });
+  it("redirects the retired KödChat deep link to providers", async () => {
+    settingsViewStore.setState({ section: "chat" as never });
 
     await render(<SettingsPage />);
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(settingsViewStore.getState().section).toBe("chat");
-    expect(navLink("ködchat")?.getAttribute("aria-current")).toBe("page");
-    expect(navLink("providers")).toBeUndefined();
+    expect(settingsViewStore.getState().section).toBe("providers");
+    expect(navLink("providers")?.getAttribute("aria-current")).toBe("page");
+    expect(navLink("ködchat")).toBeUndefined();
     expect(container?.textContent).toContain("agents that can chat");
+  });
+
+  it("redirects the retired keybindings deep link to general", async () => {
+    settingsViewStore.setState({ section: "keybindings" as never });
+
+    await render(<SettingsPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(settingsViewStore.getState().section).toBe("general");
+    expect(container?.textContent).toContain("shortcuts");
   });
 
   it("switches the content pane from the left nav", async () => {
     await render(<SettingsPage />);
 
-    await act(async () => navLink("keybindings")?.click());
+    await act(async () => navLink("advanced")?.click());
 
-    expect(settingsViewStore.getState().section).toBe("keybindings");
-    expect(navLink("keybindings")?.getAttribute("aria-current")).toBe("page");
+    expect(settingsViewStore.getState().section).toBe("advanced");
+    expect(navLink("advanced")?.getAttribute("aria-current")).toBe("page");
     expect(navLink("general")?.getAttribute("aria-current")).toBeNull();
-    expect(container?.textContent).toContain("shortcuts");
+    expect(container?.textContent).toContain("ködharness");
+  });
+
+  it("stacks every development block under advanced in a dev build", async () => {
+    settingsViewStore.setState({ section: "advanced" });
+    await render(<SettingsPage />);
+
+    for (const heading of ["ködharness", "ködlocal", "ködwhisper", "ködssh"]) {
+      expect(container?.textContent).toContain(heading);
+    }
+    // Harness is the open block; the development ones start collapsed.
+    expect(
+      Array.from(
+        container?.querySelectorAll<HTMLButtonElement>("[aria-expanded]") ?? [],
+      ).map((button) => button.getAttribute("aria-expanded")),
+    ).toEqual(["false", "false", "false"]);
+  });
+
+  it("mounts a development block only when it is expanded", async () => {
+    const original = {
+      refreshInputDevices: voiceStore.getState().refreshInputDevices,
+      init: sshStore.getState().init,
+    };
+    const refreshInputDevices = vi.fn(async () => undefined);
+    const init = vi.fn(async () => undefined);
+    voiceStore.setState({ refreshInputDevices });
+    sshStore.setState({ init });
+    settingsViewStore.setState({ section: "advanced" });
+
+    try {
+      await render(<SettingsPage />);
+      // Visiting Advanced probes no microphones and no SSH hosts.
+      expect(refreshInputDevices).not.toHaveBeenCalled();
+      expect(init).not.toHaveBeenCalled();
+
+      const disclosure = (title: string) =>
+        Array.from(
+          container?.querySelectorAll<HTMLButtonElement>("[aria-expanded]") ??
+            [],
+        ).find((button) => button.textContent?.includes(title));
+
+      await act(async () => {
+        disclosure("ködwhisper")?.click();
+        await Promise.resolve();
+      });
+      expect(refreshInputDevices).toHaveBeenCalled();
+      expect(init).not.toHaveBeenCalled();
+
+      await act(async () => {
+        disclosure("ködssh")?.click();
+        await Promise.resolve();
+      });
+      expect(init).toHaveBeenCalled();
+    } finally {
+      voiceStore.setState({ refreshInputDevices: original.refreshInputDevices });
+      sshStore.setState({ init: original.init });
+    }
+  });
+
+  it("shows only the harness block under advanced in a public build", async () => {
+    await render(<AdvancedSection manifest={releaseManifestFor("public")} />);
+
+    expect(container?.textContent).toContain("What your agents read");
+    expect(container?.textContent).not.toContain("ködlocal");
+    expect(container?.textContent).not.toContain("ködwhisper");
+    expect(container?.textContent).not.toContain("ködssh");
   });
 
   it("renders the KödHarness inventory inside settings", async () => {
@@ -151,7 +246,7 @@ describe("settings page", () => {
       activeProjectId: "project",
       projects: [{ id: "project", name: "kodade", path: "/repo" }],
     });
-    settingsViewStore.setState({ section: "harness" });
+    settingsViewStore.setState({ section: "advanced" });
 
     await render(<SettingsPage />);
 
@@ -166,7 +261,7 @@ describe("settings page", () => {
 
   it("keeps the KödHarness empty state bounded to settings", async () => {
     appStore.setState({ activeProjectId: null, projects: [] });
-    settingsViewStore.setState({ section: "harness" });
+    settingsViewStore.setState({ section: "advanced" });
 
     await render(<SettingsPage />);
 
@@ -369,7 +464,7 @@ describe("settings page", () => {
     await act(async () => back?.click());
     expect(settingsViewStore.getState().section).toBeNull();
 
-    await act(async () => settingsViewStore.getState().open("chat"));
+    await act(async () => settingsViewStore.getState().open("providers"));
     await act(async () =>
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
     );
@@ -400,14 +495,48 @@ describe("settings page", () => {
   });
 
   it("hides restore defaults for sections with nothing to reset", async () => {
-    settingsViewStore.setState({ section: "keybindings" });
+    appStore.setState({ activeProjectId: null, projects: [] });
+    settingsViewStore.setState({ section: "memory" });
     await render(<SettingsPage />);
 
     const restore = Array.from(
       container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
     ).find((button) => button.textContent === "Restore defaults");
     expect(restore).toBeUndefined();
-    expect(container?.textContent).toContain("shortcut");
+    expect(container?.textContent).toContain("KödMem");
+  });
+
+  it("keeps a restore for the development blocks stacked under advanced", async () => {
+    appStore.getState().setLocalModelPreferences({
+      ...DEFAULT_LOCAL_MODEL_PREFERENCES,
+      contextLength: 8192,
+    });
+    appStore.getState().setVoicePreferences({
+      ...DEFAULT_VOICE_PREFERENCES,
+      modelId: "small.en",
+    });
+    settingsViewStore.setState({ section: "advanced" });
+    await render(<SettingsPage />);
+
+    const restore = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent === "Restore defaults");
+    await act(async () => restore?.click());
+    // The confirm step names what actually resets, not the page.
+    expect(container?.textContent).toContain(
+      "Reset KödLocal and KödWhisper preferences?",
+    );
+    const confirm = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent === "Reset");
+    await act(async () => confirm?.click());
+
+    expect(appStore.getState().localModelPreferences).toEqual(
+      DEFAULT_LOCAL_MODEL_PREFERENCES,
+    );
+    expect(appStore.getState().voicePreferences).toEqual(
+      DEFAULT_VOICE_PREFERENCES,
+    );
   });
 
   it("does not put provider status controls above the terminal", () => {

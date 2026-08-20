@@ -123,6 +123,7 @@ function SectionLink({
         settingsViewStore.getState().open(section.id as SettingsSectionId)
       }
       aria-current={active ? "page" : undefined}
+      data-settings-nav-link={section.id}
       className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs focus:outline-none focus:ring-1 focus:ring-accent ${
         active
           ? "bg-surface text-text"
@@ -136,8 +137,8 @@ function SectionLink({
 }
 
 // Two-step reset for the ACTIVE section only. Sections with nothing meaningful
-// to reset (ködharness, ködssh, keybindings) declare no
-// restoreDefaults and get no button at all.
+// to reset (ködmem, and advanced in a public build) declare no restoreDefaults
+// and get no button at all.
 function RestoreDefaults({ section }: { section: SettingsSection }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -160,7 +161,9 @@ function RestoreDefaults({ section }: { section: SettingsSection }) {
 
   return (
     <div className="flex shrink-0 items-center gap-2 text-[11px] text-text-dim">
-      <span>Reset {section.label} to defaults?</span>
+      <span>
+        {section.restorePrompt ?? `Reset ${section.label} to defaults?`}
+      </span>
       <button
         type="button"
         onClick={() => {

@@ -127,10 +127,10 @@ export function SidebarChrome({
   );
 }
 
-// Remote host management lives in Settings → SSH (the canonical surface). The
-// sidebar's Remote section is the saved remote-project tree. Plain/ad-hoc
-// SSH sessions remain ordinary workspace cards; host discovery and connection
-// management live in Settings → SSH.
+// Remote host management lives in Settings → Advanced → KödSSH (the canonical
+// surface). The sidebar's Remote section is the saved remote-project tree.
+// Plain/ad-hoc SSH sessions remain ordinary workspace cards; host discovery and
+// connection management live in Settings → Advanced → KödSSH.
 export function SidebarRemoteSection() {
   const hasRemoteWork = useStore(
     appStore,

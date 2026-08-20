@@ -1097,7 +1097,7 @@ describe("ProjectsSidebar adaptive workspace seam", () => {
       container?.querySelector<HTMLElement>(
         '[aria-label="Remote projects"] h2',
       );
-    // Hosts are managed in Settings → SSH; a local-only workspace carries no
+    // Hosts are managed in Settings → Advanced → KödSSH; a local-only workspace carries no
     // Remote section in the sidebar.
     expect(remoteHeading()).toBeNull();
 

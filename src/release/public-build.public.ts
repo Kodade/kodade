@@ -1,5 +1,11 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { availableSettingsSections } from "../components/settings/registry";
+import { AdvancedSection } from "../components/settings/AdvancedSection";
+import {
+  availableSettingsSections,
+  settingsSection,
+} from "../components/settings/registry";
 import { activateBrowserForAgent } from "../browser/agent-activation";
 import { chatLinkTarget } from "../browser/link-target";
 import { browser, externalUrls, local, ssh, vox } from "../ipc/transport";
@@ -77,9 +83,20 @@ describe("compiled public surface", () => {
   });
 
   it("omits development settings, providers, and shortcuts", () => {
-    expect(
-      availableSettingsSections().map((section) => section.id),
-    ).not.toEqual(expect.arrayContaining(["local", "voice", "ssh"]));
+    // Four sections, and the Advanced page carries the harness alone: no
+    // development block renders and there is nothing to restore.
+    expect(availableSettingsSections().map((section) => section.id)).toEqual([
+      "general",
+      "providers",
+      "memory",
+      "advanced",
+    ]);
+    expect(settingsSection("advanced").restoreDefaults).toBeUndefined();
+    const advanced = renderToStaticMarkup(createElement(AdvancedSection));
+    expect(advanced).toContain("ködharness");
+    expect(advanced).not.toContain("ködlocal");
+    expect(advanced).not.toContain("ködwhisper");
+    expect(advanced).not.toContain("ködssh");
     expect(AVAILABLE_PROVIDERS.map((provider) => provider.id)).not.toContain(
       "kodade-local",
     );
