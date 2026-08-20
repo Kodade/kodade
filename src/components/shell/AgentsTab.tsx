@@ -9,12 +9,14 @@
 // the store's own setters and runs it on the existing spawn path. Run history
 // stays in the Workspaces sidebar's shared green/red rows.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
   agentsStore as defaultAgentsStore,
   appStore,
+  connectionsStore as defaultConnectionsStore,
+  connectionStore as defaultConnectionStore,
   harnessStore as defaultHarnessStore,
   kodworkStore,
 } from "../../store/appStore";
@@ -22,6 +24,12 @@ import type { AgentsState } from "../../agents/agents-store";
 import { personaScopeKey } from "../../agents/agents-store";
 import { MAX_NAME_CHARS, MAX_PROMPT_CHARS, type AgentPersona } from "../../agents/persona";
 import type { PersonaScope } from "../../agents/persona-store";
+import type { AgentConnection } from "../../agents/connection";
+import type { ConnectionScope, ConnectionStore } from "../../agents/connection-store";
+import type { ConnectionsState } from "../../agents/connections-store";
+import { connectionScopeKey } from "../../agents/connections-store";
+import { probesFromInventory } from "../../agents/connection-install";
+import { ConnectionsManager } from "../agents/ConnectionsManager";
 import type { KodworkState } from "../../kodwork/store";
 import type { HarnessState } from "../../store/harness";
 import type { ProjectsState } from "../../store/projects";
@@ -41,6 +49,7 @@ const RUN_PROVIDERS = AVAILABLE_PROVIDERS.filter(
 const DEFAULT_PROVIDER_ID = RUN_PROVIDERS[0]?.id ?? "claude";
 
 const EMPTY_PERSONAS: AgentPersona[] = [];
+const EMPTY_CONNECTIONS: AgentConnection[] = [];
 
 // Which persona (or a new one) the editor is bound to. `id === null` is a new,
 // unsaved persona in that scope.
@@ -51,12 +60,16 @@ export function AgentsTab({
   workStore = kodworkStore,
   projectsStore = appStore,
   harness = defaultHarnessStore,
+  connections = defaultConnectionsStore,
+  connectionSource = defaultConnectionStore,
   manifest = RELEASE_MANIFEST,
 }: {
   store?: StoreApi<AgentsState>;
   workStore?: StoreApi<KodworkState>;
   projectsStore?: StoreApi<ProjectsState>;
   harness?: StoreApi<HarnessState>;
+  connections?: StoreApi<ConnectionsState>;
+  connectionSource?: ConnectionStore;
   manifest?: ReleaseManifest;
 } = {}) {
   const projects = useStore(projectsStore, (s) => s.projects);
@@ -92,10 +105,19 @@ export function AgentsTab({
       );
   }, [store]);
   useEffect(() => {
+    void connections
+      .getState()
+      .load()
+      .catch((error) =>
+        console.error("kodade: connection document load failed:", error),
+      );
+  }, [connections]);
+  useEffect(() => {
     if (activeProject) {
       store.getState().syncScope({ kind: "project", projectId: activeProject.id });
+      connections.getState().syncScope({ kind: "project", projectId: activeProject.id });
     }
-  }, [store, activeProject?.id]);
+  }, [store, connections, activeProject?.id]);
 
   const [editing, setEditing] = useState<EditTarget | null>(null);
 
@@ -131,6 +153,8 @@ export function AgentsTab({
               workStore={workStore}
               projectsStore={projectsStore}
               harness={harness}
+              connections={connections}
+              connectionSource={connectionSource}
               manifest={manifest}
               scope={editing.scope}
               personaId={editing.id}
@@ -294,6 +318,8 @@ function PersonaEditor({
   workStore,
   projectsStore,
   harness,
+  connections,
+  connectionSource,
   manifest,
   scope,
   personaId,
@@ -306,6 +332,8 @@ function PersonaEditor({
   workStore: StoreApi<KodworkState>;
   projectsStore: StoreApi<ProjectsState>;
   harness: StoreApi<HarnessState>;
+  connections: StoreApi<ConnectionsState>;
+  connectionSource: ConnectionStore;
   manifest: ReleaseManifest;
   scope: PersonaScope;
   personaId: string | null;
@@ -323,6 +351,8 @@ function PersonaEditor({
   );
   const [prompt, setPrompt] = useState(existing?.prompt ?? "");
   const [skillIds, setSkillIds] = useState<string[]>(existing?.skills ?? []);
+  const [connectionIds, setConnectionIds] = useState<string[]>(existing?.connections ?? []);
+  const [managingConnections, setManagingConnections] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const mutationError = useStore(store, (s) => s.mutationError);
 
@@ -341,12 +371,67 @@ function PersonaEditor({
   }, [harness, projectPath]);
   const skillOptions = kodSkills?.pack.skills ?? [];
 
+  // Registered connections the persona can attach: the app scope, plus this
+  // workspace's scope. Both are mirrored so the editor lists whichever the user
+  // has registered, regardless of which scope the persona itself lives in.
+  const appConnections = useStore(
+    connections,
+    (s) => s.connections[connectionScopeKey({ kind: "app" })] ?? EMPTY_CONNECTIONS,
+  );
+  const projectConnections = useStore(connections, (s) =>
+    projectId
+      ? (s.connections[connectionScopeKey({ kind: "project", projectId })] ?? EMPTY_CONNECTIONS)
+      : EMPTY_CONNECTIONS,
+  );
+  const availableConnections = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: AgentConnection[] = [];
+    for (const connection of [...projectConnections, ...appConnections]) {
+      if (seen.has(connection.id)) continue;
+      seen.add(connection.id);
+      merged.push(connection);
+    }
+    return merged;
+  }, [projectConnections, appConnections]);
+
+  // Install-state probes come from a KödHarness project scan; used to warn (only)
+  // when an attached connection isn't installed for the run's provider.
+  const inventory = useStore(harness, (s) => s.inventory);
+  useEffect(() => {
+    const rescan = harness.getState().rescanScope;
+    if (projectPath && typeof rescan === "function") void rescan("project", projectPath);
+  }, [harness, projectPath]);
+  const probes = useMemo(() => probesFromInventory(inventory ?? null), [inventory]);
+
   const provider = RUN_PROVIDERS.find((entry) => entry.id === providerId);
   const workEnabled = manifest.features.work;
   const canRun = workEnabled && !!projectId && prompt.trim().length > 0;
 
+  // Non-blocking prepare-run notice: attached connections whose server isn't yet
+  // installed for the selected provider's config. The run still launches — this
+  // only reminds the user to install via Connections; nothing is auto-written.
+  const uninstalledForProvider = useMemo(
+    () =>
+      connectionIds
+        .map((id) => availableConnections.find((c) => c.id === id))
+        .filter((c): c is AgentConnection => !!c)
+        .filter(
+          (c) =>
+            !connectionSource
+              .installedState(c, probes)
+              .some((install) => install.cli === providerId),
+        ),
+    [connectionIds, availableConnections, connectionSource, probes, providerId],
+  );
+
+  const toggleConnection = (id: string) => {
+    setConnectionIds((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+    );
+  };
+
   const save = async (): Promise<string | null> => {
-    const changes = { name, providerId, prompt, skills: skillIds };
+    const changes = { name, providerId, prompt, skills: skillIds, connections: connectionIds };
     if (personaId) {
       const updated = await store.getState().updatePersona(scope, personaId, changes);
       return updated?.id ?? null;
@@ -492,22 +577,76 @@ function PersonaEditor({
           )}
         </fieldset>
 
-        <label className="mt-4 block text-[11px] text-text-dim" htmlFor="persona-connections">
-          Connections
-        </label>
-        <input
-          id="persona-connections"
-          type="text"
-          value=""
-          disabled
-          readOnly
-          placeholder="Connections arrive in a later update"
-          aria-describedby="persona-connections-note"
-          className="mt-1 w-full cursor-not-allowed rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-text-dim placeholder:text-text-dim"
-        />
-        <p id="persona-connections-note" className="mt-1 text-[10px] text-text-dim">
-          Connect this agent to your tools and accounts. Coming soon.
-        </p>
+        <fieldset className="mt-4" data-testid="persona-connections">
+          <div className="flex items-center justify-between">
+            <legend className="text-[11px] text-text-dim">Connections</legend>
+            {projectPath && (
+              <button
+                type="button"
+                onClick={() => setManagingConnections(true)}
+                className="rounded border border-border px-2 py-0.5 text-[10px] text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+              >
+                Manage connections…
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-text-dim">
+            Attach MCP servers this agent should reach. Ködade never stores keys — enabling a
+            connection installs its server into your CLI's own config through a reviewed change.
+          </p>
+          {availableConnections.length === 0 ? (
+            <p className="mt-1 text-[11px] leading-relaxed text-text-dim">
+              No connections registered yet. Use “Manage connections…” to add one from the catalog
+              or a custom MCP server.
+            </p>
+          ) : (
+            <ul className="mt-1 grid gap-1 sm:grid-cols-2">
+              {availableConnections.map((connection) => (
+                <li key={connection.id}>
+                  <label className="flex items-start gap-2 rounded border border-border bg-surface px-2 py-1.5 text-xs text-text">
+                    <input
+                      type="checkbox"
+                      checked={connectionIds.includes(connection.id)}
+                      onChange={() => toggleConnection(connection.id)}
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{connection.name}</span>
+                      <span className="block truncate text-[10px] text-text-dim">
+                        {connection.transport.kind === "http" ? "remote" : "stdio"}
+                        {connection.authNote ? ` · ${connection.authNote}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </fieldset>
+
+        {uninstalledForProvider.length > 0 && (
+          <p
+            data-testid="persona-connection-notice"
+            className="mt-2 rounded border border-[color-mix(in_srgb,var(--kd-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--kd-warning)_10%,transparent)] px-2 py-1.5 text-[10px] leading-relaxed text-[var(--kd-warning)]"
+          >
+            {uninstalledForProvider.map((c) => c.name).join(", ")}{" "}
+            {uninstalledForProvider.length === 1 ? "isn't" : "aren't"} installed for{" "}
+            {provider?.name ?? providerId} — install via Connections. The run still launches.
+          </p>
+        )}
+
+        {managingConnections && projectPath && (
+          <ConnectionsDialog onClose={() => setManagingConnections(false)}>
+            <ConnectionsManager
+              connections={connections}
+              harness={harness}
+              source={connectionSource}
+              scope={connectionScope(scope)}
+              projectRoot={projectPath}
+              onClose={() => setManagingConnections(false)}
+            />
+          </ConnectionsDialog>
+        )}
 
         {mutationError && (
           <p className="mt-3 text-xs text-[var(--kd-error)]" data-testid="persona-error">
@@ -572,6 +711,54 @@ function PersonaEditor({
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Map a persona's scope onto the connection scope the manager writes into: a
+// project persona registers connections in its workspace, an app persona in the
+// app scope.
+function connectionScope(scope: PersonaScope): ConnectionScope {
+  return scope.kind === "project"
+    ? { kind: "project", projectId: scope.projectId }
+    : { kind: "app" };
+}
+
+// A simple modal wrapper for the Connections manager (focus in, Escape closes,
+// click-away closes) — mirrors HarnessDialog's discipline.
+function ConnectionsDialog({
+  onClose,
+  children,
+}: {
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Connections"
+        tabIndex={-1}
+        className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-auto rounded shadow-2xl outline-none"
+      >
+        {children}
       </div>
     </div>
   );

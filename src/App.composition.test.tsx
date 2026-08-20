@@ -14,6 +14,9 @@ vi.mock("./store/appStore", async () => {
   const { MockStorage } = await import("./ipc/mock");
   const { createPersonaStore } = await import("./agents/persona-store");
   const { createAgentsStore } = await import("./agents/agents-store");
+  const { createConnectionStore } = await import("./agents/connection-store");
+  const { createConnectionsStore } = await import("./agents/connections-store");
+  const connectionStore = createConnectionStore({ storage: new MockStorage() });
   const appStore = createStore((set) => ({
     layout: [14, 40, 16, 30],
     sidebarMode: "full",
@@ -54,6 +57,8 @@ vi.mock("./store/appStore", async () => {
       kodSkillsError: null,
       loadKodSkills: async () => {},
     })),
+    connectionStore,
+    connectionsStore: createConnectionsStore({ store: connectionStore }),
   };
 });
 
