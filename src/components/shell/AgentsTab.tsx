@@ -20,7 +20,7 @@ import {
 } from "../../store/appStore";
 import type { AgentsState } from "../../agents/agents-store";
 import { personaScopeKey } from "../../agents/agents-store";
-import type { AgentPersona } from "../../agents/persona";
+import { MAX_NAME_CHARS, MAX_PROMPT_CHARS, type AgentPersona } from "../../agents/persona";
 import type { PersonaScope } from "../../agents/persona-store";
 import type { KodworkState } from "../../kodwork/store";
 import type { HarnessState } from "../../store/harness";
@@ -46,67 +46,19 @@ const EMPTY_PERSONAS: AgentPersona[] = [];
 // unsaved persona in that scope.
 type EditTarget = { scope: PersonaScope; id: string | null };
 
-type AgentsTabProps = {
+export function AgentsTab({
+  store = defaultAgentsStore,
+  workStore = kodworkStore,
+  projectsStore = appStore,
+  harness = defaultHarnessStore,
+  manifest = RELEASE_MANIFEST,
+}: {
   store?: StoreApi<AgentsState>;
   workStore?: StoreApi<KodworkState>;
   projectsStore?: StoreApi<ProjectsState>;
   harness?: StoreApi<HarnessState>;
   manifest?: ReleaseManifest;
-};
-
-type AgentsTabWiring = {
-  store: StoreApi<AgentsState>;
-  workStore: StoreApi<KodworkState>;
-  projectsStore: StoreApi<ProjectsState>;
-  harness: StoreApi<HarnessState>;
-  manifest: ReleaseManifest;
-};
-
-// Fall back to the app singletons only when a prop is absent. Reading a
-// singleton is wrapped because a stripped test/preview harness may not export
-// it (Vitest module mocks throw on an undefined export), in which case the tab
-// renders inertly instead of crashing. `??` keeps injected props from ever
-// touching the singletons, so a wired test never hits this path.
-function resolveWiring(props: AgentsTabProps): AgentsTabWiring | null {
-  try {
-    return {
-      store: props.store ?? defaultAgentsStore,
-      workStore: props.workStore ?? kodworkStore,
-      projectsStore: props.projectsStore ?? appStore,
-      harness: props.harness ?? defaultHarnessStore,
-      manifest: props.manifest ?? RELEASE_MANIFEST,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function AgentsTab(props: AgentsTabProps = {}) {
-  const wiring = resolveWiring(props);
-  // Hook-free guard so the body's hook order stays stable.
-  if (!wiring) {
-    return (
-      <Pane title="agents">
-        <div className="h-full" />
-      </Pane>
-    );
-  }
-  return <AgentsTabBody {...wiring} />;
-}
-
-function AgentsTabBody({
-  store,
-  workStore,
-  projectsStore,
-  harness,
-  manifest,
-}: {
-  store: StoreApi<AgentsState>;
-  workStore: StoreApi<KodworkState>;
-  projectsStore: StoreApi<ProjectsState>;
-  harness: StoreApi<HarnessState>;
-  manifest: ReleaseManifest;
-}) {
+} = {}) {
   const projects = useStore(projectsStore, (s) => s.projects);
   const activeProjectId = useStore(projectsStore, (s) => s.activeProjectId);
   const activeProject =
@@ -125,11 +77,19 @@ function AgentsTabBody({
       : EMPTY_PERSONAS,
   );
   const selectedRunTaskId = useStore(store, (s) => s.selectedRunTaskId);
+  const storageReadable = useStore(store, (s) => s.storageReadable);
+  const runOpenSeq = useStore(store, (s) => s.runOpenSeq);
 
   // Load the persona document once, and mirror the current workspace scope
-  // whenever the active project changes.
+  // whenever the active project changes. load() re-mirrors every synced scope,
+  // so a workspace scope synced before the read still populates.
   useEffect(() => {
-    void store.getState().load();
+    void store
+      .getState()
+      .load()
+      .catch((error) =>
+        console.error("kodade: persona document load failed:", error),
+      );
   }, [store]);
   useEffect(() => {
     if (activeProject) {
@@ -139,15 +99,16 @@ function AgentsTabBody({
 
   const [editing, setEditing] = useState<EditTarget | null>(null);
 
-  // A run selected from the sidebar (or a fresh launch) takes over the run
-  // area: drop the editor so the task pane is visible.
-  const prevRun = useRef(selectedRunTaskId);
+  // A run opened from the sidebar (or a fresh launch) takes over the run area:
+  // drop the editor so the task pane is visible. Keyed on runOpenSeq — which
+  // bumps on every selectRun — so re-opening the ALREADY-selected run still
+  // reveals it rather than leaving the editor up.
+  const seenRunSeq = useRef(runOpenSeq);
   useEffect(() => {
-    if (selectedRunTaskId && selectedRunTaskId !== prevRun.current) {
-      setEditing(null);
-    }
-    prevRun.current = selectedRunTaskId;
-  }, [selectedRunTaskId]);
+    if (runOpenSeq === seenRunSeq.current) return;
+    seenRunSeq.current = runOpenSeq;
+    if (store.getState().selectedRunTaskId) setEditing(null);
+  }, [runOpenSeq, store]);
 
   return (
     <Pane title="agents">
@@ -157,6 +118,7 @@ function AgentsTabBody({
           projectPersonas={projectPersonas}
           projectName={activeProject?.name ?? null}
           projectScope={projectScope}
+          storageReadable={storageReadable}
           editing={editing}
           onSelect={(scope, id) => setEditing({ scope, id })}
           onNew={(scope) => setEditing({ scope, id: null })}
@@ -199,6 +161,7 @@ function PersonaRail({
   projectPersonas,
   projectName,
   projectScope,
+  storageReadable,
   editing,
   onSelect,
   onNew,
@@ -207,6 +170,7 @@ function PersonaRail({
   projectPersonas: AgentPersona[];
   projectName: string | null;
   projectScope: PersonaScope | null;
+  storageReadable: boolean;
   editing: EditTarget | null;
   onSelect(scope: PersonaScope, id: string): void;
   onNew(scope: PersonaScope): void;
@@ -217,11 +181,21 @@ function PersonaRail({
       data-testid="persona-rail"
       className="flex w-56 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-surface/40 px-2 py-3"
     >
+      {!storageReadable && (
+        <p
+          data-testid="persona-storage-error"
+          className="mx-1 rounded border border-[color-mix(in_srgb,var(--kd-error)_45%,transparent)] bg-[color-mix(in_srgb,var(--kd-error)_10%,transparent)] px-2 py-1.5 text-[11px] leading-relaxed text-[var(--kd-error)]"
+        >
+          Persona storage is unreadable, so new agents can't be saved. Resolve
+          the on-disk personas document, then reopen this tab.
+        </p>
+      )}
       {projectScope && (
         <PersonaGroup
           heading={projectName ? `${projectName} workspace` : "This workspace"}
           scope={projectScope}
           personas={projectPersonas}
+          storageReadable={storageReadable}
           editing={editing}
           onSelect={onSelect}
           onNew={onNew}
@@ -231,6 +205,7 @@ function PersonaRail({
         heading="All projects"
         scope={{ kind: "app" }}
         personas={appPersonas}
+        storageReadable={storageReadable}
         editing={editing}
         onSelect={onSelect}
         onNew={onNew}
@@ -243,6 +218,7 @@ function PersonaGroup({
   heading,
   scope,
   personas,
+  storageReadable,
   editing,
   onSelect,
   onNew,
@@ -250,6 +226,7 @@ function PersonaGroup({
   heading: string;
   scope: PersonaScope;
   personas: AgentPersona[];
+  storageReadable: boolean;
   editing: EditTarget | null;
   onSelect(scope: PersonaScope, id: string): void;
   onNew(scope: PersonaScope): void;
@@ -275,7 +252,9 @@ function PersonaGroup({
       </div>
       {personas.length === 0 ? (
         <p className="mt-1 px-1 text-[11px] leading-relaxed text-text-dim">
-          No personas yet.
+          {storageReadable
+            ? "No personas yet."
+            : "Personas unavailable while storage is unreadable."}
         </p>
       ) : (
         <ul className="mt-1 space-y-0.5">
@@ -344,11 +323,19 @@ function PersonaEditor({
   );
   const [prompt, setPrompt] = useState(existing?.prompt ?? "");
   const [skillIds, setSkillIds] = useState<string[]>(existing?.skills ?? []);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const mutationError = useStore(store, (s) => s.mutationError);
 
+  // A stale error from a previous persona must not carry into a freshly opened
+  // editor. The editor remounts per target, so clearing once on mount is enough.
+  useEffect(() => {
+    store.getState().clearMutationError();
+  }, [store]);
+
   // Installed KödSkills for the multi-select. Loaded lazily against the active
-  // project; a build/project without any simply shows an empty-state note.
+  // project; a failed scan is distinguished from "none installed" below.
   const kodSkills = useStore(harness, (s) => s.kodSkills);
+  const kodSkillsError = useStore(harness, (s) => s.kodSkillsError);
   useEffect(() => {
     if (projectPath) void harness.getState().loadKodSkills(projectPath);
   }, [harness, projectPath]);
@@ -373,26 +360,27 @@ function PersonaEditor({
     if (id) onSaved(id);
   };
 
-  const onRunClick = async () => {
-    // Persist first so the run reflects the saved persona, then launch from
-    // the current form values (which now match what was saved).
+  const onPrepareRunClick = async () => {
+    // Save first; the run must reflect a persisted persona. A save failure
+    // leaves mutationError set — stop rather than launch a phantom run.
     const id = await save();
-    if (id) onSaved(id);
-    if (!projectId) return;
-    const persona: AgentPersona = {
-      id: id ?? personaId ?? "draft",
-      name,
-      prompt,
-      providerId,
-      skills: skillIds,
-      connections: existing?.connections ?? [],
-      createdAt: existing?.createdAt ?? 0,
-      updatedAt: existing?.updatedAt ?? 0,
-    };
+    if (!id) return;
+    if (!projectId) {
+      onSaved(id);
+      return;
+    }
+    const persona = store.getState().getPersona(scope, id);
+    if (!persona) return;
+    // Prepares (does not start) a KödWork draft from the persona; the run is
+    // started from the task pane's own Start control.
     await launchPersonaRun(projectsStore, workStore, store, projectId, persona);
   };
 
   const onDeleteClick = async () => {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
     if (personaId) await store.getState().removePersona(scope, personaId);
     onDeleted();
   };
@@ -413,8 +401,8 @@ function PersonaEditor({
         </h1>
         <p className="mt-1 text-xs text-text-dim">
           An agent is a reusable persona — a provider, a system prompt, and the
-          KödSkills it should lean on. Launch it to run a background task with
-          your own installed CLI.
+          KödSkills it should lean on. Preparing a run drafts a background task
+          with your own installed CLI; you start it from the task pane.
         </p>
 
         <label className="mt-4 block text-[11px] text-text-dim" htmlFor="persona-name">
@@ -424,6 +412,7 @@ function PersonaEditor({
           id="persona-name"
           type="text"
           value={name}
+          maxLength={MAX_NAME_CHARS}
           onChange={(event) => setName(event.target.value)}
           placeholder="New persona"
           className="mt-1 w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-text placeholder:text-text-dim focus:border-accent/70 focus:outline-none"
@@ -454,6 +443,7 @@ function PersonaEditor({
           <textarea
             id="persona-prompt"
             value={prompt}
+            maxLength={MAX_PROMPT_CHARS}
             onChange={(event) => setPrompt(event.target.value)}
             rows={6}
             aria-label="System prompt"
@@ -464,7 +454,15 @@ function PersonaEditor({
 
         <fieldset className="mt-4">
           <legend className="text-[11px] text-text-dim">Skills</legend>
-          {skillOptions.length === 0 ? (
+          <p className="mt-1 text-[10px] leading-relaxed text-text-dim">
+            Stored with the persona; applied once runs pick up skills in a later
+            update.
+          </p>
+          {kodSkillsError ? (
+            <p className="mt-1 text-[11px] leading-relaxed text-[var(--kd-error)]">
+              Could not load installed KödSkills: {kodSkillsError}
+            </p>
+          ) : skillOptions.length === 0 ? (
             <p className="mt-1 text-[11px] leading-relaxed text-text-dim">
               No installed KödSkills detected for this workspace.
             </p>
@@ -520,20 +518,20 @@ function PersonaEditor({
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => void onRunClick()}
+            onClick={() => void onPrepareRunClick()}
             disabled={!canRun}
             title={
               !workEnabled
                 ? "Agent runs are unavailable in this build"
                 : !projectId
-                  ? "Open a project to run this agent"
+                  ? "Open a project to prepare a run"
                   : prompt.trim().length === 0
                     ? "Add a system prompt first"
-                    : "Save and run this agent"
+                    : "Save this agent and prepare a run to start from the task pane"
             }
             className="rounded-full bg-accent px-4 py-1.5 text-xs font-medium text-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus:ring-1 focus:ring-accent"
           >
-            Run agent
+            Prepare run
           </button>
           <button
             type="button"
@@ -544,13 +542,34 @@ function PersonaEditor({
           </button>
           <div className="flex-1" />
           {personaId && (
-            <button
-              type="button"
-              onClick={() => void onDeleteClick()}
-              className="rounded border border-border px-3 py-1.5 text-xs text-text-dim hover:bg-surface-hover hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
-            >
-              Delete
-            </button>
+            <>
+              {confirmingDelete && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(false)}
+                  className="rounded px-2 py-1.5 text-xs text-text-dim hover:text-text focus:outline-none focus:ring-1 focus:ring-accent"
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void onDeleteClick()}
+                aria-label={confirmingDelete ? "Confirm delete persona" : "Delete persona"}
+                title={
+                  confirmingDelete
+                    ? "This permanently removes the persona"
+                    : "Delete this persona"
+                }
+                className={`rounded border px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent ${
+                  confirmingDelete
+                    ? "border-[color-mix(in_srgb,var(--kd-error)_55%,transparent)] text-[var(--kd-error)] hover:bg-[color-mix(in_srgb,var(--kd-error)_12%,transparent)]"
+                    : "border-border text-text-dim hover:bg-surface-hover hover:text-text"
+                }`}
+              >
+                {confirmingDelete ? "Confirm delete" : "Delete"}
+              </button>
+            </>
           )}
         </div>
       </div>

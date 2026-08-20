@@ -11,12 +11,18 @@ vi.mock("./store/appStore", async () => {
   const { defaultShellLayout } = await import(
     "./components/shell/shell-layout"
   );
+  const { MockStorage } = await import("./ipc/mock");
+  const { createPersonaStore } = await import("./agents/persona-store");
+  const { createAgentsStore } = await import("./agents/agents-store");
   const appStore = createStore((set) => ({
     layout: [14, 40, 16, 30],
     sidebarMode: "full",
     filesCollapsed: false,
     shellLayout: defaultShellLayout(),
     shellV2Enabled: true,
+    // The Agents tab reads these when its pill is selected.
+    projects: [],
+    activeProjectId: null,
     setLayout: vi.fn(),
     setShellLayout: (shellLayout: unknown) => set({ shellLayout }),
     setShellV2Enabled: (shellV2Enabled: boolean) => set({ shellV2Enabled }),
@@ -37,6 +43,16 @@ vi.mock("./store/appStore", async () => {
       loading: false,
       error: null,
       clearError: noop,
+    })),
+    // The Agents tab's real dependencies, over in-memory mocks.
+    agentsStore: createAgentsStore({
+      store: createPersonaStore({ storage: new MockStorage() }),
+    }),
+    kodworkStore: createStore(() => ({ tasks: {} })),
+    harnessStore: createStore(() => ({
+      kodSkills: null,
+      kodSkillsError: null,
+      loadKodSkills: async () => {},
     })),
   };
 });

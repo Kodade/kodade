@@ -48,6 +48,9 @@ export type PersonaStore = {
   // One persona by id from a scope, or null when it isn't there. Cloned, so a
   // caller cannot mutate stored state through the returned object.
   get(scope: PersonaScope, id: string): AgentPersona | null;
+  // False once the on-disk document could not be understood (corrupt bytes or a
+  // forward version); every write is then refused. Meaningful after load().
+  isReadable(): boolean;
   // Mint and persist a new persona in the scope.
   create(scope: PersonaScope, input: PersonaInput): Promise<AgentPersona>;
   // Patch an existing persona; returns null when the id isn't in that scope.
@@ -140,6 +143,10 @@ export function createPersonaStore(deps: PersonaStoreDeps): PersonaStore {
     get(scope, id) {
       const persona = bucket(scope).find((entry) => entry.id === id);
       return persona ? structuredClone(persona) : null;
+    },
+
+    isReadable() {
+      return readable;
     },
 
     async create(scope, input) {

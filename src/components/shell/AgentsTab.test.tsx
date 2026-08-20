@@ -55,9 +55,10 @@ function fakeWork() {
   })) as unknown as StoreApi<KodworkState>;
 }
 
-function fakeHarness(kodSkills: unknown = null) {
+function fakeHarness(kodSkills: unknown = null, kodSkillsError: string | null = null) {
   return createStore(() => ({
     kodSkills,
+    kodSkillsError,
     loadKodSkills: vi.fn(async () => {}),
   })) as unknown as StoreApi<HarnessState>;
 }
@@ -194,7 +195,11 @@ describe("AgentsTab", () => {
       />,
     );
     await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
+    // First click only arms the confirmation; the persona is still there.
     await click(button(host, "Delete"));
+    expect(store.getState().personasFor(APP)).toHaveLength(1);
+    // The second click confirms.
+    await click(button(host, "Confirm delete"));
 
     expect(store.getState().personasFor(APP)).toStrictEqual([]);
     // Back to the empty run/editor state.
@@ -255,7 +260,7 @@ describe("AgentsTab", () => {
       />,
     );
     await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
-    await click(button(host, "Run agent"));
+    await click(button(host, "Prepare run"));
 
     expect(projects.getState().addWorkSession).toHaveBeenCalledWith("p1");
     expect(work.getState().openTask).toHaveBeenCalledWith("task-1", "p1");
@@ -264,5 +269,122 @@ describe("AgentsTab", () => {
     expect(store.getState().selectedRunTaskId).toBe("task-1");
     // The editor gave way to the run area (KodworkPane, here with no task doc).
     expect(host.textContent).toContain("no longer open");
+  });
+
+  it("shows a persisted project persona on first open (no empty-scope race)", async () => {
+    const storage = new MockStorage();
+    // Seed a workspace-scoped persona through a separate store instance.
+    const seeder = createAgentsStore({
+      store: createPersonaStore({ storage, newId: () => "seed-1", now: () => 1 }),
+    });
+    await seeder.getState().load();
+    await seeder.getState().createPersona(
+      { kind: "project", projectId: "p1" } as PersonaScope,
+      { providerId: "claude", name: "Workspace helper" },
+    );
+
+    // A fresh store over the same storage, as if the app just reopened.
+    const store = createAgentsStore({ store: createPersonaStore({ storage }) });
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={fakeHarness()}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    // The mount fired load() asynchronously; flush and assert the project group
+    // now shows the persisted persona rather than an empty list.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const projGroup = host.querySelector('[data-persona-scope="project:p1"]')!;
+    expect(projGroup.textContent).toContain("Workspace helper");
+  });
+
+  it("surfaces unreadable persona storage instead of an empty state", async () => {
+    const storage = new MockStorage();
+    storage.docs.set("agents/personas.json", "{ not json");
+    const store = createAgentsStore({ store: createPersonaStore({ storage }) });
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={fakeHarness()}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="persona-storage-error"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("No personas yet.");
+  });
+
+  it("reopens the same run and closes the editor even for the same id", async () => {
+    const { store } = agents();
+    await store.getState().load();
+    const made = await store.getState().createPersona(APP, {
+      providerId: "claude",
+      name: "Reviewer",
+    });
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={fakeHarness()}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    await act(async () => {
+      store.getState().selectRun("task-1");
+    });
+    expect(host.textContent).toContain("no longer open");
+
+    // Open the editor over the run.
+    await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
+    expect(host.textContent).toContain("Edit agent");
+
+    // Re-open the SAME run id: the editor must give way to the run area again.
+    await act(async () => {
+      store.getState().selectRun("task-1");
+    });
+    expect(host.textContent).toContain("no longer open");
+    expect(host.textContent).not.toContain("Edit agent");
+  });
+
+  it("clears a stale mutation error when the editor target changes", async () => {
+    const { store } = agents();
+    await store.getState().load();
+    const made = await store.getState().createPersona(APP, {
+      providerId: "claude",
+      name: "Reviewer",
+    });
+    const host = await render(
+      <AgentsTab
+        store={store}
+        workStore={fakeWork()}
+        projectsStore={fakeProjects()}
+        harness={fakeHarness()}
+        manifest={WORK_MANIFEST}
+      />,
+    );
+    await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
+    await act(async () => {
+      store.setState({ mutationError: "boom" });
+    });
+    expect(host.querySelector('[data-testid="persona-error"]')).not.toBeNull();
+
+    // Switching to a new persona remounts the editor, which clears the error.
+    await click(
+      host.querySelector<HTMLButtonElement>(
+        '[aria-label="New persona for All projects"]',
+      )!,
+    );
+    expect(store.getState().mutationError).toBeNull();
+    expect(host.querySelector('[data-testid="persona-error"]')).toBeNull();
   });
 });

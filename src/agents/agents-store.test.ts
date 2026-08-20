@@ -104,4 +104,55 @@ describe("createAgentsStore", () => {
     store.getState().selectRun(null);
     expect(store.getState().selectedRunTaskId).toBeNull();
   });
+
+  it("re-mirrors a scope synced before load resolved", async () => {
+    const storage = new MockStorage();
+    // Seed a project persona directly on disk through a separate store.
+    const seeder = createPersonaStore({ storage, newId: () => "seed", now: () => 1 });
+    await seeder.load();
+    await seeder.create(PROJ, { providerId: "claude", name: "Helper" });
+
+    const store = createAgentsStore({ store: createPersonaStore({ storage }) });
+    // Sync the project scope BEFORE load — it mirrors an empty list at first.
+    store.getState().syncScope(PROJ);
+    expect(store.getState().personasFor(PROJ)).toStrictEqual([]);
+    // load() re-mirrors every known scope from the now-read document.
+    await store.getState().load();
+    expect(store.getState().personasFor(PROJ).map((p) => p.name)).toStrictEqual([
+      "Helper",
+    ]);
+  });
+
+  it("reports unreadable storage after a corrupt load", async () => {
+    const { storage, store } = setup();
+    storage.docs.set("agents/personas.json", "{ not json");
+    await store.getState().load();
+    expect(store.getState().storageReadable).toBe(false);
+  });
+
+  it("reports readable storage on a clean load", async () => {
+    const { store } = setup();
+    await store.getState().load();
+    expect(store.getState().storageReadable).toBe(true);
+  });
+
+  it("bumps runOpenSeq on every selectRun, even for the same id", () => {
+    const { store } = setup();
+    const s0 = store.getState().runOpenSeq;
+    store.getState().selectRun("t");
+    const s1 = store.getState().runOpenSeq;
+    store.getState().selectRun("t");
+    const s2 = store.getState().runOpenSeq;
+    expect(s1).toBeGreaterThan(s0);
+    expect(s2).toBeGreaterThan(s1);
+  });
+
+  it("clears the mutation error on demand", async () => {
+    const { store } = setup();
+    await store.getState().load();
+    await store.getState().createPersona(APP, { providerId: "  " });
+    expect(store.getState().mutationError).toBeTruthy();
+    store.getState().clearMutationError();
+    expect(store.getState().mutationError).toBeNull();
+  });
 });

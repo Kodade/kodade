@@ -153,6 +153,17 @@ describe("createPersonaStore", () => {
 
   // --- Write-refusal safety (finding 1 + 5) ---
 
+  it("reports readability through isReadable()", async () => {
+    const clean = setup();
+    await clean.store.load();
+    expect(clean.store.isReadable()).toBe(true);
+
+    const corrupt = setup();
+    corrupt.storage.docs.set(personaDocName, "{ not json");
+    await corrupt.store.load();
+    expect(corrupt.store.isReadable()).toBe(false);
+  });
+
   it("refuses to overwrite a corrupt document", async () => {
     const { storage, store } = setup();
     storage.docs.set(personaDocName, "{ not json");

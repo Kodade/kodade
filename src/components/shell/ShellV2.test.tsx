@@ -26,8 +26,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../store/appStore", async () => {
   const { createStore } = await import("zustand/vanilla");
   const { createFilesStore } = await import("../../store/files");
-  const { MockFiles } = await import("../../ipc/mock");
+  const { MockFiles, MockStorage } = await import("../../ipc/mock");
   const { defaultShellLayout } = await import("./shell-layout");
+  const { createPersonaStore } = await import("../../agents/persona-store");
+  const { createAgentsStore } = await import("../../agents/agents-store");
   const files = new MockFiles();
   files.tree.set("/repo", [
     { name: "a.ts", path: "/repo/a.ts", isDir: false },
@@ -39,9 +41,22 @@ vi.mock("../../store/appStore", async () => {
       layout: [14, 40, 16, 30],
       sidebarMode: "full",
       filesCollapsed: false,
+      // The Agents tab reads these; an empty workspace list is enough here.
+      projects: [],
+      activeProjectId: null,
       setShellLayout: (shellLayout: unknown) => set({ shellLayout }),
     })),
     filesStore: createFilesStore({ files }),
+    // The Agents tab's real dependencies, wired against in-memory mocks.
+    agentsStore: createAgentsStore({
+      store: createPersonaStore({ storage: new MockStorage() }),
+    }),
+    kodworkStore: createStore(() => ({ tasks: {} })),
+    harnessStore: createStore(() => ({
+      kodSkills: null,
+      kodSkillsError: null,
+      loadKodSkills: async () => {},
+    })),
   };
 });
 

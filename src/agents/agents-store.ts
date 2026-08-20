@@ -30,15 +30,25 @@ export type AgentsState = {
   // Mirrored persona lists by scope key.
   personas: Record<string, AgentPersona[]>;
   loaded: boolean;
+  // False once the persona document was found unreadable (corrupt/forward
+  // version). The tab surfaces this instead of an empty "no personas" state.
+  // Meaningful after load() resolves.
+  storageReadable: boolean;
   // The last create/update/remove failure, surfaced by the editor. Cleared on
-  // the next successful mutation.
+  // the next successful mutation or when the editor target changes.
   mutationError: string | null;
   // Which run the Agents tab's run area shows, or null for the empty state.
   selectedRunTaskId: string | null;
+  // Bumps on every selectRun call (even for the same id), so a run row that is
+  // re-opened while the editor is up still forces the run area back into view.
+  runOpenSeq: number;
 
-  // Load the document once and mirror the app scope.
+  // Load the document once and mirror every scope touched so far (app plus any
+  // workspace already synced). Re-mirroring on load fixes the first-open race
+  // where a workspace scope was synced before the read finished.
   load(): Promise<void>;
-  // Ensure a scope's list is mirrored into state (idempotent; re-reads).
+  // Ensure a scope's list is mirrored into state (idempotent; re-reads). The
+  // scope is remembered so a later load() re-mirrors it too.
   syncScope(scope: PersonaScope): void;
   // A snapshot of one scope's personas from the mirror.
   personasFor(scope: PersonaScope): AgentPersona[];
@@ -54,17 +64,23 @@ export type AgentsState = {
     changes: PersonaUpdate,
   ): Promise<AgentPersona | null>;
   removePersona(scope: PersonaScope, id: string): Promise<void>;
+  // Clear the last mutation error (e.g. when the editor switches persona).
+  clearMutationError(): void;
   // Select (or clear) the run shown in the tab's run area.
   selectRun(taskId: string | null): void;
 };
 
 export function createAgentsStore(deps: AgentsDeps): StoreApi<AgentsState> {
   const { store } = deps;
+  // Scopes mirrored so far, so load() can re-read all of them once the document
+  // is available. The app scope is always tracked.
+  const known = new Map<string, PersonaScope>([["app", { kind: "app" }]]);
 
   return createStore<AgentsState>((set, get) => {
     // Read the scope from the source of truth and mirror it into state.
     const mirror = (scope: PersonaScope) => {
       const key = personaScopeKey(scope);
+      known.set(key, scope);
       const list = store.list(scope);
       set((state) => ({ personas: { ...state.personas, [key]: list } }));
     };
@@ -75,13 +91,17 @@ export function createAgentsStore(deps: AgentsDeps): StoreApi<AgentsState> {
     return {
       personas: {},
       loaded: false,
+      storageReadable: true,
       mutationError: null,
       selectedRunTaskId: null,
+      runOpenSeq: 0,
 
       async load() {
         await store.load();
-        mirror({ kind: "app" });
-        set({ loaded: true });
+        // Re-mirror every scope now that the document is read — a workspace
+        // scope synced before the read no longer shows an empty list.
+        for (const scope of known.values()) mirror(scope);
+        set({ loaded: true, storageReadable: store.isReadable() });
       },
 
       syncScope(scope) {
@@ -130,8 +150,15 @@ export function createAgentsStore(deps: AgentsDeps): StoreApi<AgentsState> {
         }
       },
 
+      clearMutationError() {
+        if (get().mutationError !== null) set({ mutationError: null });
+      },
+
       selectRun(taskId) {
-        set({ selectedRunTaskId: taskId });
+        set((state) => ({
+          selectedRunTaskId: taskId,
+          runOpenSeq: state.runOpenSeq + 1,
+        }));
       },
     };
   });
