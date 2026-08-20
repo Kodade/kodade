@@ -1,6 +1,7 @@
-// Advanced settings page: KödHarness first (always available and open), then
-// the development-only surfaces. The build gate that used to live in the
-// registry lives here now, so a public build shows the harness block alone.
+// Advanced settings page: KödHarness first (always available and open) — the
+// background prompt plus the skills/MCP tools — then the development-only
+// surfaces. The build gate that used to live in the registry lives here now,
+// so a public build shows the harness block alone.
 //
 // The development blocks are collapsed until asked for: mounting them runs
 // real side effects (SSH host probes, microphone enumeration), and those
@@ -12,7 +13,7 @@ import {
   type ReleaseManifest,
 } from "../../release/manifest";
 import { AmbientPromptSettings } from "./AmbientPromptSettings";
-import { HarnessSection } from "./HarnessSection";
+import { HarnessTools } from "./HarnessTools";
 import { LocalSection } from "./LocalSection";
 import { CollapsibleSettingsBlock, SettingsBlock } from "./SettingsCard";
 import { SshSection } from "./SshSection";
@@ -29,8 +30,8 @@ export function AdvancedSection({
         title="ködharness"
         description="What your agents read and can use."
       >
-        <HarnessSection />
         <AmbientPromptSettings />
+        <HarnessTools />
       </SettingsBlock>
 
       {developmentFeatureEnabled("local", manifest) && (

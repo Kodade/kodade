@@ -5,6 +5,7 @@ import type { ProjectSkillAction, ProjectSkillCell } from "../harness/project-sk
 import type { PlatformIpc } from "../ipc/contract";
 import type { HarnessState } from "../store/harness";
 import { RELEASE_MANIFEST } from "../release/manifest";
+import { abbreviate } from "./ChangeConfirmDialog";
 
 export function ProjectSkillsManager({
   store,
@@ -209,13 +210,4 @@ function ProjectSkillBadge({ cell }: { cell: ProjectSkillCell }) {
       {cell.reason}
     </span>
   );
-}
-
-function abbreviate(path: string, projectRoot: string): string {
-  if (path === projectRoot) return ".";
-  if (path.startsWith(projectRoot)) {
-    const rest = path.slice(projectRoot.length).replace(/^[/\\]/, "");
-    return rest || ".";
-  }
-  return path;
 }

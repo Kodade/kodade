@@ -40,7 +40,7 @@ import {
   capabilitiesStore,
 } from "../platform/capabilities";
 import { nativeEquals, nativeJoin } from "../platform/native-path";
-import { ChangeConfirmDialog } from "./HarnessPane";
+import { ChangeConfirmDialog } from "./ChangeConfirmDialog";
 import { appStore, filesStore, harnessStore, memoryStore } from "../store/appStore";
 import { isPendingChangeOwned, type PendingChangeOwner } from "../store/harness";
 import { settingsViewStore } from "../store/settingsView";

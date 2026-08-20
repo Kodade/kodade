@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Retired the KödHarness inventory pane. The artifact matrix, its scope
+  toggle, the in-app instruction editor, and the per-artifact enable/disable
+  switches are gone: instruction files such as CLAUDE.md and AGENTS.md are
+  yours to edit directly in the editor, and Ködade's own guidance to agents is
+  the background prompt. The tools that actually change something stay, now
+  inline under Settings → Advanced → KödHarness — install and update the
+  KödSkills pack, add a project skill to the right target directories, and
+  merge one MCP server into a detected config file, each with the same
+  preview-then-apply confirmation as before.
 - Agents Ködade starts in chat and KödWork now receive a short, token-lean
   background note that they are running inside Ködade, so answers arrive
   direct and render well in the chat and terminal panes. It is on by default,
