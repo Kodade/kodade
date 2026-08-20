@@ -623,6 +623,24 @@ describe("run termination is uniform across dialects", () => {
     }
   });
 
+  // Each shipped CLI complains about being signed out in its own words. All
+  // four must reach the transcript's auth card, since that card is the only
+  // in-chat path back to a signed-in provider (issue #63).
+  it("classifies each shipped CLI's own signed-out wording", () => {
+    const wording: Record<string, string> = {
+      claude: "Invalid API key · Please run /login",
+      codex: "stream error: unauthorized; run `codex login` to continue",
+      grok: "Error: authentication failed (401): no credentials found",
+      opencode: "Error: OpenRouter API key is missing.",
+    };
+    for (const [id, stderr] of Object.entries(wording)) {
+      expect(drain(id, [], 1, stderr)[0]).toMatchObject({
+        type: "auth-error",
+        message: stderr,
+      });
+    }
+  });
+
   it("a clean exit after the CLI reported done adds nothing", () => {
     const events = drain("codex", [JSON.stringify({ type: "turn.completed" })], 0, "");
     expect(events.filter((e) => e.type === "done")).toHaveLength(1);
