@@ -47,6 +47,32 @@ const context: WorkspaceContext = {
   workingMemory: null,
 };
 
+const localSurface = () => ({
+  workspaceId: workspace.id,
+  mode: "local" as const,
+  projectId: "kodade",
+  projectDisplayName: "Ködade",
+  knowledgeRoot: "C:\\Work\\Ködade\\.kodade\\knowledge",
+  createdAt: 1,
+  updatedAt: 1,
+});
+
+const scaffoldOperation = {
+  kind: "createDirectory" as const,
+  relativePath: ".kodade/knowledge",
+  content: null,
+};
+
+const scaffoldPlan = (operations: number) => ({
+  workspaceId: workspace.id,
+  projectId: "kodade",
+  projectDisplayName: "Ködade",
+  mode: "local" as const,
+  vaultRoot: workspace.canonicalRoot,
+  fingerprint: "fingerprint",
+  operations: Array.from({ length: operations }, () => scaffoldOperation),
+});
+
 function mockMemoryIpc(): MemoryIpc {
   return {
     registerWorkspace: vi.fn().mockResolvedValue(workspace),
@@ -152,6 +178,138 @@ describe("memory store", () => {
     expect(await store.getState().loadKnowledgeSurface()).toEqual(surface);
     expect(ipc.workspaceKnowledgeSurface).toHaveBeenCalledWith(workspace.id);
     expect(store.getState().knowledgeSurface).toEqual(surface);
+  });
+
+  it("enables local knowledge and applies its scaffold in one step", async () => {
+    const ipc = mockMemoryIpc();
+    const surface = localSurface();
+    vi.mocked(ipc.enableLocalKnowledge).mockResolvedValue(surface);
+    vi.mocked(ipc.previewProjectScaffold).mockResolvedValue(scaffoldPlan(1));
+    vi.mocked(ipc.applyProjectScaffold).mockResolvedValue({
+      projectId: surface.projectId,
+      created: [scaffoldOperation],
+    });
+    const store = createMemoryStore({ ipc });
+    await store.getState().load(workspace.id);
+
+    await expect(store.getState().setUpLocalKnowledge()).resolves.toEqual(
+      surface,
+    );
+
+    expect(ipc.enableLocalKnowledge).toHaveBeenCalledWith(workspace.id);
+    expect(ipc.previewProjectScaffold).toHaveBeenCalledWith(workspace.id);
+    expect(ipc.applyProjectScaffold).toHaveBeenCalledWith(
+      workspace.id,
+      "fingerprint",
+    );
+    expect(store.getState().knowledgeSurface).toEqual(surface);
+    expect(store.getState().error).toBeNull();
+  });
+
+  it("keeps the workspace usable when the knowledge scaffold fails, then retries", async () => {
+    const ipc = mockMemoryIpc();
+    const surface = localSurface();
+    vi.mocked(ipc.enableLocalKnowledge).mockResolvedValue(surface);
+    vi.mocked(ipc.previewProjectScaffold).mockResolvedValue(scaffoldPlan(1));
+    vi.mocked(ipc.applyProjectScaffold).mockRejectedValueOnce(
+      new Error("project knowledge path is inaccessible"),
+    );
+    const store = createMemoryStore({ ipc });
+    await store.getState().load(workspace.id);
+
+    await expect(store.getState().setUpLocalKnowledge()).resolves.toBeNull();
+    // The registration survives the failed knowledge step, and so does the
+    // surface: enabling succeeded, only its files are missing.
+    expect(store.getState().workspace).toEqual(workspace);
+    expect(store.getState().error).toContain("inaccessible");
+    expect(store.getState().knowledgeSurface).toEqual(surface);
+
+    vi.mocked(ipc.applyProjectScaffold).mockResolvedValue({
+      projectId: surface.projectId,
+      created: [scaffoldOperation],
+    });
+    await expect(store.getState().setUpLocalKnowledge()).resolves.toEqual(
+      surface,
+    );
+    expect(ipc.enableLocalKnowledge).toHaveBeenCalledTimes(2);
+    expect(store.getState().knowledgeSurface).toEqual(surface);
+  });
+
+  it("skips the scaffold apply when nothing is missing", async () => {
+    const ipc = mockMemoryIpc();
+    const surface = localSurface();
+    vi.mocked(ipc.enableLocalKnowledge).mockResolvedValue(surface);
+    vi.mocked(ipc.previewProjectScaffold).mockResolvedValue(scaffoldPlan(0));
+    const store = createMemoryStore({ ipc });
+    await store.getState().load(workspace.id);
+
+    await expect(store.getState().setUpLocalKnowledge()).resolves.toEqual(
+      surface,
+    );
+    expect(ipc.applyProjectScaffold).not.toHaveBeenCalled();
+  });
+
+  it("separates a failed surface resolve from a workspace with no surface", async () => {
+    const ipc = mockMemoryIpc();
+    vi.mocked(ipc.workspaceKnowledgeSurface).mockRejectedValueOnce(
+      new Error("database is locked"),
+    );
+    const store = createMemoryStore({ ipc });
+    await store.getState().load(workspace.id);
+
+    await expect(store.getState().loadKnowledgeSurface()).resolves.toBeNull();
+    expect(store.getState().knowledgeSurfaceError).toContain("locked");
+
+    // A successful retry clears it; "no surface" then means exactly that.
+    vi.mocked(ipc.workspaceKnowledgeSurface).mockResolvedValue(null);
+    await expect(store.getState().loadKnowledgeSurface()).resolves.toBeNull();
+    expect(store.getState().knowledgeSurfaceError).toBeNull();
+  });
+
+  it("turns local knowledge off for an explicit switch to vault sync", async () => {
+    const ipc = mockMemoryIpc();
+    vi.mocked(ipc.disableLocalKnowledge).mockResolvedValue(undefined);
+    const store = createMemoryStore({ ipc });
+    await store.getState().load(workspace.id);
+    store.setState({ knowledgeSurface: localSurface() });
+
+    await expect(store.getState().turnOffLocalKnowledge()).resolves.toBe(true);
+    expect(ipc.disableLocalKnowledge).toHaveBeenCalledWith(workspace.id);
+    expect(store.getState().knowledgeSurface).toBeNull();
+  });
+
+  it("never enables local knowledge for a workspace that predates it", async () => {
+    const ipc = mockMemoryIpc();
+    // A legacy vault-mapped workspace: it already has a surface, derived from
+    // its mapping, and loading it must not touch the knowledge commands.
+    vi.mocked(ipc.workspaceProjectMapping).mockResolvedValue({
+      workspaceId: workspace.id,
+      projectId: "kodade",
+      workspaceRoot: workspace.canonicalRoot,
+      workspaceDisplayName: workspace.displayName,
+      projectDisplayName: "Ködade",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(ipc.workspaceKnowledgeSurface).mockResolvedValue({
+      ...localSurface(),
+      mode: "vault",
+      knowledgeRoot: "/vault/10-Projects/kodade",
+    });
+    const store = createMemoryStore({ ipc });
+
+    await store.getState().load(workspace.id);
+    await store.getState().openWorkspace(workspace.canonicalRoot);
+    await store.getState().refresh();
+
+    expect(ipc.enableLocalKnowledge).not.toHaveBeenCalled();
+    expect(ipc.previewProjectScaffold).not.toHaveBeenCalled();
+    expect(ipc.applyProjectScaffold).not.toHaveBeenCalled();
+    expect(store.getState().knowledgeSurface).toBeNull();
+
+    // Only the explicit read resolves it, and it stays "vault".
+    expect((await store.getState().loadKnowledgeSurface())?.mode).toBe("vault");
+    expect(ipc.enableLocalKnowledge).not.toHaveBeenCalled();
   });
 
   it("activates project working memory and refreshes its timeline", async () => {

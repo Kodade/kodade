@@ -27,10 +27,14 @@ export function ProjectsVaultSetup({
   workspace,
   ipc = memoryIpc,
   pickFolder = () => platform.pickFolder(),
+  onMappingChanged,
 }: {
   workspace: MemoryWorkspace | null;
   ipc?: ProjectsVaultIpc;
   pickFolder?: () => Promise<string | null>;
+  // Fired after a mapping is saved, so an owner that renders this by knowledge
+  // surface can re-resolve the surface the mapping just created or changed.
+  onMappingChanged?: () => void;
 }) {
   const [vault, setVault] = useState<ProjectsVault | null>(null);
   const [mapping, setMapping] = useState<WorkspaceProjectMapping | null>(null);
@@ -122,6 +126,7 @@ export function ProjectsVaultSetup({
       setMapping(saved);
       setProjectDraft({ id: saved.projectId, name: saved.projectDisplayName });
       setRelatedWorkspaces(related);
+      onMappingChanged?.();
     } catch (mappingError) {
       setError(errorMessage(mappingError));
     } finally {

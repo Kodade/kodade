@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- New KödMem setups keep project knowledge in a git-ignored
+  `.kodade/knowledge` directory inside the project, with zero setup: enabling
+  KödMem for a project now creates the knowledge surface and its files in the
+  same step, so there is nothing to choose and nothing to connect first. Sync
+  with an Obsidian projects vault is now the explicit option, collapsed under
+  Settings → KödMem, and switching a project from local knowledge to vault sync
+  asks first and leaves the files already in `.kodade/knowledge` on disk.
+  Existing vault setups are unchanged and keep their current screen; a project
+  that had KödMem enabled before this release is never converted on its own and
+  can set up local project knowledge with one click. A project can only have
+  one knowledge surface: mapping a project to an Obsidian vault is now refused
+  while local project knowledge is on, and asks you to turn it off first.
 - Retired the KödHarness inventory pane. The artifact matrix, its scope
   toggle, the in-app instruction editor, and the per-artifact enable/disable
   switches are gone: instruction files such as CLAUDE.md and AGENTS.md are
