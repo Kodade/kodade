@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "id": "task-done-review",
+  "projectId": "proj-beta",
+  "folder": "/Users/dev/repo",
+  "outcome": "Fix the flaky test",
+  "title": "Fix the flaky test",
+  "providerId": "claude",
+  "access": "standard",
+  "state": "needs-user",
+  "plan": [
+    {
+      "text": "Reproduce the flake",
+      "status": "completed"
+    },
+    {
+      "text": "Patch the timing bug",
+      "status": "completed"
+    }
+  ],
+  "tools": [
+    {
+      "id": "t1",
+      "tool": "Read",
+      "detail": "src/flaky.test.ts",
+      "ok": true
+    },
+    {
+      "id": "t2",
+      "tool": "Edit",
+      "detail": "src/flaky.test.ts",
+      "ok": true
+    }
+  ],
+  "statusText": null,
+  "summary": "Patched the timing bug and re-ran the suite.",
+  "usage": {
+    "promptTokens": 200,
+    "completionTokens": 120,
+    "totalTokens": 320
+  },
+  "review": {
+    "kind": "git",
+    "status": "pending",
+    "files": [
+      {
+        "path": "/Users/dev/repo/src/flaky.test.ts",
+        "relativePath": "src/flaky.test.ts",
+        "change": "modified",
+        "binary": false,
+        "humanTouched": false,
+        "before": "old contents",
+        "after": "new contents",
+        "bucket": "routine",
+        "reasons": [
+          "timing adjusted"
+        ]
+      }
+    ],
+    "feedback": "Looks close, verify the assertion.",
+    "fingerprint": "fp-abc123"
+  },
+  "reviewOutcomeState": "done",
+  "rejectionFingerprints": [
+    "fp-old1",
+    "fp-old2"
+  ],
+  "doomLoop": false,
+  "permissionRequest": null,
+  "alwaysAllowedTools": [
+    "Read",
+    "Edit"
+  ],
+  "deniedTools": [
+    {
+      "tool": "Bash",
+      "detail": "rm -rf"
+    }
+  ],
+  "recurrence": null,
+  "scheduleReceipts": [],
+  "scheduledFromTaskId": null,
+  "resumeId": "cli-session-ghi",
+  "error": null,
+  "needsLogin": false,
+  "createdAt": 1000,
+  "updatedAt": 7000,
+  "startedAt": 1500,
+  "settledAt": 6500
+}

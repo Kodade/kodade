@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "id": "task-recurring",
+  "projectId": "proj-gamma",
+  "folder": "/Users/dev/repo",
+  "outcome": "Sweep for stale branches",
+  "title": "Sweep for stale branches",
+  "providerId": "claude",
+  "access": "standard",
+  "state": "done",
+  "plan": [
+    {
+      "text": "List branches",
+      "status": "completed"
+    }
+  ],
+  "tools": [
+    {
+      "id": "t1",
+      "tool": "Bash",
+      "detail": "git branch",
+      "ok": true
+    }
+  ],
+  "statusText": null,
+  "summary": "No stale branches this run.",
+  "usage": {
+    "promptTokens": 40,
+    "completionTokens": 20,
+    "totalTokens": 60
+  },
+  "review": {
+    "kind": null,
+    "status": "accepted",
+    "files": [],
+    "feedback": "",
+    "fingerprint": null
+  },
+  "reviewOutcomeState": null,
+  "rejectionFingerprints": [],
+  "doomLoop": false,
+  "permissionRequest": null,
+  "alwaysAllowedTools": [],
+  "deniedTools": [],
+  "recurrence": {
+    "kind": "daily",
+    "hour": 9,
+    "minute": 30,
+    "nextRunAt": 100000
+  },
+  "scheduleReceipts": [
+    {
+      "scheduledFor": 90000,
+      "recordedAt": 90000,
+      "status": "started",
+      "sessionId": "task-recurring-run-1",
+      "message": "started while Ködade was running"
+    },
+    {
+      "scheduledFor": 80000,
+      "recordedAt": 80000,
+      "status": "missed",
+      "sessionId": null,
+      "message": "missed — Ködade was not running"
+    }
+  ],
+  "scheduledFromTaskId": null,
+  "resumeId": null,
+  "error": null,
+  "needsLogin": false,
+  "createdAt": 1000,
+  "updatedAt": 95000,
+  "startedAt": 89000,
+  "settledAt": 90500
+}

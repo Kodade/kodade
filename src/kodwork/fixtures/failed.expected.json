@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "task-failed",
+  "projectId": "proj-beta",
+  "folder": "/Users/dev/repo",
+  "outcome": "Upgrade the framework",
+  "title": "Upgrade the framework",
+  "providerId": "claude",
+  "access": "full",
+  "state": "failed",
+  "plan": [
+    {
+      "text": "Bump the version",
+      "status": "in-progress"
+    }
+  ],
+  "tools": [
+    {
+      "id": "t1",
+      "tool": "Bash",
+      "detail": "pnpm up",
+      "ok": false
+    }
+  ],
+  "statusText": null,
+  "summary": "The upgrade broke the build.",
+  "usage": {
+    "promptTokens": 80,
+    "completionTokens": 30,
+    "totalTokens": 110
+  },
+  "review": {
+    "kind": null,
+    "status": "idle",
+    "files": [],
+    "feedback": "",
+    "fingerprint": null
+  },
+  "reviewOutcomeState": null,
+  "rejectionFingerprints": [],
+  "doomLoop": false,
+  "permissionRequest": null,
+  "alwaysAllowedTools": [],
+  "deniedTools": [],
+  "recurrence": null,
+  "scheduleReceipts": [],
+  "scheduledFromTaskId": null,
+  "resumeId": "cli-session-jkl",
+  "error": "Build failed after the upgrade.",
+  "needsLogin": false,
+  "createdAt": 1000,
+  "updatedAt": 8000,
+  "startedAt": 1500,
+  "settledAt": 7500
+}

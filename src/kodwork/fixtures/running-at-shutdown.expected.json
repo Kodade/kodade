@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "task-running",
+  "projectId": "proj-alpha",
+  "folder": "/Users/dev/repo",
+  "outcome": "Refactor the parser",
+  "title": "Refactor the parser",
+  "providerId": "claude",
+  "access": "full",
+  "state": "needs-user",
+  "plan": [
+    {
+      "text": "Read the parser",
+      "status": "completed"
+    },
+    {
+      "text": "Rewrite the tokenizer",
+      "status": "in-progress"
+    }
+  ],
+  "tools": [
+    {
+      "id": "t1",
+      "tool": "Read",
+      "detail": "src/parser.ts",
+      "ok": true
+    },
+    {
+      "id": "t2",
+      "tool": "Edit",
+      "detail": "src/parser.ts",
+      "ok": null
+    }
+  ],
+  "statusText": "Rewriting the tokenizer",
+  "summary": "Working on the tokenizer rewrite",
+  "usage": {
+    "promptTokens": 100,
+    "completionTokens": 50,
+    "totalTokens": 150
+  },
+  "review": {
+    "kind": null,
+    "status": "idle",
+    "files": [],
+    "feedback": "",
+    "fingerprint": null
+  },
+  "reviewOutcomeState": null,
+  "rejectionFingerprints": [],
+  "doomLoop": false,
+  "permissionRequest": null,
+  "alwaysAllowedTools": [
+    "Read"
+  ],
+  "deniedTools": [],
+  "recurrence": null,
+  "scheduleReceipts": [],
+  "scheduledFromTaskId": null,
+  "resumeId": "cli-session-abc",
+  "error": "Task stopped when Ködade closed. Resume to recover its original output baseline and continue.",
+  "needsLogin": false,
+  "createdAt": 1000,
+  "updatedAt": 5000,
+  "startedAt": 1500,
+  "settledAt": null
+}
