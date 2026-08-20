@@ -1697,9 +1697,9 @@ export function createProjectsStore(deps: StoreDeps) {
         const baseNameRe = new RegExp(`^${escapedBase} \\d+$`);
         const isReusableTerminal = (session: SessionMeta): boolean =>
           session.projectId === projectId &&
-          !session.exited && // a dead PTY can't host a new login (finding 1)
+          !session.exited && // a dead PTY can't host a new login
           !ownsNoPty(session) &&
-          baseNameRe.test(session.name) && // same provider only (finding 2)
+          baseNameRe.test(session.name) && // same provider only
           !(
             session.workspaceId !== undefined &&
             get().sessions.some(
