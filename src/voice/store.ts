@@ -97,7 +97,7 @@ function defaultStreamingCapable(): boolean {
 export type VoiceStoreState = {
   voice: VoiceState;
   preferences: VoicePreferences;
-  // Expert input-device picker (Settings → voice input → advanced). Empty
+  // Expert input-device picker (Settings → Advanced → KödWhisper). Empty
   // until refreshInputDevices() resolves; enumeration failing leaves it empty
   // and the host default keeps working regardless.
   inputDevices: string[];

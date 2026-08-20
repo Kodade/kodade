@@ -192,7 +192,8 @@ export function RemoteHostsSection({
 
   // The main sidebar is a project tree, not an SSH management surface.
   // Host discovery, ad-hoc connections, provider probes, and advanced target
-  // actions stay in Settings → SSH. Saved targets mirror the KödChat project
+  // actions stay in Settings → Advanced → KödSSH. Saved targets mirror the
+  // KödChat project
   // groups above them and keep their chats/terminals nested in one place.
   if (projectTree) {
     return (

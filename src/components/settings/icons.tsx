@@ -48,14 +48,6 @@ export function SlidersIcon() {
   );
 }
 
-export function HarnessGlyph() {
-  return (
-    <Icon>
-      <path d="M3 3.5h10v9H3z" />
-      <path d="M5.5 6.5l1.5 1.5-1.5 1.5M8.5 9.5h2.5" />
-    </Icon>
-  );
-}
 
 export function MemoryGlyph() {
   return (
@@ -75,23 +67,7 @@ export function ChipIcon() {
   );
 }
 
-export function MicIcon() {
-  return (
-    <Icon>
-      <path d="M8 2.5a1.75 1.75 0 0 1 1.75 1.75v3.5a1.75 1.75 0 0 1-3.5 0v-3.5A1.75 1.75 0 0 1 8 2.5z" />
-      <path d="M4.5 7.5a3.5 3.5 0 0 0 7 0M8 11.5v2" />
-    </Icon>
-  );
-}
 
-export function RemoteIcon() {
-  return (
-    <Icon>
-      <path d="M2.5 3.5h11v3h-11zM2.5 9.5h11v3h-11z" />
-      <path d="M4.5 5h.01M4.5 11h.01" />
-    </Icon>
-  );
-}
 
 export function WebIcon() {
   return (
@@ -102,11 +78,3 @@ export function WebIcon() {
   );
 }
 
-export function KeyboardIcon() {
-  return (
-    <Icon>
-      <path d="M2 4.5h12v7H2z" />
-      <path d="M4.5 7h.01M7 7h.01M9.5 7h.01M11.5 7h.01M5 9.5h6" />
-    </Icon>
-  );
-}

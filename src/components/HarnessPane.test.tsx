@@ -344,7 +344,7 @@ describe("HarnessPane", () => {
         selectedPath = path;
       },
     });
-    settingsViewStore.getState().open("harness");
+    settingsViewStore.getState().open("advanced");
 
     try {
       await act(async () =>
