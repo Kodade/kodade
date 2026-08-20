@@ -194,11 +194,12 @@ describe("KödMem pane", () => {
   });
 
   afterEach(async () => {
+    // Restore real timers FIRST so the unmount below — and every later test —
+    // runs on the real clock even if a fake-timer test failed before its own
+    // cleanup could run.
+    vi.useRealTimers();
     await act(async () => root.unmount());
     container.remove();
-    // Restore real timers after every test so a fake-timer test (below) can
-    // never leak its clock into the real-timer tests that rely on waitFor.
-    vi.useRealTimers();
   });
 
   it("loads the Hub and opens a searchable record inspector through typed IPC", async () => {
@@ -858,7 +859,19 @@ describe("KödMem pane", () => {
       });
     });
     await expandAgentSetup();
-    const add = [...container.querySelectorAll("button")].find((button) => button.textContent === "review setup");
+    // The "review setup" action only renders once the MCP binary probe and the
+    // setup scan have both settled — a later chain than the toggle above, and
+    // the condition the click below actually depends on. Poll for it instead
+    // of assuming the expand flushed enough microtasks.
+    let add: HTMLButtonElement | undefined;
+    await act(async () => {
+      await vi.waitFor(() => {
+        add = [...container.querySelectorAll("button")].find(
+          (button) => button.textContent === "review setup",
+        );
+        expect(add).toBeDefined();
+      });
+    });
     await act(async () => {
       add?.click();
       await Promise.resolve();

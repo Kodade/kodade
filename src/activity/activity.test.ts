@@ -547,8 +547,9 @@ describe("ActivityModule", () => {
     // Warm up once (cold JIT/GC would otherwise dominate the first run), then
     // take the minimum elapsed across several runs. Min-of-N is robust to
     // scheduler noise and CI contention — a stray slow run never fails the
-    // guard — while a genuine algorithmic regression raises the minimum too,
-    // so this still fails when projection actually gets slower.
+    // guard — while a genuine algorithmic regression raises the minimum too.
+    // The stable minimum is ~0.25ms on a dev laptop, so a 5ms budget keeps
+    // ~20x machine headroom while still catching a real complexity blow-up.
     const runOnce = () => {
       const started = performance.now();
       const view = activity.workspaceView(
@@ -566,6 +567,6 @@ describe("ActivityModule", () => {
     }
 
     expect(best.view.groups[0].sessions).toHaveLength(500);
-    expect(best.elapsed).toBeLessThan(50);
+    expect(best.elapsed).toBeLessThan(5);
   });
 });
