@@ -305,6 +305,11 @@ export type AddSessionOptions = {
   // Trusted remote-shell command for an explicitly launched remote terminal.
   // Omitted means open the user's login shell in the pinned project path.
   remoteCommand?: string;
+  // Explicit request for a project-scoped standalone terminal, permitted even
+  // in the chat-first (autoStartTerminal === false) runtime. This is the escape
+  // hatch for login/agent terminals that need a host when no chat is selected
+  // (v2.0 P4 slice 3); routine selection paths still never auto-spawn a root.
+  projectScopedTerminal?: boolean;
 };
 
 export type ProjectsState = {
@@ -978,9 +983,10 @@ export function createProjectsStore(deps: StoreDeps) {
       return true;
     };
 
-    // In the chat-first desktop runtime, a local PTY is a child of its chat,
-    // never a selectable root workspace. Normalize every generic selection
-    // path here so shortcuts and dormant callers cannot escape KödChat.
+    // In the chat-first desktop runtime, a chat-OWNED terminal normalizes back
+    // to its chat so shortcuts and dormant callers cannot escape KödChat. A
+    // project-scoped standalone terminal (a login/agent shell hosted at project
+    // scope, slice 3) is a first-class session and selectable as itself.
     const selectableSessionId = (
       projectId: string,
       requestedId: string,
@@ -998,15 +1004,21 @@ export function createProjectsStore(deps: StoreDeps) {
       ) {
         return requested.id;
       }
-      if (!requested.workspaceId) return null;
-      return (
-        state.sessions.find(
-          (session) =>
-            session.projectId === projectId &&
-            session.id === requested.workspaceId &&
-            isChatSession(session),
-        )?.id ?? null
+      // A standalone terminal root (no owner) is selectable as itself, but a
+      // PTY-less session (a KödWork task) must never steal selection — creating
+      // or activating one is background, per the addSession invariant.
+      if (!requested.workspaceId)
+        return ownsNoPty(requested) ? null : requested.id;
+      const owner = state.sessions.find(
+        (session) =>
+          session.projectId === projectId &&
+          session.id === requested.workspaceId,
       );
+      // Owned by a chat/work host → normalize to that host; a split of a
+      // standalone terminal (owner is another terminal) selects itself. A
+      // dangling owner (its host was closed) is not selectable.
+      if (!owner) return null;
+      return ownsNoPty(owner) ? owner.id : requested.id;
     };
 
     return {
@@ -1511,6 +1523,10 @@ export function createProjectsStore(deps: StoreDeps) {
           project &&
           !chat &&
           !work &&
+          // An explicitly requested project-scoped terminal is allowed to host
+          // a login/agent shell without a chat (slice 3); only the implicit
+          // auto-spawn path stays blocked in the chat-first runtime.
+          !options?.projectScopedTerminal &&
           (!workspaceId ||
             !sessions.some(
               (session) =>
@@ -1637,9 +1653,11 @@ export function createProjectsStore(deps: StoreDeps) {
         return get().addSession(projectId, base, root.workspaceId ?? root.id);
       },
 
-      // Launch a CLI in the active project. The chat-first desktop app sends
-      // it to the selected thread's terminal; legacy callers keep their root
-      // session behavior until they opt out of auto-start terminals.
+      // Launch a CLI in the active project. A chat-first launch (a chat thread
+      // selected) hangs the shell off that thread. Otherwise the shell hosts at
+      // project scope — a standalone terminal in the active project — so login
+      // and agent terminals no longer require an open chat (slice 3). Legacy
+      // auto-start callers keep their root-session behavior.
       async launchInSession(command: string, base: string) {
         const projectId = get().activeProjectId;
         if (!projectId) throw new Error("open a project first");
@@ -1656,19 +1674,49 @@ export function createProjectsStore(deps: StoreDeps) {
             : command;
         const selectedId = get().activeSessionByProject[projectId];
         const selected = get().sessions.find((session) => session.id === selectedId);
-        const existingOwnedTerminal = selected && isChatSession(selected)
+        const chatSelected = !!selected && isChatSession(selected);
+        const existingOwnedTerminal = chatSelected
           ? get().sessions.find(
               (session) =>
                 session.projectId === projectId &&
                 !isChatSession(session) &&
-                session.workspaceId === selected.id,
+                session.workspaceId === selected!.id,
             )
+          : undefined;
+        // A chat-less launch hosts at project scope. Reuse is keyed on the
+        // launch base (the provider), so each provider gets its own shell — a
+        // second provider's login never gets typed into another's OAuth prompt.
+        // A live standalone terminal (not embedded in a chat/task, not exited)
+        // whose name matches this base is reused; otherwise a fresh one opens.
+        const usedProjectScope =
+          !remoteTarget && deps.autoStartTerminal === false && !chatSelected;
+        const escapedBase = (base ?? get().shellBase).replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
+        const baseNameRe = new RegExp(`^${escapedBase} \\d+$`);
+        const isReusableTerminal = (session: SessionMeta): boolean =>
+          session.projectId === projectId &&
+          !session.exited && // a dead PTY can't host a new login
+          !ownsNoPty(session) &&
+          baseNameRe.test(session.name) && // same provider only
+          !(
+            session.workspaceId !== undefined &&
+            get().sessions.some(
+              (owner) => owner.id === session.workspaceId && ownsNoPty(owner),
+            )
+          );
+        const projectTerminalHost = usedProjectScope
+          ? get().sessions.find(isReusableTerminal)
           : undefined;
         const sessionId =
           !remoteTarget && deps.autoStartTerminal === false
-            ? selected && isChatSession(selected)
-              ? (existingOwnedTerminal?.id ?? get().addTerminal(projectId, selected.id, base))
-              : null
+            ? chatSelected
+              ? (existingOwnedTerminal?.id ?? get().addTerminal(projectId, selected!.id, base))
+              : (projectTerminalHost?.id ??
+                  get().addSession(projectId, base, undefined, {
+                    projectScopedTerminal: true,
+                  }))
             : get().addSession(
                 projectId,
                 base,
@@ -1676,18 +1724,17 @@ export function createProjectsStore(deps: StoreDeps) {
                 remoteTarget ? { remoteCommand } : undefined,
               );
         if (!sessionId) {
-          throw new Error(
-            selected && !isChatSession(selected)
-              ? "select a chat before starting an agent"
-              : "could not create a terminal session",
-          );
+          throw new Error("could not create a terminal session");
         }
         if (remoteTarget) return;
-        // addTerminal selects its new PTY as part of its generic lifecycle.
-        // Keep a chat-owned launch on the chat so the shell remains embedded
-        // instead of replacing KödChat with a standalone terminal surface.
-        if (deps.autoStartTerminal === false && selected && isChatSession(selected)) {
-          get().setActiveSession(projectId, selected.id);
+        // addTerminal/addSession select their new PTY as part of the generic
+        // lifecycle. Keep a chat-owned launch on the chat so the shell stays
+        // embedded in KödChat; a project-scoped launch selects its terminal so
+        // the login prompt is visible even when reusing an existing one.
+        if (deps.autoStartTerminal === false && chatSelected) {
+          get().setActiveSession(projectId, selected!.id);
+        } else if (usedProjectScope) {
+          get().setActiveSession(projectId, sessionId);
         }
         await deps.registry.ready?.(sessionId);
         await deps.registry.write(sessionId, `${command}\r`);
