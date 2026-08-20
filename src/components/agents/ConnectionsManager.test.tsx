@@ -234,11 +234,11 @@ describe("ConnectionsManager", () => {
     expect(install.disabled).toBe(true);
   });
 
-  it("disables remote install honestly for a stdio-only toml target", async () => {
+  it("installs a remote server into a codex toml target as a url-only config", async () => {
     const { connections, source } = stores();
     await connections.getState().load();
     // Only the codex (toml) target is available.
-    const prepareAddMcpServer = vi.fn(async () => {});
+    const prepareAddMcpServer = vi.fn<HarnessState["prepareAddMcpServer"]>(async () => {});
     const harness = createStore<Partial<HarnessState>>(() => ({
       inventory: null,
       applying: false,
@@ -263,15 +263,25 @@ describe("ConnectionsManager", () => {
     );
 
     await click(button(host, "Add from catalog"));
-    // vidIQ is remote-only, so codex (toml) cannot express it.
+    // vidIQ is remote-only; codex config.toml expresses it as a bare url.
     const add = [...host.querySelectorAll("li")]
       .find((li) => li.textContent?.includes("vidIQ"))!
       .querySelector("button");
     await click(add as HTMLButtonElement);
 
     const install = button(host, "Install to CLI config…");
-    expect(install.disabled).toBe(true);
+    expect(install.disabled).toBe(false);
     await click(install);
-    expect(prepareAddMcpServer).not.toHaveBeenCalled();
+
+    // End-to-end BYOK proof: the staged spec carries ONLY the url — no
+    // headers, tokens, or auth keys can reach the written config.
+    expect(prepareAddMcpServer).toHaveBeenCalledTimes(1);
+    const [target, spec] = prepareAddMcpServer.mock.calls[0];
+    expect(target).toStrictEqual(CODEX_TARGET);
+    expect(spec).toStrictEqual({
+      name: "vidiq",
+      config: { url: "https://mcp.vidiq.com/mcp" },
+    });
+    expect(Object.keys((spec as { config: object }).config)).toEqual(["url"]);
   });
 });
