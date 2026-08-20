@@ -9,7 +9,7 @@
 // the store's own setters and runs it on the existing spawn path. Run history
 // stays in the Workspaces sidebar's shared green/red rows.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
@@ -31,15 +31,16 @@ import { connectionScopeKey } from "../../agents/connections-store";
 import { probesFromInventory } from "../../agents/connection-install";
 import { ConnectionsManager } from "../agents/ConnectionsManager";
 import type { KodworkState } from "../../kodwork/store";
-import type { HarnessState } from "../../store/harness";
+import { isPendingChangeOwned, type HarnessState } from "../../store/harness";
 import type { ProjectsState } from "../../store/projects";
+import { ChangeConfirmDialog } from "../ChangeConfirmDialog";
 import { AVAILABLE_PROVIDERS } from "../../providers/catalog";
 import { RELEASE_MANIFEST, type ReleaseManifest } from "../../release/manifest";
 import { Pane } from "../Pane";
 import { ProviderLogo } from "../chat/ProviderLogo";
 import { ComposerMenu } from "../chat/ComposerMenu";
 import { KodworkPane } from "../kodwork/KodworkPane";
-import { launchPersonaRun } from "./agent-runs";
+import { launchPersonaRun, personaSkillsOwner } from "./agent-runs";
 
 // Only CLIs with a verified headless stream can run an agent, the same gate the
 // KödWork composer uses; a persona's provider is chosen from these.
@@ -120,6 +121,15 @@ export function AgentsTab({
   }, [store, connections, activeProject?.id]);
 
   const [editing, setEditing] = useState<EditTarget | null>(null);
+  // A non-blocking notice from the last launch about the persona's KödSkills.
+  // It lives here, not in the editor, because the editor unmounts as soon as
+  // the run area takes over.
+  const [skillsNotice, setSkillsNotice] = useState<string | null>(null);
+  const clearSkillsNotice = useCallback(() => setSkillsNotice(null), []);
+  // A notice is about one workspace's launch; switching workspaces retires it.
+  useEffect(() => {
+    setSkillsNotice(null);
+  }, [activeProject?.id]);
 
   // A run opened from the sidebar (or a fresh launch) takes over the run area:
   // drop the editor so the task pane is visible. Keyed on runOpenSeq — which
@@ -145,36 +155,122 @@ export function AgentsTab({
           onSelect={(scope, id) => setEditing({ scope, id })}
           onNew={(scope) => setEditing({ scope, id: null })}
         />
-        <div className="relative min-w-0 flex-1 overflow-hidden bg-bg">
-          {editing ? (
-            <PersonaEditor
-              key={`${personaScopeKey(editing.scope)}:${editing.id ?? "new"}`}
-              store={store}
-              workStore={workStore}
-              projectsStore={projectsStore}
-              harness={harness}
-              connections={connections}
-              connectionSource={connectionSource}
-              manifest={manifest}
-              scope={editing.scope}
-              personaId={editing.id}
-              projectId={activeProject?.id ?? null}
-              projectPath={activeProject?.path ?? null}
-              onSaved={(id) => setEditing({ scope: editing.scope, id })}
-              onDeleted={() => setEditing(null)}
-            />
-          ) : selectedRunTaskId ? (
-            <KodworkPane
-              taskId={selectedRunTaskId}
-              workStore={workStore}
-              projectsStore={projectsStore}
-            />
-          ) : (
-            <EmptyState hasProject={!!activeProject} />
-          )}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+          <PersonaSkillsReview
+            harness={harness}
+            projectRoot={activeProject?.path ?? null}
+            notice={skillsNotice}
+            onDismissNotice={clearSkillsNotice}
+          />
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            {editing ? (
+              <PersonaEditor
+                key={`${personaScopeKey(editing.scope)}:${editing.id ?? "new"}`}
+                store={store}
+                workStore={workStore}
+                projectsStore={projectsStore}
+                harness={harness}
+                connections={connections}
+                connectionSource={connectionSource}
+                manifest={manifest}
+                scope={editing.scope}
+                personaId={editing.id}
+                projectId={activeProject?.id ?? null}
+                projectPath={activeProject?.path ?? null}
+                onSaved={(id) => setEditing({ scope: editing.scope, id })}
+                onDeleted={() => setEditing(null)}
+                onSkillsNotice={setSkillsNotice}
+              />
+            ) : selectedRunTaskId ? (
+              <KodworkPane
+                taskId={selectedRunTaskId}
+                workStore={workStore}
+                projectsStore={projectsStore}
+              />
+            ) : (
+              <EmptyState hasProject={!!activeProject} />
+            )}
+          </div>
         </div>
       </div>
     </Pane>
+  );
+}
+
+// --- Persona skills review ---
+
+// The staged KödSkills install a launch produced, plus its non-blocking notice.
+// The install itself is the ordinary KödHarness reviewed change — this is the
+// same confirm dialog the KödSkills picker and Connections manager show, just
+// rendered where the run lives.
+function PersonaSkillsReview({
+  harness,
+  projectRoot,
+  notice,
+  onDismissNotice,
+}: {
+  harness: StoreApi<HarnessState>;
+  projectRoot: string | null;
+  notice: string | null;
+  onDismissNotice(): void;
+}) {
+  const pending = useStore(harness, (s) => s.pendingChange);
+  const applying = useStore(harness, (s) => s.applying);
+  const mutationError = useStore(harness, (s) => s.mutationError);
+  const owner = projectRoot ? personaSkillsOwner(projectRoot) : null;
+  const ownPending =
+    owner && isPendingChangeOwned(pending ?? null, owner) ? pending : null;
+
+  // A persona-skills change staged for a DIFFERENT workspace is unreachable —
+  // this dialog only ever shows the active project's — while it still blocks
+  // the KödHarness pane. It is ours and re-stageable, so cancel it.
+  useEffect(() => {
+    const stale = pending ?? null;
+    if (!stale || stale.owner.surface !== "skills") return;
+    if (projectRoot && stale.owner.scopeId === projectRoot) return;
+    const cancel = harness.getState().cancelPendingChange;
+    if (typeof cancel === "function") cancel(stale.owner);
+  }, [harness, pending, projectRoot]);
+
+  // Once the staged install is confirmed or cancelled, its notice is history.
+  const hadPending = useRef(false);
+  useEffect(() => {
+    if (hadPending.current && !ownPending) onDismissNotice();
+    hadPending.current = !!ownPending;
+  }, [ownPending, onDismissNotice]);
+
+  if (!notice && !ownPending) return null;
+  return (
+    <div className="shrink-0 border-b border-border px-3 py-2">
+      {notice && (
+        <p
+          data-testid="persona-skills-notice"
+          className="rounded border border-[color-mix(in_srgb,var(--kd-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--kd-warning)_10%,transparent)] px-2 py-1.5 text-[10px] leading-relaxed text-[var(--kd-warning)]"
+        >
+          {notice}{" "}
+          <button
+            type="button"
+            onClick={onDismissNotice}
+            aria-label="dismiss skills notice"
+            className="underline hover:opacity-80"
+          >
+            dismiss
+          </button>
+        </p>
+      )}
+      {ownPending && owner && projectRoot && (
+        <div className="mt-2" data-testid="persona-skills-review">
+          <ChangeConfirmDialog
+            pending={ownPending}
+            applying={!!applying}
+            error={mutationError ?? null}
+            projectRoot={projectRoot}
+            onCancel={() => harness.getState().cancelPendingChange(owner)}
+            onConfirm={() => void harness.getState().confirmPendingChange(owner)}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -327,6 +423,7 @@ function PersonaEditor({
   projectPath,
   onSaved,
   onDeleted,
+  onSkillsNotice,
 }: {
   store: StoreApi<AgentsState>;
   workStore: StoreApi<KodworkState>;
@@ -341,6 +438,7 @@ function PersonaEditor({
   projectPath: string | null;
   onSaved(id: string): void;
   onDeleted(): void;
+  onSkillsNotice(notice: string | null): void;
 }) {
   // The editor remounts (keyed by scope+id in the parent) whenever the
   // selection changes, so reading the persona once at mount is enough.
@@ -475,8 +573,18 @@ function PersonaEditor({
     const persona = store.getState().getPersona(scope, id);
     if (!persona) return;
     // Prepares (does not start) a KödWork draft from the persona; the run is
-    // started from the task pane's own Start control.
-    await launchPersonaRun(projectsStore, workStore, store, projectId, persona);
+    // started from the task pane's own Start control. Any missing KödSkills are
+    // staged for a reviewed install first — never a silent write.
+    onSkillsNotice(null);
+    const result = await launchPersonaRun(
+      projectsStore,
+      workStore,
+      store,
+      projectId,
+      persona,
+      { harness, projectRoot: projectPath, providerLabel: provider?.name ?? providerId },
+    );
+    onSkillsNotice(result.skillsNotice);
   };
 
   const onDeleteClick = async () => {
@@ -558,8 +666,11 @@ function PersonaEditor({
         <fieldset className="mt-4">
           <legend className="text-[11px] text-text-dim">Skills</legend>
           <p className="mt-1 text-[10px] leading-relaxed text-text-dim">
-            Stored with the persona; applied once runs pick up skills in a later
-            update.
+            Checked skills are installed into {provider?.name ?? providerId}'s own
+            KödSkills folder when you prepare a run — as a reviewed change you
+            confirm, never a silent write. Already-installed skills are skipped,
+            and a skill that can't be installed (no managed folder for this
+            provider, or conflicting files) is reported without blocking the run.
           </p>
           {kodSkillsError ? (
             <p className="mt-1 text-[11px] leading-relaxed text-[var(--kd-error)]">

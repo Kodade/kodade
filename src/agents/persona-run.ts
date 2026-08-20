@@ -4,8 +4,10 @@
 //
 // A persona carries a "who and how" (prompt + provider); it deliberately does
 // NOT carry an access level, so a launched run keeps whatever default the task
-// model already gives a fresh draft. Skills and connections are metadata the
-// engine doesn't consume yet, so they don't reach the draft here.
+// model already gives a fresh draft. Skills and connections are not draft
+// fields: they are made available to the run by installing them into the
+// provider's own config/skills folder (see persona-skills.ts and
+// connection-install.ts), not by widening the draft.
 
 import type { AgentPersona } from "./persona";
 
