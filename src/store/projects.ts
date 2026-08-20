@@ -1004,8 +1004,11 @@ export function createProjectsStore(deps: StoreDeps) {
       ) {
         return requested.id;
       }
-      // A standalone terminal root (no owner) is selectable as itself.
-      if (!requested.workspaceId) return requested.id;
+      // A standalone terminal root (no owner) is selectable as itself, but a
+      // PTY-less session (a KödWork task) must never steal selection — creating
+      // or activating one is background, per the addSession invariant.
+      if (!requested.workspaceId)
+        return ownsNoPty(requested) ? null : requested.id;
       const owner = state.sessions.find(
         (session) =>
           session.projectId === projectId &&
@@ -1680,26 +1683,32 @@ export function createProjectsStore(deps: StoreDeps) {
                 session.workspaceId === selected!.id,
             )
           : undefined;
-        // A standalone terminal in this project (not embedded in a chat or a
-        // KödWork task) can host a chat-less launch. Reuse the selected one if
-        // it is a standalone terminal, else any existing standalone terminal.
-        const isStandaloneTerminal = (session: SessionMeta): boolean =>
+        // A chat-less launch hosts at project scope. Reuse is keyed on the
+        // launch base (the provider), so each provider gets its own shell — a
+        // second provider's login never gets typed into another's OAuth prompt.
+        // A live standalone terminal (not embedded in a chat/task, not exited)
+        // whose name matches this base is reused; otherwise a fresh one opens.
+        const usedProjectScope =
+          !remoteTarget && deps.autoStartTerminal === false && !chatSelected;
+        const escapedBase = (base ?? get().shellBase).replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
+        const baseNameRe = new RegExp(`^${escapedBase} \\d+$`);
+        const isReusableTerminal = (session: SessionMeta): boolean =>
           session.projectId === projectId &&
+          !session.exited && // a dead PTY can't host a new login (finding 1)
           !ownsNoPty(session) &&
+          baseNameRe.test(session.name) && // same provider only (finding 2)
           !(
             session.workspaceId !== undefined &&
             get().sessions.some(
               (owner) => owner.id === session.workspaceId && ownsNoPty(owner),
             )
           );
-        const projectTerminalHost =
-          !remoteTarget && deps.autoStartTerminal === false && !chatSelected
-            ? (selected && isStandaloneTerminal(selected)
-                ? selected
-                : get().sessions.find(isStandaloneTerminal))
-            : undefined;
-        const usedProjectScope =
-          !remoteTarget && deps.autoStartTerminal === false && !chatSelected;
+        const projectTerminalHost = usedProjectScope
+          ? get().sessions.find(isReusableTerminal)
+          : undefined;
         const sessionId =
           !remoteTarget && deps.autoStartTerminal === false
             ? chatSelected

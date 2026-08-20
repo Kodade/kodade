@@ -44,8 +44,13 @@ async function projectsSetup() {
     })(),
   });
   await store.getState().hydrate();
-  await store.getState().addProject("/repo");
-  return { store, registry, projectId: store.getState().projects[0].id };
+  // Seed the task's own project ("project-1", the id signedOutTask opens the
+  // task in) and make it active, so a login terminal hosts in the right place.
+  store.setState({
+    projects: [{ id: "project-1", name: "repo", path: "/repo" }],
+    activeProjectId: "project-1",
+  });
+  return { store, registry, projectId: "project-1" };
 }
 
 // A real KödWork store driven through the real adapters: the only fake is the
@@ -297,6 +302,45 @@ describe("KodworkPane", () => {
     expect(registry.write.mock.calls.map(([, data]) => data)).toContain(
       "claude auth login\r",
     );
+  });
+
+  // A login terminal opens in the ACTIVE project, so a task belonging to a
+  // different (background) project disables the button with an honest hint
+  // instead of signing in against the wrong project.
+  it("disables login when the task's project is not the active one", async () => {
+    const workStore = await signedOutTask("claude", "Not logged in.");
+    const { store: projectsStore, registry } = await projectsSetup();
+    // Switch the active project away from the task's project ("project-1").
+    projectsStore.setState({
+      projects: [
+        { id: "project-1", name: "repo", path: "/repo" },
+        { id: "other", name: "other", path: "/other" },
+      ],
+      activeProjectId: "other",
+    });
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() =>
+      mounted?.render(
+        <KodworkPane taskId="t1" workStore={workStore} projectsStore={projectsStore} />,
+      ),
+    );
+
+    const card = host.querySelector('[data-testid="kodwork-auth-card"]')!;
+    const button = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.includes("log in"),
+    )!;
+    expect(button.disabled).toBe(true);
+    const guidance = card.querySelector(`#${button.getAttribute("aria-describedby")}`);
+    expect(guidance?.textContent).toContain("Open this task's project");
+
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+    expect(registry.write).not.toHaveBeenCalled();
   });
 
   it("keeps an ordinary failure a plain error with no login affordance", async () => {

@@ -34,9 +34,9 @@ import { ProviderLogo } from "../chat/ProviderLogo";
 // offers the provider's own sign-in flow in a real terminal, exactly like
 // KödChat's transcript auth card. Ködade never handles the credential.
 //
-// The login terminal opens against the project's selected chat, so when there
-// is no chat to host it the button is disabled with guidance instead of
-// failing on click — the same treatment Settings → Providers gives it.
+// The login terminal hosts at project scope in the ACTIVE project, so a task
+// that belongs to a different (background) project disables the button with an
+// honest hint rather than signing in against the wrong project.
 function TaskFailure({
   task,
   projectsStore,
@@ -46,7 +46,14 @@ function TaskFailure({
   projectsStore: StoreApi<ProjectsState>;
   className?: string;
 }) {
-  const canLogIn = useStore(projectsStore, canOpenLoginTerminal);
+  // A login terminal opens in the active project; this task's login must land
+  // in the task's own project, so require the two to match.
+  const isTaskProjectActive = useStore(
+    projectsStore,
+    (state) => state.activeProjectId === task.projectId,
+  );
+  const canOpen = useStore(projectsStore, canOpenLoginTerminal);
+  const canLogIn = canOpen && isTaskProjectActive;
   if (!task.error) return null;
   const guidanceId = `kodwork-login-guidance-${task.id}`;
   const provider = AVAILABLE_PROVIDERS.find((entry) => entry.id === task.providerId);
@@ -70,11 +77,13 @@ function TaskFailure({
             disabled={!canLogIn}
             aria-describedby={canLogIn ? undefined : guidanceId}
             title={
-              !canLogIn
-                ? "Open a project first"
-                : provider
+              canLogIn
+                ? provider
                   ? `Open a terminal running ${loginCommandFor(provider)}`
                   : "Open a terminal to log in"
+                : canOpen
+                  ? "Open this task's project to log in"
+                  : "Open a project first"
             }
             className="mt-2 rounded border border-border px-2 py-1 text-xs text-text hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus:ring-1 focus:ring-accent"
           >
@@ -82,7 +91,9 @@ function TaskFailure({
           </button>
           {!canLogIn && (
             <p id={guidanceId} className="mt-1 text-[10px] text-text-dim">
-              Open a project before opening a login terminal.
+              {canOpen
+                ? "Open this task's project before opening a login terminal."
+                : "Open a project before opening a login terminal."}
             </p>
           )}
         </>

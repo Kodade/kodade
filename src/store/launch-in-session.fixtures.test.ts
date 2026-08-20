@@ -193,12 +193,38 @@ describe("launchInSession — chat-owned and project-scoped hosting", () => {
     expect(writes).toEqual([{ id: terminal.id, data: "claude\r" }]);
   });
 
-  // Slice 3 intentionally changes this: a non-chat selection now reuses that
-  // standalone terminal instead of throwing. Recorded as the new behavior.
-  it("a non-chat terminal selected → reuses it at project scope (after slice 3)", async () => {
+  // Reuse is keyed on the launch base (provider): a live standalone terminal
+  // named for the SAME provider hosts the launch, so repeated sign-ins don't
+  // spawn a new shell each time.
+  it("reuses a live standalone terminal of the same provider", async () => {
     const { store, opens, writes } = makeStore();
     await store.getState().addProject("/repos/alpha");
     const projectId = store.getState().projects[0].id;
+
+    await store.getState().launchInSession("claude", "claude");
+    const first = store
+      .getState()
+      .sessions.find((session) => !isChatSession(session))!;
+    await store.getState().launchInSession("claude --resume", "claude");
+
+    // Same host both times; only one terminal ever opened.
+    expect(
+      store.getState().sessions.filter((s) => !isChatSession(s)),
+    ).toHaveLength(1);
+    expect(opens).toEqual([{ id: first.id, cwd: "/repos/alpha" }]);
+    expect(writes).toEqual([
+      { id: first.id, data: "claude\r" },
+      { id: first.id, data: "claude --resume\r" },
+    ]);
+  });
+
+  // A standalone terminal of a DIFFERENT provider is not reused: each provider
+  // gets its own shell so one login command never lands in another's prompt.
+  it("does not reuse a different provider's standalone terminal", async () => {
+    const { store } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    // A pre-existing standalone terminal from a different base ("zsh").
     store.setState({
       sessions: [{ id: "term-1", projectId, name: "zsh 1" }],
       activeSessionByProject: { [projectId]: "term-1" },
@@ -206,10 +232,50 @@ describe("launchInSession — chat-owned and project-scoped hosting", () => {
 
     await store.getState().launchInSession("claude", "claude");
 
-    // No new session created — the selected standalone terminal is the host.
-    expect(store.getState().sessions).toHaveLength(1);
-    expect(opens).toHaveLength(0); // reused host was never (re)opened here
-    expect(writes).toEqual([{ id: "term-1", data: "claude\r" }]);
+    const claudeTerminal = store
+      .getState()
+      .sessions.find((s) => /^claude \d+$/.test(s.name))!;
+    expect(claudeTerminal.id).not.toBe("term-1");
+    expect(store.getState().sessions).toHaveLength(2);
+  });
+
+  // A standalone terminal whose PTY has exited is a corpse: the next sign-in
+  // opens a fresh terminal rather than writing into a dead shell (finding 1).
+  it("does not reuse an exited standalone terminal", async () => {
+    const { store, writes } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    store.setState({
+      sessions: [
+        { id: "dead-1", projectId, name: "claude 1", exited: true },
+      ],
+      activeSessionByProject: { [projectId]: "dead-1" },
+    });
+
+    await store.getState().launchInSession("claude", "claude");
+
+    const fresh = store
+      .getState()
+      .sessions.find((s) => s.id !== "dead-1" && !isChatSession(s))!;
+    expect(fresh).toBeDefined();
+    expect(fresh.exited).toBeUndefined();
+    // The command went to the fresh terminal, never the corpse.
+    expect(writes).toEqual([{ id: fresh.id, data: "claude\r" }]);
+  });
+
+  // A running agent run (a KödWork task) must never be stolen as selection by
+  // activating it — creating/activating a task stays background (finding 3).
+  it("activateSession on a work session does not change selection", async () => {
+    const { store } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+    const projectId = store.getState().projects[0].id;
+    const chatId = store.getState().addChatThread(projectId, "claude")!;
+    const taskId = store.getState().addWorkSession(projectId)!;
+    expect(store.getState().activeSessionByProject[projectId]).toBe(chatId);
+
+    await store.getState().activateSession(projectId, taskId);
+    // Still the chat — the background task never grabbed the pane.
+    expect(store.getState().activeSessionByProject[projectId]).toBe(chatId);
   });
 
   it("no active project → throws 'open a project first'", async () => {
@@ -266,6 +332,29 @@ describe("openLoginTerminal — project-scope availability (after slice 3)", () 
     expect(terminal.workspaceId).toBeUndefined(); // project-scoped, not embedded
     expect(opens).toEqual([{ id: terminal.id, cwd: "/repos/alpha" }]);
     expect(writes).toEqual([{ id: terminal.id, data: "claude auth login\r" }]);
+  });
+
+  // Two providers signing in with no chats get two distinct shells, and each
+  // login command lands only in its own terminal — never in the other's OAuth
+  // prompt (finding 2).
+  it("claude then codex login → two distinct terminals, no cross-talk", async () => {
+    const { store, writes } = makeStore();
+    await store.getState().addProject("/repos/alpha");
+
+    await openLoginTerminal(store, "claude");
+    await openLoginTerminal(store, "codex");
+
+    const terminals = store
+      .getState()
+      .sessions.filter((session) => !isChatSession(session));
+    expect(terminals).toHaveLength(2);
+    const claude = terminals.find((s) => /^claude \d+$/.test(s.name))!;
+    const codex = terminals.find((s) => /^codex \d+$/.test(s.name))!;
+    expect(claude.id).not.toBe(codex.id);
+    expect(writes).toEqual([
+      { id: claude.id, data: "claude auth login\r" },
+      { id: codex.id, data: "codex login\r" },
+    ]);
   });
 });
 
