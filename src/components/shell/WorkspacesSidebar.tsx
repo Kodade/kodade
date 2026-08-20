@@ -17,6 +17,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import {
   activityModule as defaultActivityModule,
+  agentsStore,
   appStore,
   chatStore,
   filesStore,
@@ -38,8 +39,8 @@ import {
   TerminalSessionRow,
 } from "../sidebar/rows";
 import { projectTerminalGroups } from "../sidebar/terminals";
-import { openTask } from "../kodwork/KodworkSection";
 import { FullWorkspaceSidebar } from "../workspace/projection";
+import { openAgentRun } from "./agent-runs";
 
 export function WorkspacesSidebar() {
   return (
@@ -199,16 +200,28 @@ export function WorkspacesSection({
                       sessions={workSessions}
                       tasks={tasks}
                       projectedGroup={projectedGroup}
-                      onOpen={(taskId) =>
-                        void openTask(
+                      // A run opens INSIDE the Agents tab in v2 (not the Editor
+                      // tab): switch tabs, then point the run area at the task.
+                      onOpen={(taskId) => {
+                        const projects = projectsStore.getState();
+                        projects.setShellLayout({
+                          ...projects.shellLayout,
+                          activeTab: "agents",
+                        });
+                        void openAgentRun(
                           projectsStore,
                           workStore,
+                          agentsStore,
                           project.id,
-                          project.path,
                           taskId,
-                        )
-                      }
+                        );
+                      }}
                       onClose={(taskId) => {
+                        // Drop the run's selection if it was showing, then close
+                        // the session (which removes its task document).
+                        if (agentsStore.getState().selectedRunTaskId === taskId) {
+                          agentsStore.getState().selectRun(null);
+                        }
                         filesStore.getState().closeTab({ kind: "kodwork", taskId });
                         void projectsStore.getState().closeSession(taskId);
                       }}
