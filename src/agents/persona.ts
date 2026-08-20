@@ -2,8 +2,11 @@
 // system prompt, the provider it speaks through, and opaque references to
 // KödSkills skill ids and connection ids. Personas are additive metadata; this
 // slice touches no run engine and no UI. Parsing mirrors src/kodwork/model.ts:
-// bounds are constants, parsing never throws, and unknown fields are dropped so
-// a hand-edited or forward-versioned document degrades instead of breaking.
+// bounds are constants, and a malformed ENTRY is skipped rather than thrown on
+// while unknown fields on a good entry are dropped. A DOCUMENT that cannot be
+// understood as a whole — not an object, or a version this build does not know —
+// returns null, exactly like parsePersistedTask, so the store can refuse to
+// overwrite it (a downgrade must never destroy a newer document).
 
 // The document version. Bumped only alongside a real migration.
 export const KODAGENT_DOC_VERSION = 1;
@@ -62,18 +65,30 @@ export function emptyPersonaDoc(): PersistedPersonaDoc {
   return { version: KODAGENT_DOC_VERSION, app: [], projects: {} };
 }
 
+// A providerId is required and must survive a reload. An empty or blank one
+// would mint a persona that parsePersona drops on the next load, so the write
+// path rejects it up front.
+export function isValidProviderId(providerId: unknown): providerId is string {
+  return typeof providerId === "string" && providerId.trim().length > 0;
+}
+
 // Mint a persona from caller input. The id and clock come from the store, the
-// same way newTask takes an id and `now` — so tests stay deterministic.
+// same way newTask takes an id and `now` — so tests stay deterministic. A blank
+// providerId throws: the store validates first, but this keeps the invariant
+// even if createPersona is called directly.
 export function createPersona(
   id: string,
   now: number,
   input: PersonaInput,
 ): AgentPersona {
+  if (!isValidProviderId(input.providerId)) {
+    throw new Error("A persona requires a non-empty providerId.");
+  }
   return {
     id,
     name: clampName(input.name ?? DEFAULT_PERSONA_NAME),
     prompt: clampPrompt(input.prompt ?? ""),
-    providerId: input.providerId,
+    providerId: input.providerId.trim(),
     skills: clampRefs(input.skills ?? [], MAX_SKILL_REFS),
     connections: clampRefs(input.connections ?? [], MAX_CONNECTION_REFS),
     createdAt: now,
@@ -90,11 +105,17 @@ export function updatePersona(
   changes: PersonaUpdate,
   now: number,
 ): AgentPersona {
+  // A change that sets providerId must keep it valid; an omitted providerId
+  // leaves the existing one untouched.
+  if (changes.providerId !== undefined && !isValidProviderId(changes.providerId)) {
+    throw new Error("A persona requires a non-empty providerId.");
+  }
   return {
     ...existing,
     name: changes.name !== undefined ? clampName(changes.name) : existing.name,
     prompt: changes.prompt !== undefined ? clampPrompt(changes.prompt) : existing.prompt,
-    providerId: changes.providerId ?? existing.providerId,
+    providerId:
+      changes.providerId !== undefined ? changes.providerId.trim() : existing.providerId,
     skills:
       changes.skills !== undefined
         ? clampRefs(changes.skills, MAX_SKILL_REFS)
@@ -131,13 +152,20 @@ function clampRefs(value: string[], max: number): string[] {
   return refs;
 }
 
-// Parse a persona document defensively. A non-object, a wrong version, or any
-// malformed entry degrades to as-much-as-can-be-salvaged, never a throw:
-// non-object → empty doc; bad entries skipped; unknown fields dropped; ids
-// deduped (first wins); every scope bounded.
-export function parsePersistedPersonaDoc(raw: unknown): PersistedPersonaDoc {
-  if (typeof raw !== "object" || raw === null) return emptyPersonaDoc();
+// Prototype-polluting keys a JSON.parse'd object can carry as own properties.
+// Assigning to them via bracket notation would rewrite the prototype, so a
+// project bucket under any of these names is dropped.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+// Parse a persona document. A malformed ENTRY is salvaged-around (skipped, with
+// unknown fields dropped and every scope bounded). A DOCUMENT that cannot be
+// understood at all returns null: not an object, or a version this build does
+// not know. Null means "do not overwrite" — the store refuses writes so a
+// downgrade cannot destroy a newer document.
+export function parsePersistedPersonaDoc(raw: unknown): PersistedPersonaDoc | null {
+  if (typeof raw !== "object" || raw === null) return null;
   const doc = raw as Record<string, unknown>;
+  if (doc.version !== KODAGENT_DOC_VERSION) return null;
   return {
     version: KODAGENT_DOC_VERSION,
     app: parsePersonaList(doc.app),
@@ -149,7 +177,7 @@ function parseProjects(value: unknown): Record<string, AgentPersona[]> {
   if (typeof value !== "object" || value === null) return {};
   const out: Record<string, AgentPersona[]> = {};
   for (const [projectId, list] of Object.entries(value as Record<string, unknown>)) {
-    if (!projectId) continue;
+    if (!projectId || UNSAFE_KEYS.has(projectId)) continue;
     const personas = parsePersonaList(list);
     // Skip a project key that salvaged nothing — keeps the doc tidy.
     if (personas.length > 0) out[projectId] = personas;

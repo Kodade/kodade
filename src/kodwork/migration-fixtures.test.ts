@@ -23,7 +23,7 @@ describe("KödWork persisted-task migration guard", () => {
       // Re-serialize the imported JSON so parsePersistedTask sees the same
       // string bytes a real on-disk read would hand it.
       const parsed = parsePersistedTask(JSON.stringify(input));
-      expect(parsed).toEqual(expected);
+      expect(parsed).toStrictEqual(expected);
     });
   }
 });

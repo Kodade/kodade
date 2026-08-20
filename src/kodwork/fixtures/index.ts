@@ -26,6 +26,14 @@ import unknownFieldsInput from "./unknown-fields.input.json";
 import unknownFieldsExpected from "./unknown-fields.expected.json";
 import outOfBoundsInput from "./out-of-bounds.input.json";
 import outOfBoundsExpected from "./out-of-bounds.expected.json";
+import reviewBoundsInput from "./review-bounds.input.json";
+import reviewBoundsExpected from "./review-bounds.expected.json";
+import versionMismatchInput from "./version-mismatch.input.json";
+import versionMismatchExpected from "./version-mismatch.expected.json";
+import missingIdInput from "./missing-id.input.json";
+import missingIdExpected from "./missing-id.expected.json";
+import nonObjectInput from "./non-object.input.json";
+import nonObjectExpected from "./non-object.expected.json";
 
 export type MigrationFixture = {
   name: string;
@@ -44,4 +52,9 @@ export const MIGRATION_FIXTURES: MigrationFixture[] = [
   { name: "permissions", input: permissionsInput, expected: permissionsExpected },
   { name: "unknown-fields", input: unknownFieldsInput, expected: unknownFieldsExpected },
   { name: "out-of-bounds", input: outOfBoundsInput, expected: outOfBoundsExpected },
+  { name: "review-bounds", input: reviewBoundsInput, expected: reviewBoundsExpected },
+  // parsePersistedTask null paths: an unreadable doc loads as "no saved task".
+  { name: "version-mismatch", input: versionMismatchInput, expected: versionMismatchExpected },
+  { name: "missing-id", input: missingIdInput, expected: missingIdExpected },
+  { name: "non-object", input: nonObjectInput, expected: nonObjectExpected },
 ];
