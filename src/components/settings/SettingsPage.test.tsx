@@ -182,12 +182,13 @@ describe("settings page", () => {
     for (const heading of ["ködharness", "ködlocal", "ködwhisper", "ködssh"]) {
       expect(container?.textContent).toContain(heading);
     }
-    // Harness is the open block; the development ones start collapsed.
+    // Harness is the open block; the development ones start collapsed, as
+    // does the harness block's own background-prompt disclosure (#63).
     expect(
       Array.from(
         container?.querySelectorAll<HTMLButtonElement>("[aria-expanded]") ?? [],
       ).map((button) => button.getAttribute("aria-expanded")),
-    ).toEqual(["false", "false", "false"]);
+    ).toEqual(["false", "false", "false", "false"]);
   });
 
   it("mounts a development block only when it is expanded", async () => {

@@ -91,6 +91,9 @@ export type KodworkDeps = {
   memory?: KodworkMemory;
   // Resolved at task-creation and spawn time — projects are renameable.
   projectRoot(projectId: string): string | null;
+  // Ködade's background prompt (issue #63), read fresh at spawn time. Absent
+  // (or null) means no background prompt — the same argv as before the feature.
+  ambientPrompt?: () => string | null;
   adapters?: (providerId: string) => AgentStreamAdapter | null;
   // Respect the compiled release profile. When disabled the store refuses to
   // register or run anything, matching the unavailable surface.
@@ -607,6 +610,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         resumeId,
         model: null,
         access: task.access,
+        ambient: deps.ambientPrompt?.() ?? null,
         interactive: true,
       });
       run.interactive = spawn.initialInput !== undefined;

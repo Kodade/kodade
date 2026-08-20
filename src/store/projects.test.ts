@@ -225,6 +225,76 @@ describe("projects store", () => {
     });
   });
 
+  // Ködade's background prompt (#63). The default text lives in code, so a
+  // first-run document must carry neither an override nor a disable flag.
+  it("defaults the background prompt to on with no override", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage);
+    await first.store.getState().hydrate();
+    expect(first.store.getState().ambientPromptEnabled).toBe(true);
+    expect(first.store.getState().ambientPromptOverride).toBeNull();
+
+    await first.store.getState().addProject("/repos/ambient");
+    await first.store.getState().flushPersistence();
+    const doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.ambientPromptEnabled).toBe(true);
+    expect(doc.ambientPromptOverride).toBeUndefined();
+  });
+
+  it("persists a background-prompt override and the off switch across a restart", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage);
+    await first.store.getState().hydrate();
+    first.store.getState().setAmbientPromptOverride("  Only speak in haiku.  ");
+    first.store.getState().setAmbientPromptEnabled(false);
+    await first.store.getState().flushPersistence();
+
+    expect(JSON.parse(storage.doc!) as PersistedDoc).toMatchObject({
+      version: STORAGE_VERSION,
+      ambientPromptEnabled: false,
+      ambientPromptOverride: "Only speak in haiku.", // trimmed
+    });
+
+    const second = makeStore(storage);
+    await second.store.getState().hydrate();
+    expect(second.store.getState().ambientPromptEnabled).toBe(false);
+    expect(second.store.getState().ambientPromptOverride).toBe(
+      "Only speak in haiku.",
+    );
+  });
+
+  it("resetting the override drops it from the document", async () => {
+    const storage = new MockStorage();
+    const first = makeStore(storage);
+    await first.store.getState().hydrate();
+    first.store.getState().setAmbientPromptOverride("Only speak in haiku.");
+    first.store.getState().setAmbientPromptOverride("   ");
+    await first.store.getState().flushPersistence();
+
+    const doc = JSON.parse(storage.doc!) as PersistedDoc;
+    expect(doc.ambientPromptOverride).toBeUndefined();
+    expect(first.store.getState().ambientPromptOverride).toBeNull();
+  });
+
+  it("caps a pasted background prompt and tolerates a malformed one", async () => {
+    const storage = new MockStorage();
+    const store = makeStore(storage).store;
+    await store.getState().hydrate();
+    store.getState().setAmbientPromptOverride("x".repeat(9_000));
+    expect(store.getState().ambientPromptOverride).toHaveLength(4_000);
+
+    storage.doc = JSON.stringify({
+      version: STORAGE_VERSION,
+      projects: [],
+      activeProjectId: null,
+      ambientPromptOverride: 42,
+    });
+    const second = makeStore(storage);
+    await second.store.getState().hydrate();
+    expect(second.store.getState().ambientPromptOverride).toBeNull();
+    expect(second.store.getState().ambientPromptEnabled).toBe(true);
+  });
+
   it("persists the sidebar rail mode across a restart", async () => {
     const storage = new MockStorage();
     const first = makeStore(storage);

@@ -14,6 +14,65 @@ import { encodeClaudeUserMessage } from "./claude-input";
 const SESSION_TOKEN = "{session}";
 const MODEL_TOKEN = "{model}";
 const LEVEL_TOKEN = "{level}";
+const PROMPT_TOKEN = "{prompt}";
+
+// Delimiters for the stdin fallback (opencode). Explicit tags keep the note
+// tellable apart from the user's own words by both the model and anyone
+// reading a transcript.
+const AMBIENT_OPEN = "<kodade-harness>";
+const AMBIENT_CLOSE = "</kodade-harness>";
+
+// Substitute a token with a value that is USER TEXT. String.replace expands
+// `$&`, "$`" and friends in the replacement, so every substitution goes through
+// a function replacer — otherwise a prompt containing `$&` is silently
+// corrupted before it reaches the CLI.
+function fill(arg: string, token: string, value: string): string {
+  return arg.replace(token, () => value);
+}
+
+// Encode a value as a TOML basic string, for CLIs that parse a config
+// override's value as TOML (codex `-c key=value`). Control characters are
+// illegal inside a TOML basic string, so they are escaped too: an unescaped
+// one would make the value fail to parse and fall back to a raw literal,
+// which is exactly the ambiguity the quoting exists to remove.
+function tomlString(value: string): string {
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    // \n, \r and \t are handled above; every other C0 control character
+    // (plus DEL) becomes a \uXXXX escape.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (char) =>
+      `\\u${char.charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()}`,
+    );
+  return `"${escaped}"`;
+}
+
+// The background prompt for THIS spawn, or null when there is nothing to send.
+function ambientFor(request: AgentRunRequest): string | null {
+  const trimmed = request.ambient?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+// Prepend the note to a first-turn prompt. Resumed turns already carry it in
+// the CLI's own session history, so repeating it would only cost tokens.
+export function promptWithAmbient(
+  stream: ProviderStream,
+  request: AgentRunRequest,
+): string {
+  const ambient = ambientFor(request);
+  if (
+    ambient === null ||
+    stream.systemPrompt?.via !== "stdin-preamble" ||
+    request.resumeId
+  ) {
+    return request.prompt;
+  }
+  return `${AMBIENT_OPEN}\n${ambient}\n${AMBIENT_CLOSE}\n\n${request.prompt}`;
+}
 
 // Build one run's argv from the catalog's `stream` block. Order is load-bearing
 // for subcommand CLIs: base options first, then the model, then the resume
@@ -27,7 +86,7 @@ export function buildAgentArgs(
   // of any resume subcommand.
   const args = [...stream.args, ...stream.accessArgs[request.access ?? DEFAULT_ACCESS_LEVEL]];
   if (request.model && stream.modelArgs) {
-    args.push(...stream.modelArgs.map((arg) => arg.replace(MODEL_TOKEN, request.model!)));
+    args.push(...stream.modelArgs.map((arg) => fill(arg, MODEL_TOKEN, request.model!)));
   }
   // Thinking args are exec options too, so they must precede resumeArgs. A
   // level the current model doesn't offer (stale after a model switch, or a
@@ -41,14 +100,23 @@ export function buildAgentArgs(
     )
   ) {
     args.push(
-      ...stream.thinkingArgs.map((arg) => arg.replace(LEVEL_TOKEN, request.thinking!)),
+      ...stream.thinkingArgs.map((arg) => fill(arg, LEVEL_TOKEN, request.thinking!)),
     );
   }
   const speedArgs = request.speed ? stream.speedArgs?.[request.speed] : undefined;
   if (speedArgs) args.push(...speedArgs);
+  // Ködade's background prompt. Also an exec option, so it precedes any resume
+  // subcommand; it is passed on every spawn because each turn is a new process
+  // that rebuilds its system prompt from argv.
+  const ambient = ambientFor(request);
+  if (ambient && stream.systemPrompt?.via === "args") {
+    const value =
+      stream.systemPrompt.encode === "toml-string" ? tomlString(ambient) : ambient;
+    args.push(...stream.systemPrompt.args.map((arg) => fill(arg, PROMPT_TOKEN, value)));
+  }
   if (request.resumeId && stream.resumeArgs) {
     args.push(
-      ...stream.resumeArgs.map((arg) => arg.replace(SESSION_TOKEN, request.resumeId!)),
+      ...stream.resumeArgs.map((arg) => fill(arg, SESSION_TOKEN, request.resumeId!)),
     );
   }
   if (request.interactive && stream.input) args.push(...stream.input.args);
@@ -56,20 +124,24 @@ export function buildAgentArgs(
 }
 
 // The spawn every shipped dialect uses: catalog argv, prompt over stdin. Piping
-// the prompt keeps argv free of user text entirely — no quoting, no length
-// limit, and no chance of a prompt being read as a flag.
+// the USER's prompt keeps argv free of their text entirely — no quoting, no
+// length limit, and no chance of a prompt being read as a flag. The one thing
+// that does travel in argv is Ködade's own background prompt, which the CLIs
+// only accept as a flag; those templates use the single-token `--flag=value`
+// form so text starting with `-` can never be parsed as an option.
 export function buildAgentSpawn(
   provider: Provider,
   stream: ProviderStream,
   request: AgentRunRequest,
 ): AgentSpawn {
   const interactive = request.interactive === true && stream.input !== undefined;
+  const prompt = promptWithAmbient(stream, request);
   return {
     bin: provider.bin,
     args: buildAgentArgs(stream, request),
     ...(interactive
-      ? { initialInput: encodeClaudeUserMessage(request.prompt) }
-      : { stdin: request.prompt }),
+      ? { initialInput: encodeClaudeUserMessage(prompt) }
+      : { stdin: prompt }),
   };
 }
 
