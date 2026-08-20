@@ -232,11 +232,16 @@ describe("KödLocal KödMCP client", () => {
     async () => {
       const binary = await fakeMcpServer("crash");
 
+      // Generous deadline: the timer starts when the initialize request is
+      // written, but the freshly spawned fixture's node interpreter can take
+      // longer than a tight budget to boot under full-suite CI load — and the
+      // deadline isn't what this test verifies. The fixture exits immediately
+      // once booted, so the pass path stays fast.
       await expect(
         connectMemoryMcp({
           binary,
           workspaceRoot: "/fixture/project",
-          requestTimeoutMs: 500,
+          requestTimeoutMs: 10_000,
         }),
       ).resolves.toMatchObject({
         available: false,
@@ -252,10 +257,12 @@ describe("KödLocal KödMCP client", () => {
     async () => {
       for (const mode of ["malformed-json", "malformed-result"] as const) {
         const binary = await fakeMcpServer(mode);
+        // Same generous deadline as the crash test above: node startup time
+        // must not turn the malformed-frame reason into a timeout reason.
         const connected = await connectMemoryMcp({
           binary,
           workspaceRoot: "/fixture/project",
-          requestTimeoutMs: 500,
+          requestTimeoutMs: 10_000,
         });
 
         expect(connected.available).toBe(false);

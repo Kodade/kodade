@@ -194,6 +194,10 @@ describe("KödMem pane", () => {
   });
 
   afterEach(async () => {
+    // Restore real timers FIRST so the unmount below — and every later test —
+    // runs on the real clock even if a fake-timer test failed before its own
+    // cleanup could run.
+    vi.useRealTimers();
     await act(async () => root.unmount());
     container.remove();
   });
@@ -696,11 +700,12 @@ describe("KödMem pane", () => {
     );
     await act(async () => {
       review?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // The preview batch is assembled from several async config reads; wait on
+      // the concrete outcome (the staged-change dialog rendering) instead of a
+      // fixed delay that can fire before those reads settle under CI load.
+      await vi.waitFor(() => {
+        expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+      });
     });
 
     expect(invoke).toHaveBeenCalledWith(CMD.configReadOptionalText, {
@@ -794,7 +799,14 @@ describe("KödMem pane", () => {
         root.render(<MemoryPane workspaceId={workspace.id} />);
         await Promise.resolve();
         await Promise.resolve();
-        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      // Reconciliation loads context, detects the missing connectors, then
+      // auto-invokes confirmPendingChange. Poll that callback (a non-DOM
+      // condition) rather than guessing a wall-clock delay for the chain.
+      await act(async () => {
+        await vi.waitFor(() => {
+          expect(confirm).toHaveBeenCalled();
+        });
       });
 
       expect(confirm).toHaveBeenCalledWith({
@@ -835,10 +847,31 @@ describe("KödMem pane", () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    // Wait for the loaded pane to render the agent-setup section (its toggle
+    // button) before expanding it, rather than a fixed sleep that can race the
+    // initial context/config reads under CI load.
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(
+          container.querySelector('button[aria-controls="kodmem-agent-setup"]'),
+        ).not.toBeNull();
+      });
     });
     await expandAgentSetup();
-    const add = [...container.querySelectorAll("button")].find((button) => button.textContent === "review setup");
+    // The "review setup" action only renders once the MCP binary probe and the
+    // setup scan have both settled — a later chain than the toggle above, and
+    // the condition the click below actually depends on. Poll for it instead
+    // of assuming the expand flushed enough microtasks.
+    let add: HTMLButtonElement | undefined;
+    await act(async () => {
+      await vi.waitFor(() => {
+        add = [...container.querySelectorAll("button")].find(
+          (button) => button.textContent === "review setup",
+        );
+        expect(add).toBeDefined();
+      });
+    });
     await act(async () => {
       add?.click();
       await Promise.resolve();
