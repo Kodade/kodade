@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- The Agents tab now builds reusable agent personas. A persona is a name, a
+  provider, a system prompt, and the KödSkills it should lean on, kept in an
+  app-wide or per-workspace list; preparing a run drafts a normal KödWork
+  background task from the persona and hands off to the existing spawn path, so
+  a launched persona keeps durable progress, scoped permissions, review, and
+  recurrence. The persona document is versioned and never overwritten when it
+  can't be read, so a downgrade or a corrupt file can't wipe your agents.
+- Personas can now attach Connections — MCP servers an agent should reach —
+  from a curated catalog (vidIQ, fal Docs, Gmail, GitHub, Notion, Context7,
+  Playwright, and Fetch, each with its provenance and auth requirement shown)
+  or a custom stdio/remote server you enter yourself. Ködade stays bring-your-
+  own-key: it never stores, bundles, or proxies a credential, and there are no
+  key fields anywhere — a catalog entry only tells you which token or OAuth
+  client to set up in your own CLI config. Enabling a connection installs its
+  server into the CLI's own MCP config through the same preview-then-apply
+  review the KödHarness tools use, so nothing is written silently, and an
+  attached connection can't let a run do anything a KödWork task with the same
+  CLI config couldn't. Remote endpoints install into the CLIs that can express
+  them and are honestly disabled, with the reason shown, for configs that
+  can't. Preparing a run warns — without blocking — when an attached connection
+  isn't installed for the chosen provider.
 - Signing an agent CLI in now lives in the surface where it fails. When a chat
   turn or a KödWork task stops because the CLI is signed out, the thread or
   task says so and offers a terminal running that CLI's own sign-in command —

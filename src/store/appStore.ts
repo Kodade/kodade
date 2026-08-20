@@ -30,6 +30,8 @@ import { createChatStore } from "../chat/store";
 import { createKodworkStore } from "../kodwork/store";
 import { createPersonaStore } from "../agents/persona-store";
 import { createAgentsStore } from "../agents/agents-store";
+import { createConnectionStore } from "../agents/connection-store";
+import { createConnectionsStore } from "../agents/connections-store";
 import { createKodworkLedger } from "../kodwork/ledger";
 import { createKodworkPresence } from "../kodwork/presence";
 import { tauriKodworkPresencePlatform } from "../kodwork/tauri-presence";
@@ -729,6 +731,14 @@ export const kodworkStore = createKodworkStore({
 // Additive metadata only — no run engine wiring lives here.
 export const personaStore = createPersonaStore({ storage: tauriStorage });
 export const agentsStore = createAgentsStore({ store: personaStore });
+
+// Agent connections (#64, slice 4). The connection store owns the versioned
+// connections.json document on the same confined app-data surface; the
+// connections store is the React-subscribable mirror the Connections UI renders
+// from. Enabling a connection installs its MCP server through the guarded
+// KödHarness review flow (harnessStore) — this store never writes CLI config.
+export const connectionStore = createConnectionStore({ storage: tauriStorage });
+export const connectionsStore = createConnectionsStore({ store: connectionStore });
 
 const kodworkPresence = createKodworkPresence({
   platform: tauriKodworkPresencePlatform,

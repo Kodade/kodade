@@ -1,0 +1,188 @@
+// Agent connection store (#64, Phase 4 slice 4). A plain, dependency-injected
+// module — the same shape as persona-store.ts. It owns one in-memory connection
+// document, loads it once, and persists the whole document after every mutation
+// (the Rust storage layer makes the write atomic).
+//
+// Connections live in two scopes inside one document: app-wide, and per-workspace
+// keyed by projectId. Same isolation and same safety invariant as personas: the
+// store will NOT overwrite a document it could not read (corrupt JSON or an
+// unknown/forward version), so a crash mid-read or a downgrade can never wipe
+// connections.
+//
+// The store also derives read-only install state: given a connection and the
+// MCP-server probes from a KödHarness scan, which targets already carry that
+// connection's server. It never writes config — enabling a connection goes
+// through the guarded prepareAddMcpServer review flow, not this store.
+
+import type { StorageIpc } from "../ipc/contract";
+import {
+  connectionDocName,
+  createConnection,
+  emptyConnectionDoc,
+  isValidTransport,
+  MAX_CONNECTIONS,
+  parsePersistedConnectionDoc,
+  updateConnection,
+  type AgentConnection,
+  type ConnectionInput,
+  type ConnectionUpdate,
+  type PersistedConnectionDoc,
+} from "./connection";
+import { connectionServerName, type InstalledProbe } from "./connection-install";
+
+// App scope, or one project's scope. The store reads/writes the right bucket.
+export type ConnectionScope = { kind: "app" } | { kind: "project"; projectId: string };
+
+export type ConnectionStorage = Pick<StorageIpc, "readDoc" | "writeDoc">;
+
+export type ConnectionStoreDeps = {
+  storage: ConnectionStorage;
+  newId?: () => string;
+  now?: () => number;
+};
+
+// Where a connection's server is already installed, from a read-only scan probe.
+export type ConnectionInstall = { cli: string; path: string };
+
+export type ConnectionStore = {
+  load(): Promise<void>;
+  list(scope: ConnectionScope): AgentConnection[];
+  get(scope: ConnectionScope, id: string): AgentConnection | null;
+  isReadable(): boolean;
+  create(scope: ConnectionScope, input: ConnectionInput): Promise<AgentConnection>;
+  update(
+    scope: ConnectionScope,
+    id: string,
+    changes: ConnectionUpdate,
+  ): Promise<AgentConnection | null>;
+  remove(scope: ConnectionScope, id: string): Promise<void>;
+  // The targets a connection's server is already present in, derived from the
+  // scan probes. Pure and read-only — matches a probe by server key.
+  installedState(
+    connection: AgentConnection,
+    probes: readonly InstalledProbe[],
+  ): ConnectionInstall[];
+};
+
+export function createConnectionStore(deps: ConnectionStoreDeps): ConnectionStore {
+  const newId = deps.newId ?? (() => crypto.randomUUID());
+  const now = deps.now ?? (() => Date.now());
+
+  let doc: PersistedConnectionDoc = emptyConnectionDoc();
+  let readable = true;
+  let loadPromise: Promise<void> | null = null;
+
+  const runLoad = async (): Promise<void> => {
+    let raw: string | null;
+    try {
+      raw = await deps.storage.readDoc(connectionDocName);
+    } catch (error) {
+      console.error("kodade: connection document read failed:", error);
+      readable = false;
+      loadPromise = null; // a read error may be transient — allow a retry
+      return;
+    }
+    if (raw === null) return; // no document yet: a clean, writable bootstrap
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      readable = false; // corrupt bytes — keep them, refuse to overwrite
+      return;
+    }
+    const parsed = parsePersistedConnectionDoc(value);
+    if (!parsed) {
+      readable = false; // non-object or unknown/forward version — do not overwrite
+      return;
+    }
+    doc = parsed;
+  };
+
+  const bucket = (scope: ConnectionScope): AgentConnection[] =>
+    scope.kind === "app" ? doc.app : (doc.projects[scope.projectId] ?? []);
+
+  const write = async (
+    scope: ConnectionScope,
+    connections: AgentConnection[],
+  ): Promise<void> => {
+    if (!readable) {
+      throw new Error(
+        "Connection document is unreadable; refusing to overwrite it. Resolve the on-disk document first.",
+      );
+    }
+    if (scope.kind === "app") {
+      doc = { ...doc, app: connections };
+    } else {
+      const projects = { ...doc.projects };
+      if (connections.length > 0) projects[scope.projectId] = connections;
+      else delete projects[scope.projectId];
+      doc = { ...doc, projects };
+    }
+    await deps.storage.writeDoc(connectionDocName, JSON.stringify(doc));
+  };
+
+  return {
+    load() {
+      if (!loadPromise) loadPromise = runLoad();
+      return loadPromise;
+    },
+
+    list(scope) {
+      return bucket(scope).map((connection) => structuredClone(connection));
+    },
+
+    get(scope, id) {
+      const connection = bucket(scope).find((entry) => entry.id === id);
+      return connection ? structuredClone(connection) : null;
+    },
+
+    isReadable() {
+      return readable;
+    },
+
+    async create(scope, input) {
+      if (!isValidTransport(input.transport)) {
+        throw new Error("A connection requires a stdio command or an http url.");
+      }
+      const current = bucket(scope);
+      if (current.length >= MAX_CONNECTIONS) {
+        throw new Error(`A scope cannot hold more than ${MAX_CONNECTIONS} connections.`);
+      }
+      const connection = createConnection(newId(), now(), input);
+      await write(scope, [...current, connection]);
+      return structuredClone(connection);
+    },
+
+    async update(scope, id, changes) {
+      const connections = bucket(scope);
+      const existing = connections.find((connection) => connection.id === id);
+      if (!existing) return null;
+      const next = updateConnection(existing, changes, now());
+      await write(
+        scope,
+        connections.map((connection) => (connection.id === id ? next : connection)),
+      );
+      return structuredClone(next);
+    },
+
+    async remove(scope, id) {
+      const connections = bucket(scope);
+      if (!connections.some((connection) => connection.id === id)) return;
+      await write(scope, connections.filter((connection) => connection.id !== id));
+    },
+
+    installedState(connection, probes) {
+      const serverName = connectionServerName(connection);
+      const installs: ConnectionInstall[] = [];
+      const seen = new Set<string>();
+      for (const probe of probes) {
+        if (probe.server !== serverName) continue;
+        const key = `${probe.cli}::${probe.path}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        installs.push({ cli: probe.cli, path: probe.path });
+      }
+      return installs;
+    },
+  };
+}

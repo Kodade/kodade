@@ -30,6 +30,9 @@ vi.mock("../../store/appStore", async () => {
   const { defaultShellLayout } = await import("./shell-layout");
   const { createPersonaStore } = await import("../../agents/persona-store");
   const { createAgentsStore } = await import("../../agents/agents-store");
+  const { createConnectionStore } = await import("../../agents/connection-store");
+  const { createConnectionsStore } = await import("../../agents/connections-store");
+  const connectionStore = createConnectionStore({ storage: new MockStorage() });
   const files = new MockFiles();
   files.tree.set("/repo", [
     { name: "a.ts", path: "/repo/a.ts", isDir: false },
@@ -57,6 +60,8 @@ vi.mock("../../store/appStore", async () => {
       kodSkillsError: null,
       loadKodSkills: async () => {},
     })),
+    connectionStore,
+    connectionsStore: createConnectionsStore({ store: connectionStore }),
   };
 });
 
