@@ -109,10 +109,9 @@ export function WorkspacesSection({
   );
 
   return (
+    // No visible heading: the sidebar's chrome title already says
+    // "workspaces", and repeating it directly underneath read as clutter.
     <section className="mb-4" aria-label="Workspaces" data-testid="workspaces">
-      <h2 className="px-1 text-[11px] font-semibold tracking-[0.14em] text-text-dim">
-        Workspaces
-      </h2>
       <div className="mt-1 space-y-0.5">
         {projects.map((project) => {
           const projectSessions = sessions.filter(
@@ -128,7 +127,14 @@ export function WorkspacesSection({
             0,
           );
           const open = expanded[project.id] ?? project.id === activeProjectId;
-          const activeSessionId = activeSessionByProject[project.id];
+          // Every project remembers its own last selection, but only the
+          // ACTIVE project's session is actually on screen — highlighting the
+          // remembered row in every expanded project read as four open
+          // windows at once.
+          const activeSessionId =
+            project.id === activeProjectId
+              ? activeSessionByProject[project.id]
+              : undefined;
           return (
             <SidebarProjectGroup
               key={project.id}

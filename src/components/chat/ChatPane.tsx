@@ -100,8 +100,21 @@ export function ChatPane({
             isChatSession(session),
         ) ?? null)
       : null;
+  // Selecting a standalone terminal (or nothing) must not blank this window:
+  // the user keeps the project's latest thread on screen so chat and terminal
+  // stay usable side by side. The composer still targets whichever thread is
+  // shown, so nothing is sent to a terminal.
+  const latestProjectChat =
+    sessions
+      .filter(
+        (session) =>
+          session.projectId === activeProjectId && isChatSession(session),
+      )
+      .at(-1) ?? null;
   const activeChat =
-    activeSession && isChatSession(activeSession) ? activeSession : owningChat;
+    activeSession && isChatSession(activeSession)
+      ? activeSession
+      : (owningChat ?? latestProjectChat);
   const threadId = activeChat?.id ?? null;
   const thread = threadId ? (threads[threadId] ?? null) : null;
   const terminalOpen =

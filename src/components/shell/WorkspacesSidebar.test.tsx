@@ -138,9 +138,35 @@ describe("WorkspacesSection", () => {
     );
 
     expect(host.querySelectorAll("[data-workspace-project]")).toHaveLength(2);
-    expect(host.textContent).toContain("Workspaces");
+    // The chrome title already says "workspaces"; the section itself renders
+    // no visible heading (a11y keeps the aria-label).
+    expect(host.textContent).not.toContain("Workspaces");
+    expect(host.querySelector('[aria-label="Workspaces"]')).not.toBeNull();
     expect(host.textContent).not.toContain("KödChat");
     expect(host.textContent).not.toContain("KödWork");
+  });
+
+  it("highlights the remembered session only in the active project", () => {
+    // Every project remembers its own selection, but only the active
+    // project's session is on screen — a highlighted row under every expanded
+    // project reads as several open windows at once.
+    const { projects, work } = projectsWithEverything();
+    projects.setState({
+      expandedProjects: { p1: true, p2: true },
+      activeSessionByProject: { p1: "c1", p2: "c2" },
+    } as Partial<ProjectsState>);
+    const host = render(
+      <WorkspacesSection
+        projectsStore={projects}
+        chatThreadsStore={emptyChatStore()}
+        workStore={work}
+        activity={createActivityModule()}
+      />,
+    );
+
+    const current = [...host.querySelectorAll('[aria-current="true"]')];
+    expect(current).toHaveLength(1);
+    expect(current[0]?.textContent).toContain("claude 1");
   });
 
   it("lists an expanded workspace's chats, terminals, and tasks together", () => {

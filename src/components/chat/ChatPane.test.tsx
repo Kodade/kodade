@@ -1045,6 +1045,38 @@ describe("ChatPane", () => {
     expect(host.querySelector('button[aria-label="New terminal"]')).toBeNull();
   });
 
+  it("keeps the project's latest thread on screen when a standalone terminal is selected", async () => {
+    // Clicking a standalone terminal (window or sidebar row) must not blank
+    // the chat window — both surfaces stay usable side by side.
+    const { host, root, projectsStore, chatThreadsStore, projectId } =
+      await mount();
+    mounted = root;
+
+    let threadId = "";
+    await act(async () => {
+      threadId = projectsStore.getState().addChatThread(projectId, "claude")!;
+      const terminalId = projectsStore
+        .getState()
+        .addSession(projectId, undefined, undefined, {
+          projectScopedTerminal: true,
+        })!;
+      projectsStore.getState().setActiveSession(projectId, terminalId);
+    });
+
+    // The latest thread is still the one shown (registered and titled), not
+    // the no-thread empty state.
+    expect(chatThreadsStore.getState().threads[threadId]).toBeTruthy();
+    expect(host.textContent).toContain(
+      `KödChat — ${chatThreadsStore.getState().threads[threadId]!.title}`,
+    );
+    // The no-thread empty state (with its "New chat" button) must not appear.
+    expect(
+      [...host.querySelectorAll<HTMLButtonElement>("button")].some(
+        (button) => button.textContent === "New chat",
+      ),
+    ).toBe(false);
+  });
+
   it("adopts a standalone terminal group into the chat started beside it", async () => {
     // v2 Code tab, terminal-first flow: a standalone zsh is on screen and the
     // chat window offers "New chat". Starting the thread must fold the
