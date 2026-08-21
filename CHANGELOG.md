@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 - 2026-08-21
+
+- Fixed the Code tab's "New terminal" button doing nothing when no chat was
+  selected. An explicit click now opens a project-scoped terminal, the same
+  way login and agent terminals already could.
+
 ## 2.0.0 - 2026-08-20
 
 - The tabbed layout is now how Ködade opens. Projects, terminals, files, the
