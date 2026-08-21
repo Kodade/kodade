@@ -1044,4 +1044,41 @@ describe("ChatPane", () => {
     expect(host.querySelector("[data-terminal-layout]")).toBeNull();
     expect(host.querySelector('button[aria-label="New terminal"]')).toBeNull();
   });
+
+  it("adopts a standalone terminal group into the chat started beside it", async () => {
+    // v2 Code tab, terminal-first flow: a standalone zsh is on screen and the
+    // chat window offers "New chat". Starting the thread must fold the
+    // terminal group into it — one workspace row, not two.
+    const { host, root, projectsStore, projectId } = await mount();
+    mounted = root;
+
+    let terminalId = "";
+    let splitId = "";
+    await act(async () => {
+      terminalId = projectsStore
+        .getState()
+        .addSession(projectId, undefined, undefined, {
+          projectScopedTerminal: true,
+        })!;
+      splitId = projectsStore.getState().addTerminal(projectId, terminalId)!;
+      projectsStore.getState().setActiveSession(projectId, terminalId);
+    });
+
+    const newChat = [
+      ...host.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "New chat");
+    expect(newChat).not.toBeUndefined();
+    await act(async () => newChat?.click());
+
+    const sessions = projectsStore.getState().sessions;
+    const chat = sessions.find(isChatSession)!;
+    expect(chat).not.toBeUndefined();
+    // Root AND its split both belong to the new thread now.
+    expect(sessions.find((s) => s.id === terminalId)?.workspaceId).toBe(chat.id);
+    expect(sessions.find((s) => s.id === splitId)?.workspaceId).toBe(chat.id);
+    // The new thread holds the selection, so its transcript is what shows.
+    expect(
+      projectsStore.getState().activeSessionByProject[projectId],
+    ).toBe(chat.id);
+  });
 });

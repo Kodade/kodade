@@ -373,6 +373,13 @@ export type ProjectsState = {
     options?: AddSessionOptions,
   ): string | null;
   addTerminal(projectId: string, workspaceId: string, base?: string): string | null;
+  // Fold a standalone terminal group (root + splits) into a chat thread so the
+  // pair reads as ONE workspace in the sidebar instead of two rows.
+  adoptTerminalGroup(
+    projectId: string,
+    terminalWorkspaceId: string,
+    chatId: string,
+  ): void;
   // KödChat: a session with kind "chat" and no PTY (issue #163).
   addChatThread(projectId: string, base: string): string | null;
   // KödWork (#43): a session with kind "work" and no PTY. Local projects only;
@@ -1554,14 +1561,15 @@ export function createProjectsStore(deps: StoreDeps) {
           !work &&
           // An explicitly requested project-scoped terminal is allowed to host
           // a login/agent shell without a chat (slice 3); only the implicit
-          // auto-spawn path stays blocked in the chat-first runtime.
+          // auto-spawn path stays blocked in the chat-first runtime. A
+          // workspaceId naming any live session (chat thread, task, or a
+          // terminal group being split) is an explicit request too — refusing
+          // it made splitting a standalone terminal a dead button.
           !options?.projectScopedTerminal &&
           (!workspaceId ||
             !sessions.some(
               (session) =>
-                session.projectId === projectId &&
-                session.id === workspaceId &&
-                isChatSession(session),
+                session.projectId === projectId && session.id === workspaceId,
             ))
         ) {
           return null;
@@ -1680,6 +1688,42 @@ export function createProjectsStore(deps: StoreDeps) {
         );
         if (!root) return null;
         return get().addSession(projectId, base, root.workspaceId ?? root.id);
+      },
+
+      // Re-parent a standalone terminal group under a chat thread. Only a
+      // group whose root is a plain terminal moves — terminals already owned
+      // by a chat or task stay put.
+      adoptTerminalGroup(
+        projectId: string,
+        terminalWorkspaceId: string,
+        chatId: string,
+      ) {
+        const { sessions } = get();
+        const chat = sessions.find(
+          (session) =>
+            session.projectId === projectId &&
+            session.id === chatId &&
+            isChatSession(session),
+        );
+        const root = sessions.find(
+          (session) =>
+            session.projectId === projectId &&
+            session.id === terminalWorkspaceId &&
+            !isChatSession(session) &&
+            !isWorkSession(session),
+        );
+        if (!chat || !root || root.workspaceId) return;
+        set((s) => ({
+          sessions: s.sessions.map((session) =>
+            session.projectId === projectId &&
+            !isChatSession(session) &&
+            !isWorkSession(session) &&
+            (session.workspaceId ?? session.id) === terminalWorkspaceId
+              ? { ...session, workspaceId: chatId }
+              : session,
+          ),
+        }));
+        persistDebounced(); // the merged workspace must survive a reload
       },
 
       // Launch a CLI in the active project. A chat-first launch (a chat thread

@@ -71,6 +71,17 @@ export function TerminalPane({
         (session) => terminalInScope(session, activeProjectId, workspaceId),
       )
       .at(-1)?.id ?? null;
+  // When a chat thread is selected (the v2 Code tab's normal state), its own
+  // embedded terminal wins over the project's latest, so switching chats swaps
+  // this pane to that thread's shell instead of whichever PTY opened last.
+  const chatOwnedTerminalId =
+    selectedSession && isChatSession(selectedSession)
+      ? (sessions
+          .filter((session) =>
+            terminalInScope(session, activeProjectId, selectedSession.id),
+          )
+          .at(-1)?.id ?? null)
+      : null;
   const activeSessionId =
     workspaceId
       ? embeddedSessionId &&
@@ -83,7 +94,7 @@ export function TerminalPane({
         : latestProjectTerminalId
       : selectedSession && !isChatSession(selectedSession)
         ? selectedSessionId
-        : latestProjectTerminalId;
+        : (chatOwnedTerminalId ?? latestProjectTerminalId);
   const activeSession =
     sessions.find((session) => session.id === activeSessionId) ?? null;
   const hasProject = activeProjectId !== null;
@@ -375,16 +386,34 @@ export function TerminalPane({
                   onClick={() => {
                     if (!activeProjectId) return;
                     if (!workspaceId) {
-                      // An explicit click is a project-scoped terminal request:
-                      // without the flag the chat-first runtime's addSession
-                      // gate refuses (returns null) whenever no chat workspace
-                      // is selected — which made this button dead in the v2
-                      // Code tab, where it is the primary way to open one.
-                      projectsStore
-                        .getState()
-                        .addSession(activeProjectId, undefined, undefined, {
-                          projectScopedTerminal: true,
-                        });
+                      const state = projectsStore.getState();
+                      // With a chat selected, the terminal belongs to that
+                      // thread: embed it (same as launchInSession's chat-first
+                      // path) and keep the chat selected, so the chat window
+                      // stays populated and the sidebar doesn't grow a second
+                      // workspace row for what the user sees as one workspace.
+                      if (selectedSession && isChatSession(selectedSession)) {
+                        const newId = state.addTerminal(
+                          activeProjectId,
+                          selectedSession.id,
+                        );
+                        if (newId) {
+                          state.setActiveSession(
+                            activeProjectId,
+                            selectedSession.id,
+                          );
+                        }
+                        return;
+                      }
+                      // No chat selected: an explicit click is a project-scoped
+                      // terminal request. Without the flag the chat-first
+                      // runtime's addSession gate refuses (returns null)
+                      // whenever no chat workspace is selected — which made
+                      // this button dead in the v2 Code tab, where it is the
+                      // primary way to open one.
+                      state.addSession(activeProjectId, undefined, undefined, {
+                        projectScopedTerminal: true,
+                      });
                       return;
                     }
                     const newId = projectsStore

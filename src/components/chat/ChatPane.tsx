@@ -30,7 +30,7 @@ import type { ReviewState } from "../../store/review";
 import { DEFAULT_TITLE } from "../../chat/model";
 import { clearChatDropTarget, setChatDropTarget } from "../../chat/drop-target";
 import type { ProjectsState } from "../../store/projects";
-import { isChatSession } from "../../store/projects";
+import { isChatSession, isWorkSession } from "../../store/projects";
 import type { ProvidersState } from "../../providers/store";
 import { AVAILABLE_PROVIDERS, isOllamaChat } from "../../providers/catalog";
 import { chatLinkTarget } from "../../browser/link-target";
@@ -475,7 +475,19 @@ function providerForSession(session: { name: string } | null): string {
 }
 
 function startThread(store: StoreApi<ProjectsState>, projectId: string): void {
-  store.getState().addChatThread(projectId, store.getState().chatProvider);
+  const state = store.getState();
+  const selectedId = state.activeSessionByProject[projectId];
+  const selected = state.sessions.find((session) => session.id === selectedId);
+  const chatId = state.addChatThread(projectId, state.chatProvider);
+  if (!chatId) return;
+  // Starting a chat while a standalone terminal is on screen (the v2 Code
+  // tab's terminal-first flow): the new thread adopts that terminal group so
+  // the pair stays ONE workspace instead of adding a second sidebar row.
+  if (selected && !isChatSession(selected) && !isWorkSession(selected)) {
+    store
+      .getState()
+      .adoptTerminalGroup(projectId, selected.workspaceId ?? selected.id, chatId);
+  }
 }
 
 function TerminalToggle({
