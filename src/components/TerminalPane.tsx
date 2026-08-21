@@ -375,7 +375,16 @@ export function TerminalPane({
                   onClick={() => {
                     if (!activeProjectId) return;
                     if (!workspaceId) {
-                      projectsStore.getState().addSession(activeProjectId);
+                      // An explicit click is a project-scoped terminal request:
+                      // without the flag the chat-first runtime's addSession
+                      // gate refuses (returns null) whenever no chat workspace
+                      // is selected — which made this button dead in the v2
+                      // Code tab, where it is the primary way to open one.
+                      projectsStore
+                        .getState()
+                        .addSession(activeProjectId, undefined, undefined, {
+                          projectScopedTerminal: true,
+                        });
                       return;
                     }
                     const newId = projectsStore

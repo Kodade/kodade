@@ -50,11 +50,15 @@ describe("TerminalPane splits", () => {
   async function renderPane({
     selectChat = false,
     workspaceTerminal = false,
+    chatFirst = false,
   } = {}) {
     const terminalRegistry = fakeTerminalRegistry();
     const projectsStore = createProjectsStore({
       storage: new MockStorage(),
       registry: terminalRegistry,
+      // The public runtime passes autoStartTerminal: false (chat-first); leave
+      // it unset elsewhere so the older tests keep their exact behaviour.
+      ...(chatFirst ? { autoStartTerminal: false } : {}),
       newId: (() => {
         let id = 0;
         return () => `session-${++id}`;
@@ -62,7 +66,9 @@ describe("TerminalPane splits", () => {
     });
     await projectsStore.getState().hydrate();
     await projectsStore.getState().addProject("/repo");
-    let initialTerminalId = projectsStore.getState().sessions[0].id;
+    // Chat-first: adding a project auto-spawns no terminal, so there is no
+    // initial session to record.
+    let initialTerminalId = projectsStore.getState().sessions[0]?.id ?? "";
     let workspaceId: string | undefined;
     if (workspaceTerminal) {
       await projectsStore.getState().closeSession(initialTerminalId);
@@ -206,6 +212,26 @@ describe("TerminalPane splits", () => {
     await act(async () => start?.click());
 
     expect(projectsStore.getState().sessions).toHaveLength(1);
+  });
+
+  it("opens a terminal from the empty state in the chat-first runtime (v2 Code tab)", async () => {
+    // The public runtime disables terminal auto-spawn (autoStartTerminal:
+    // false). An explicit click on "New terminal" must still work — it is the
+    // v2 Code tab's primary way to open one — via the project-scoped escape
+    // hatch, not the refused implicit path.
+    const { projectsStore } = await renderPane({ chatFirst: true });
+    expect(projectsStore.getState().sessions).toHaveLength(0);
+
+    const start = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="New terminal"]',
+    );
+    expect(start?.textContent).toContain("New terminal");
+
+    await act(async () => start?.click());
+
+    const sessions = projectsStore.getState().sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].kind).toBeUndefined(); // a real terminal, not a chat
   });
 
   it("shows the latest project terminal beside a selected chat", async () => {
