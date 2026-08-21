@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.2 - 2026-08-21
+
+- The Code tab now keeps a chat and its terminal in one workspace. "New
+  terminal" beside an open chat joins that chat's workspace instead of opening
+  a separate sidebar entry, and starting a chat beside a standalone terminal
+  folds the terminal (and its splits) into the new thread.
+- Selecting a terminal no longer blanks the chat window: KödChat keeps the
+  project's latest thread on screen so chat and terminal stay usable side by
+  side.
+- The workspace sidebar highlights the open session only in the active
+  project, and no longer repeats the "Workspaces" heading.
+- Splitting a standalone terminal works again in the public build.
+
+Platform status: macOS Apple Silicon — automated suite green (2,558 tests),
+human QA by Keith on this build. Windows — untested.
+
 ## 2.0.1 - 2026-08-21
 
 - Fixed the Code tab's "New terminal" button doing nothing when no chat was

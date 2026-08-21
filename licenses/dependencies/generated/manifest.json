@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productVersion": "2.0.1",
+  "productVersion": "2.0.2",
   "profile": "public macOS app (default Rust features and production JavaScript dependencies)",
   "target": "aarch64-apple-darwin",
   "tools": {
@@ -8,11 +8,11 @@
     "pnpm": "11.17.0"
   },
   "inputs": {
-    "package.json": "27c377ea327a42f0a7e28c100b8a0d23869b0c237771b9e7415691658a6bbefa",
+    "package.json": "ca7cbc27f84e05bb65f70d20823503338317113c8b8ce9ce1f7e58350191f7d1",
     "pnpm-lock.yaml": "dbadcf9e92d22c16f3b5be6d624a47349a8c500c1f341f91763559c7f8f696ff",
     "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
-    "src-tauri/Cargo.toml": "ed2b79da866fa504c2bf996422aacbb56230a1949b59f725d2ca4b5f9df7c51a",
-    "src-tauri/Cargo.lock": "031aa7714237589a44b1ffc008b6833b39e0c08499c6f4297a5b357e2220b39a",
+    "src-tauri/Cargo.toml": "007b38a4db5387a26c34b94fe9c8748570a40981b1443a1a4f921e194c8d9344",
+    "src-tauri/Cargo.lock": "bf8500f1d16fd7a8ec4b2f72b6d14cbe4c91f40ab2a9bb63764348ce1d69e255",
     "licenses/dependencies/about.toml": "d56f30f1f89a1aba49dbf1b24d7868d40812a00d8ee92ca0d5c7c8e5ced969ff",
     "licenses/dependencies/javascript-overrides.json": "7be480d97680a94cefc52731b9b3ef522c1d17e9fa733eae081b2561d6f00605",
     "scripts/generate-dependency-licenses.mjs": "ac96b351dd5ce8052d177f95b9f67f6767a54b8efb64c3927c4dea2ca597984b"
