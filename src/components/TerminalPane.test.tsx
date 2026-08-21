@@ -234,6 +234,63 @@ describe("TerminalPane splits", () => {
     expect(sessions[0].kind).toBeUndefined(); // a real terminal, not a chat
   });
 
+  it("embeds the new terminal in the selected chat instead of a second workspace", async () => {
+    // v2 Code tab with a chat on screen: "New terminal" joins that chat's
+    // workspace (same rule as launchInSession's chat-first path) and keeps the
+    // chat selected, so the sidebar never grows a second row for what the user
+    // sees as one workspace.
+    const { projectsStore } = await renderPane({
+      chatFirst: true,
+      selectChat: true,
+    });
+    const projectId = projectsStore.getState().projects[0].id;
+    const chatId = projectsStore
+      .getState()
+      .sessions.find((session) => session.kind === "chat")!.id;
+    expect(projectsStore.getState().activeSessionByProject[projectId]).toBe(
+      chatId,
+    );
+
+    const start = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="New terminal"]',
+    );
+    await act(async () => start?.click());
+
+    const terminal = projectsStore
+      .getState()
+      .sessions.find((session) => session.kind !== "chat");
+    expect(terminal?.workspaceId).toBe(chatId);
+    expect(projectsStore.getState().activeSessionByProject[projectId]).toBe(
+      chatId,
+    );
+    // ...and the pane displays the chat-owned terminal it just made.
+    expect(
+      container!.querySelector(`[data-terminal-leaf-id="${terminal!.id}"]`),
+    ).not.toBeNull();
+  });
+
+  it("prefers the selected chat's own terminal over the project's latest", async () => {
+    const { projectsStore, terminalRegistry } = await renderPane({
+      chatFirst: true,
+      selectChat: true,
+    });
+    const state = projectsStore.getState();
+    const projectId = state.projects[0].id;
+    const chatId = state.sessions.find((session) => session.kind === "chat")!.id;
+    let owned = "";
+    await act(async () => {
+      owned = projectsStore.getState().addTerminal(projectId, chatId)!;
+      // A later standalone terminal in the same project must not displace the
+      // selected chat's own shell.
+      projectsStore.getState().addSession(projectId, undefined, undefined, {
+        projectScopedTerminal: true,
+      });
+      projectsStore.getState().setActiveSession(projectId, chatId);
+    });
+
+    expect(terminalRegistry.sync.mock.calls.at(-1)?.[1]).toEqual([owned]);
+  });
+
   it("shows the latest project terminal beside a selected chat", async () => {
     const { terminalRegistry, initialTerminalId } = await renderPane({
       selectChat: true,

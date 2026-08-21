@@ -16,9 +16,9 @@
 
 ## Status
 
-Ködade 2.0.1 is the current public macOS Apple Silicon release. It is
+Ködade 2.0.2 is the current public macOS Apple Silicon release. It is
 Developer ID signed, Apple-notarized, and Gatekeeper-verified. Download it from
-the [Releases page](https://github.com/Kodade/kodade/releases/tag/v2.0.1).
+the [Releases page](https://github.com/Kodade/kodade/releases/tag/v2.0.2).
 
 The supported package targets **Apple Silicon Macs running macOS 13 or newer**.
 Windows support is under active development; Linux is planned.
