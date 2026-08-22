@@ -12,6 +12,7 @@ import { TerminalSession } from "./session";
 import type { TerminalFactory } from "./registry";
 import { shouldInterceptXtermKey } from "../shortcuts/interception";
 import { monoFontFamily } from "../platform/fonts";
+import { createTerminalWebLinksAddon } from "./web-links";
 
 export type XtermFactoryOpts = {
   // Called when a session's shell dies (natural exit or failed spawn), so the
@@ -43,6 +44,9 @@ export function createXtermFactory(
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Cmd(+)click (Ctrl elsewhere) on a printed URL opens it in the system
+    // browser via Rust; plain click keeps today's focus/selection behavior.
+    term.loadAddon(createTerminalWebLinksAddon());
 
     // Let app command chords (Mod+T/S, session/project switching) bubble to the
     // window dispatcher instead of being consumed by xterm in WKWebView.
