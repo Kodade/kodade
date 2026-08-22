@@ -1,7 +1,10 @@
-// Ködade Dark — warm logo amber, sage, cornflower, and coral desaturated onto
-// warm charcoal (taupe-leaning, not blue-grey). Chrome sits on the darker
-// `surface`, work surfaces on `bg`, and the terminal recesses one step below
-// that — the layered-pane depth is built into these tiers.
+// Ködade Dark — logo amber, sage, cornflower, and coral accents on a neutral
+// near-black chrome (issue #96: the original taupe/warm-charcoal surfaces read
+// as brownish next to reference apps, so the UI tiers below are neutral gray,
+// not warm). Chrome sits on the darker `surface`, work surfaces on `bg`, and
+// the terminal recesses one step below that — the layered-pane depth is built
+// into these tiers. Only surface/text tokens shifted; ANSI/syntax accent hues
+// are unchanged.
 import type { Theme } from "./schema";
 import { KODADE_AMBER } from "./brand";
 
@@ -10,14 +13,14 @@ export const kodadeDark: Theme = {
   name: "Dark",
   appearance: "dark",
   ui: {
-    bg: "#2a2825", // work surfaces (editor/terminal frames) — warm charcoal
-    surface: "#232120", // chrome: title bar, sidebar, file tree, tab strips
-    surfaceHover: "#38352f",
-    border: "#3a3733",
-    text: "#d6d2c9", // soft warm gray (9.7:1 on bg)
-    textDim: "#a5a096", // 5.7:1 on bg
+    bg: "#1e1e20", // work surfaces (editor/terminal frames) — neutral charcoal
+    surface: "#17171a", // chrome: title bar, sidebar, file tree, tab strips — near-black
+    surfaceHover: "#2a2a2e",
+    border: "#333336",
+    text: "#eae8e5", // brighter neutral (was warm #d6d2c9) for stronger contrast
+    textDim: "#a9a9ad", // neutral gray, no brown cast
     accent: KODADE_AMBER,
-    accentText: "#232120",
+    accentText: "#17171a",
   },
   // Shape scale shared by both Ködade themes: dense chips through dialogs.
   chrome: {
@@ -27,10 +30,10 @@ export const kodadeDark: Theme = {
     radiusXl: "12px",
   },
   terminal: {
-    background: "#252320", // one step below bg so the terminal recesses
-    foreground: "#d6d2c9",
+    background: "#19191c", // one step below bg so the terminal recesses
+    foreground: "#eae8e5",
     cursor: "#e2b86e", // muted amber
-    selection: "#454038", // warm grey; 1.53:1 on the terminal bg, as distinct as the old cool one
+    selection: "#333338", // neutral grey (was warm); still clearly distinct on the terminal bg
     ansi: {
       black: "#3a3d45",
       red: "#d97a80", // muted coral
@@ -60,12 +63,12 @@ export const kodadeDark: Theme = {
     number: "#e39a72", // muted orange
     functionName: "#7fa3e0", // cornflower
     typeName: "#e2b86e", // amber
-    variable: "#d6d2c9", // fg
+    variable: "#eae8e5", // fg
     propertyName: "#9fb8dd", // soft steel blue
     attributeName: "#e2b86e", // amber (Palenight attrs are yellow)
     tagName: "#d97a80", // coral (Palenight tags are red)
     operator: "#7fc4d6", // mist cyan
-    punctuation: "#a5a096",
+    punctuation: "#a9a9ad",
     constant: "#e39a72", // booleans/null share the orange
     heading: KODADE_AMBER,
     link: "#7fa3e0",
