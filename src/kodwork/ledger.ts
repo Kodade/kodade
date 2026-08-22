@@ -10,6 +10,28 @@ import { compileFixPrompt } from "../review/prompt";
 import { rankFiles } from "../review/rank";
 import type { KodworkTask } from "./model";
 
+// Directory segments that are never reviewable: VCS internals and
+// dependency/build-cache output the agent only touches as a side effect of
+// reading or running the repo (git's own lockfile, vitest temp configs, …).
+// Conservative and hardcoded on purpose — no config surface for a
+// small-team internal tool (#101).
+const IGNORED_PATH_SEGMENTS = new Set([
+  ".git",
+  "node_modules",
+  ".vite",
+  "dist",
+  "target",
+]);
+
+// True when a relative path falls under an ignored directory or is a known
+// junk file (.DS_Store), so it should never reach ranking/bucketing/review.
+function isIgnoredReviewPath(relativePath: string): boolean {
+  const segments = relativePath.split("/");
+  if (segments.some((segment) => IGNORED_PATH_SEGMENTS.has(segment))) return true;
+  const basename = segments[segments.length - 1];
+  return basename === ".DS_Store";
+}
+
 export type KodworkFileChange = {
   path: string;
   relativePath: string;
@@ -81,7 +103,7 @@ export function createKodworkLedger({
       let nativeFiles: Array<Omit<(typeof native.files)[number], "change"> & {
         change: KodworkFileChange["change"];
         originalPath?: string;
-      }> = native.files;
+      }> = native.files.filter((file) => !isIgnoredReviewPath(file.relativePath));
       if (native.kind === "git") {
         try {
           const root = roots.get(task.id) ?? task.folder;

@@ -8,8 +8,8 @@
     "pnpm": "11.17.0"
   },
   "inputs": {
-    "package.json": "3f478a71f8041e7d99734994608b9230672a844025c5aa886be8635a9614f606",
-    "pnpm-lock.yaml": "1cac4cf6b4cbfd92bea72abf826a17bba868ef5e6b17e42efa9ce0c767bdf3a4",
+    "package.json": "4eade9b1917f714dce33aa4db2685946ea0b2aab9f795d47bfba51e0cbb15240",
+    "pnpm-lock.yaml": "06bea0cd8b36f4fb4bee0ec2ac705b4e6934686f327c0d90d66cee5f4161f2ad",
     "pnpm-workspace.yaml": "8f54b693f6c41fffbb4a4ad5612d36ff45f834ba75d82dc323ec268dbcd6d523",
     "src-tauri/Cargo.toml": "e430bda7a5e50fb9726c1c3ac430abafeda8ae346a68438e26f1c48c1a2c1736",
     "src-tauri/Cargo.lock": "bb25758be56c8d952cb2830547d09c35c06951b14f9de75a54b7034fecf0083f",
@@ -19,12 +19,12 @@
   },
   "overrideFilesSha256": "bb68d280252e1b7b9858479bf123307754e58453a7e0196d121414431c19954f",
   "counts": {
-    "javascriptPackages": 81,
+    "javascriptPackages": 82,
     "rustCrates": 369,
     "rustLicenseDocuments": 110
   },
   "outputs": {
-    "JAVASCRIPT_LICENSES.html": "d3e2bf4d56d241f85a801679ef9f93a9670a99182fe972ecfb8c1361c3050dba",
+    "JAVASCRIPT_LICENSES.html": "52ae6e2f6057b555a65cd66e1b024c9d8bd75ee8698f2e14969619aeca14f126",
     "RUST_LICENSES.html": "5ac2a26b776124c7075a29949ab7112708ca49db19c0f9989739167a5b2822f9"
   }
 }
