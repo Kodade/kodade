@@ -65,6 +65,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-notification = "2.3.3"
+# In-app auto-updater (#98): checks GitHub Releases' latest.json, downloads,
+# and relaunches. Rust stays thin here — the check/prompt/progress flow is
+# product logic driven from TypeScript.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 portable-pty = "0.9.0"
 base64 = "0.22.1"
 serde = { version = "1.0.219", features = ["derive"] }
