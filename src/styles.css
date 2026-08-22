@@ -12,16 +12,17 @@
      text-dim      -> --kd-text-dim
      accent        -> --kd-accent
      accent-text   -> --kd-accent-text
-   Fallbacks keep the app legible before the first applyCssVars() (Ködade Dark). */
+   Fallbacks keep the app legible before the first applyCssVars() (Ködade Dark,
+   neutral near-black palette — see src/themes/kodade-dark.ts, issue #96). */
 @theme {
-  --color-bg: var(--kd-bg, #2a2825);
-  --color-surface: var(--kd-surface, #232120);
-  --color-surface-hover: var(--kd-surface-hover, #38352f);
-  --color-border: var(--kd-border, #3a3733);
-  --color-text: var(--kd-text, #d6d2c9);
-  --color-text-dim: var(--kd-text-dim, #a5a096);
+  --color-bg: var(--kd-bg, #1e1e20);
+  --color-surface: var(--kd-surface, #17171a);
+  --color-surface-hover: var(--kd-surface-hover, #2a2a2e);
+  --color-border: var(--kd-border, #333336);
+  --color-text: var(--kd-text, #eae8e5);
+  --color-text-dim: var(--kd-text-dim, #a9a9ad);
   --color-accent: var(--kd-accent, #E7A33B);
-  --color-accent-text: var(--kd-accent-text, #232120);
+  --color-accent-text: var(--kd-accent-text, #17171a);
 
   /* Shape scale. Tailwind v4 derives `rounded-sm|md|lg|xl|full` from the
      --radius-* namespace and bare `rounded` from --radius, so overriding these
@@ -46,7 +47,22 @@
      converted as their components are otherwise touched. Deliberately
      font-size-only (no `--text-2xs--line-height`) so `text-2xs` is a drop-in
      for `text-[10px]`, which inherits its line-height rather than setting one. */
-  --text-2xs: 10px;
+  --text-2xs: 11px; /* was 10px (issue #96: app-wide type ran 1-2px small) */
+
+  /* Issue #96: fonts across the app ran 1-2px smaller than reference desktop
+     apps (Claude/Codex), most visibly in the sidebar. Bumping the shared
+     Tailwind type scale here (font-size only, line-heights keep Tailwind's
+     defaults, which already have headroom above these new sizes) raises
+     every `text-xs|sm|base|lg|xl` call site at once instead of hunting down
+     each component — the sidebar rows already use `text-xs`, so this alone
+     covers the reported complaint. Old -> new:
+       xs   12px -> 13px    sm   14px -> 15px
+       base 16px -> 17px    lg   18px -> 19px    xl 20px -> 21px */
+  --text-xs: 13px;
+  --text-sm: 15px;
+  --text-base: 17px;
+  --text-lg: 19px;
+  --text-xl: 21px;
 }
 
 /* Session status-dot pulse (DESIGN.md §4.6): a subtle breathing glow on the
