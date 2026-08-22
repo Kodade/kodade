@@ -117,8 +117,24 @@ string and skip `APPLE_SIGNING_IDENTITY` — but keep it out of git if you do.)
 ```bash
 export CARGO_TARGET_DIR=/Users/Shared/kodade-target
 export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+
+# In-app updater signing (#98) — required so the public build produces a
+# signature the shipped app's embedded pubkey can verify. The private key
+# never lives in the repo; keep it in a password manager / local keychain
+# only, e.g. ~/.tauri/kodade-updater.key (generated once with
+# `pnpm tauri signer generate -w ~/.tauri/kodade-updater.key`).
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/kodade-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # set if the key has a password
+
 pnpm tauri:build:public
 ```
+
+Because `createUpdaterArtifacts: true` is set in `src-tauri/tauri.public.conf.json`,
+this also produces an updater archive (`.app.tar.gz` + `.sig`) alongside the
+DMG, plus a `latest.json` manifest under
+`src-tauri/target/release/bundle/`. If `TAURI_SIGNING_PRIVATE_KEY` is not set,
+the build still produces the DMG but skips the updater artifacts — the
+published release simply won't offer in-app updates from that version.
 
 Use a target outside a FileProvider-managed `~/Documents` tree. The public
 build script also places `/usr/bin` first so Tauri calls Apple's recursive
@@ -254,6 +270,15 @@ Before building a distributed artifact:
 5. Record artifact checksums. Publish a stable GitHub Release/tag only after the
    required platform, signing, and clean-install gates pass. Release notes should
    mirror the changelog entry and its platform status table.
+6. Upload the updater artifacts alongside the DMG on the GitHub Release: the
+   `.app.tar.gz`, its `.sig`, and `latest.json`
+   (`src-tauri/target/release/bundle/macos/Kodade.app.tar.gz{,.sig}` and
+   `src-tauri/target/release/bundle/latest.json`). The updater endpoint is
+   `https://github.com/Kodade/kodade/releases/latest/download/latest.json`, so
+   these three files must be attached to the release marked **Latest** — a
+   prerelease or draft is invisible to the in-app checker. `gh release upload
+   <tag> latest.json Kodade.app.tar.gz Kodade.app.tar.gz.sig` after `gh
+   release create` covers it.
 
 The DMG filename encodes the version and target arch, e.g.
 `Kodade_1.3.4_aarch64.dmg`.

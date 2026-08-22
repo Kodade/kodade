@@ -77,6 +77,12 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Updater config (endpoint + pubkey) lives only in the public build
+        // flavor's config layer; a build without it simply has no update
+        // source and the frontend check fails silently. Relaunch-after-update
+        // needs plugin-process for `relaunch()`.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(KodworkLedgerManager::new())

@@ -26,6 +26,8 @@ import { appStore, initApp, sshStore } from "./store/appStore";
 import { settingsViewStore } from "./store/settingsView";
 import { listenForSshFocusRefresh } from "./ssh/refresh";
 import { RELEASE_MANIFEST } from "./release/manifest";
+import { UpdateNotice } from "./update/UpdateNotice";
+import { checkForUpdateOnLaunch } from "./update/updater";
 
 // Panels whose saved-zero width has to be restored. A rail (sidebar) or a
 // collapsed files pane keeps its fixed width instead.
@@ -49,6 +51,12 @@ export default function App() {
   // against StrictMode's double effect).
   useEffect(() => {
     void initApp();
+  }, []);
+
+  // Non-blocking, silent-on-failure update check (#98). A build without the
+  // updater configured (dev/QA package) simply never finds anything.
+  useEffect(() => {
+    checkForUpdateOnLaunch();
   }, []);
 
   // ~/.ssh/config is user-owned and may change while Kodade is open. A single
@@ -195,6 +203,7 @@ export default function App() {
         </div>
         {settingsOpen && <SettingsPage className="absolute inset-0 z-20" />}
       </div>
+      <UpdateNotice />
     </main>
   );
 }
