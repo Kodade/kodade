@@ -8,6 +8,8 @@
     "core:event:default",
     "core:window:allow-destroy",
     "dialog:default",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:default"
   ]
 }
