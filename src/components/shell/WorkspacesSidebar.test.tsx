@@ -5,18 +5,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createActivityModule } from "../../activity/activity";
 import type { ChatState } from "../../chat/store";
 import { newTask } from "../../kodwork/model";
 import type { KodworkState } from "../../kodwork/store";
 import { MockStorage } from "../../ipc/mock";
 import { RELEASE_MANIFEST } from "../../release/manifest";
+import { agentsStore } from "../../store/appStore";
 import {
   createProjectsStore,
   type ProjectsState,
   type SessionMeta,
 } from "../../store/projects";
+import { defaultShellLayout } from "./shell-layout";
 import { projectTerminalGroups } from "../sidebar/terminals";
 import { WorkspacesSection } from "./WorkspacesSidebar";
 
@@ -257,6 +259,65 @@ describe("WorkspacesSection", () => {
     );
 
     expect(host.querySelector("[data-workspace-sessions]")).toBeNull();
+  });
+
+  // Regression for #97: clicking a KödWork task opens the dedicated Task tab
+  // instead of hijacking whatever project/workspace is already on screen.
+  it("opens a task on the dedicated Task tab without touching the active project", async () => {
+    agentsStore.getState().selectRun(null);
+    const setActiveProject = vi.fn(async () => {});
+    const rawProjects = createStore<Record<string, unknown>>((_set, get) => ({
+      projects: [
+        { id: "p1", name: "kodade", path: "/repo" },
+        { id: "p2", name: "docs", path: "/docs" },
+      ],
+      // The task belongs to p2, a BACKGROUND project — p1 is what's active and
+      // open on the Code tab right now.
+      sessions: [
+        { id: "c1", projectId: "p1", name: "claude 1", kind: "chat" as const, nameLocked: true },
+        { id: "task1", projectId: "p2", name: "work 1", kind: "work" as const },
+      ],
+      expandedProjects: { p1: true, p2: true },
+      activeProjectId: "p1",
+      activeSessionByProject: { p1: "c1" },
+      setActiveProject,
+      shellLayout: defaultShellLayout(),
+      setShellLayout: vi.fn((next: unknown) => rawProjects.setState({ shellLayout: next })),
+    }));
+    const projects = rawProjects as unknown as StoreApi<ProjectsState>;
+    const work = createStore(() => ({
+      tasks: {
+        task1: { ...newTask("task1", "p2", "/docs", "claude", 1), title: "Doc pass" },
+      },
+      loaded: { task1: true },
+      openTask: vi.fn(async () => {}),
+    })) as unknown as StoreApi<KodworkState>;
+
+    const host = render(
+      <WorkspacesSection
+        projectsStore={projects}
+        chatThreadsStore={emptyChatStore()}
+        workStore={work}
+        activity={createActivityModule()}
+      />,
+    );
+
+    const taskButton = host.querySelector<HTMLButtonElement>(
+      'button[data-task-group]',
+    )!;
+    expect(taskButton.textContent).toContain("Doc pass");
+    await act(async () => {
+      taskButton.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The whole point of a dedicated task surface: viewing it is a read, never
+    // a "go to this project" gesture, and it never opens a files-store tab.
+    expect(setActiveProject).not.toHaveBeenCalled();
+    expect(projects.getState().activeProjectId).toBe("p1");
+    expect(projects.getState().shellLayout.activeTab).toBe("task");
+    expect(agentsStore.getState().selectedRunTaskId).toBe("task1");
   });
 });
 

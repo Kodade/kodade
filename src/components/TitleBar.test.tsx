@@ -76,11 +76,13 @@ describe("TitleBar", () => {
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "Agents",
       "Code",
+      "Task",
       "Editor",
     ]);
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual([
       "false",
       "true",
+      "false",
       "false",
     ]);
     // Only elements carrying the attribute start a window drag, so the pills
@@ -103,19 +105,28 @@ describe("TitleBar", () => {
     expect(tabs.map((tab) => tab.id)).toEqual([
       "shell-tab-agents",
       "shell-tab-code",
+      "shell-tab-task",
       "shell-tab-editor",
     ]);
     expect(tabs.map((tab) => tab.getAttribute("aria-controls"))).toEqual([
       "shell-panel-agents",
       "shell-panel-code",
+      "shell-panel-task",
       "shell-panel-editor",
     ]);
     // Only the selected pill is in the tab order (roving focus).
-    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1, -1]);
 
     const tablist = container.querySelector<HTMLElement>(
       'header [role="tablist"]',
     )!;
+    act(() =>
+      tablist.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      ),
+    );
+    expect(appStore.getState().shellLayout.activeTab).toBe("task");
+
     act(() =>
       tablist.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
@@ -142,5 +153,40 @@ describe("TitleBar", () => {
     )!;
     act(() => toggle.click());
     expect(appStore.getState().shellV2Enabled).toBe(false);
+  });
+
+  // Regression for #95: a KödWork task starting (or already running) must
+  // never remove the top-of-window Agent/Code/Task/Editor switcher. Nothing
+  // in this component reads task/run state — `showShellTabs` only ever
+  // depends on the static shell feature flag and `shellV2Enabled` — so this
+  // pins that invariant against a future coupling that could reintroduce it.
+  it("keeps every pill rendered and clickable while the Task tab is active", () => {
+    act(() =>
+      appStore.setState({
+        shellV2Enabled: true,
+        shellLayout: { ...defaultShellLayout(), activeTab: "task" },
+      }),
+    );
+    act(() => root.render(<TitleBar />));
+
+    const tabs = [
+      ...container.querySelectorAll<HTMLButtonElement>('header [role="tab"]'),
+    ];
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Agents",
+      "Code",
+      "Task",
+      "Editor",
+    ]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "false",
+      "true",
+      "false",
+    ]);
+
+    // The switcher stays functional too, not just present.
+    act(() => tabs[1].click());
+    expect(appStore.getState().shellLayout.activeTab).toBe("code");
   });
 });

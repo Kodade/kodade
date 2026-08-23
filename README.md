@@ -25,14 +25,17 @@ Windows support is under active development; Linux is planned.
 
 ## What Ködade does
 
-- **The tabbed workspace** is how Ködade opens: Agents, Code, and Editor tabs
-  in the title bar with one persistent workspace sidebar, and every tab keeps
-  running in the background while you work in another. The classic four-pane
-  layout from 1.x stays one click away for one more release.
+- **The tabbed workspace** is how Ködade opens: Agents, Code, Task, and Editor
+  tabs in the title bar with one persistent workspace sidebar, and every tab
+  keeps running in the background while you work in another. The classic
+  four-pane layout from 1.x stays one click away for one more release.
 - **The Agents tab** builds reusable agent personas — a provider, a system
   prompt, KödSkills, and attached MCP Connections — and prepares runs from
   them as normal KödWork background tasks with the same durable progress,
   scoped permissions, and review.
+- **The Task tab** is where a KödWork run lives once it's prepared: its own
+  destination in the tabbed shell, opened from the sidebar or a notification
+  without changing the active project or whatever KödChat workspace is open.
 - **KödChat** provides a chat-first interface for Claude Code, Codex, Grok
   Build, and OpenCode through their official CLIs, with compact work summaries,
   inline edited-file review, and a resizable terminal split owned by the

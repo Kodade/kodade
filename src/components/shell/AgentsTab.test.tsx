@@ -14,6 +14,7 @@ import { createAgentsStore } from "../../agents/agents-store";
 import type { KodworkState } from "../../kodwork/store";
 import type { HarnessState } from "../../store/harness";
 import type { ProjectsState } from "../../store/projects";
+import { defaultShellLayout } from "./shell-layout";
 import { AgentsTab } from "./AgentsTab";
 
 const APP: PersonaScope = { kind: "app" };
@@ -37,13 +38,19 @@ function agents() {
 }
 
 function fakeProjects(overrides: Partial<Record<string, unknown>> = {}) {
-  return createStore(() => ({
+  const store = createStore<Record<string, unknown>>((_set, get) => ({
     projects: [{ id: "p1", name: "Kodade", path: "/repo" }],
     activeProjectId: "p1",
     setActiveProject: vi.fn(async () => {}),
     addWorkSession: vi.fn(() => "task-1"),
+    // Preparing a run switches `shellLayout.activeTab` to "task" (#95, #97) —
+    // a fake store without these fields would hide that behavior instead of
+    // exercising it.
+    shellLayout: defaultShellLayout(),
+    setShellLayout: vi.fn((next: unknown) => store.setState({ shellLayout: next })),
     ...overrides,
-  })) as unknown as StoreApi<ProjectsState>;
+  }));
+  return store as unknown as StoreApi<ProjectsState>;
 }
 
 function fakeWork() {
@@ -300,8 +307,11 @@ describe("AgentsTab", () => {
     expect(work.getState().setProvider).toHaveBeenCalledWith("task-1", "claude");
     expect(work.getState().setOutcome).toHaveBeenCalledWith("task-1", "Review the code");
     expect(store.getState().selectedRunTaskId).toBe("task-1");
-    // The editor gave way to the run area (KodworkPane, here with no task doc).
-    expect(host.textContent).toContain("no longer open");
+    // The draft lives on the dedicated Task tab (#95, #97), not inline here —
+    // preparing a run switches the shell there instead of swapping the editor
+    // out for an embedded run pane.
+    expect(projects.getState().shellLayout.activeTab).toBe("task");
+    expect(host.textContent).toContain("Edit agent");
   });
 
   it("surfaces a non-blocking skills notice in the run area after a launch", async () => {
@@ -439,7 +449,10 @@ describe("AgentsTab", () => {
     expect(host.textContent).not.toContain("No personas yet.");
   });
 
-  it("reopens the same run and closes the editor even for the same id", async () => {
+  it("never shows run progress inline — selecting a run leaves the editor alone", async () => {
+    // The dedicated Task tab (#95, #97) owns run progress now; selecting a run
+    // (from the sidebar, a notification, or a fresh launch) must not touch
+    // whatever the Agents tab itself is showing.
     const { store } = agents();
     await store.getState().load();
     const made = await store.getState().createPersona(APP, {
@@ -458,18 +471,18 @@ describe("AgentsTab", () => {
     await act(async () => {
       store.getState().selectRun("task-1");
     });
-    expect(host.textContent).toContain("no longer open");
+    expect(host.textContent).not.toContain("no longer open");
 
-    // Open the editor over the run.
+    // Open the editor; selecting the same (or another) run afterward must not
+    // dismiss it.
     await click(host.querySelector<HTMLButtonElement>(`[data-persona-id="${made!.id}"]`)!);
     expect(host.textContent).toContain("Edit agent");
 
-    // Re-open the SAME run id: the editor must give way to the run area again.
     await act(async () => {
       store.getState().selectRun("task-1");
     });
-    expect(host.textContent).toContain("no longer open");
-    expect(host.textContent).not.toContain("Edit agent");
+    expect(host.textContent).toContain("Edit agent");
+    expect(host.textContent).not.toContain("no longer open");
   });
 
   it("clears a stale mutation error when the editor target changes", async () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- KödWork tasks now open on their own Task tab in the tabbed layout, instead
+  of taking over the Agents tab or reusing whatever project and chat happened
+  to be open. Clicking a task from the sidebar (or a KödWork notification)
+  never changes the active project or chat workspace, and the Agent/Code/
+  Task/Editor switcher stays visible and clickable the whole time (#95, #97).
+
 ## 2.0.2 - 2026-08-21
 
 - The Code tab now keeps a chat and its terminal in one workspace. "New

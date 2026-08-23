@@ -1,13 +1,17 @@
 // The v2 shell's Agents tab (#64, slice 2). It replaces the placeholder with a
-// real surface: a persona rail (app-wide and current-workspace scopes), a
+// real surface: a persona rail (app-wide and current-workspace scopes) and a
 // persona editor (name, provider, system prompt, KödSkills, and a disabled
-// Connections affordance that lands in slice 4), and a run area that mounts the
-// existing KödWork task pane — the same component, not a fork — so a launched
-// persona keeps durable progress, scoped permissions, review, and recurrence.
+// Connections affordance that lands in slice 4).
 //
 // The run engine is untouched: launching pre-fills a normal task draft through
 // the store's own setters and runs it on the existing spawn path. Run history
 // stays in the Workspaces sidebar's shared green/red rows.
+//
+// A launched run's progress is NOT shown here (#95, #97): it lives on the
+// dedicated Task tab, so a persona launch never competes with persona editing
+// for the same pane, and viewing a task never displaces this tab's own state.
+// Preparing a run switches the shell to the Task tab so the user lands on the
+// fresh draft immediately.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
@@ -39,7 +43,6 @@ import { RELEASE_MANIFEST, type ReleaseManifest } from "../../release/manifest";
 import { Pane } from "../Pane";
 import { ProviderLogo } from "../chat/ProviderLogo";
 import { ComposerMenu } from "../chat/ComposerMenu";
-import { KodworkPane } from "../kodwork/KodworkPane";
 import { launchPersonaRun, personaSkillsOwner } from "./agent-runs";
 
 // Only CLIs with a verified headless stream can run an agent, the same gate the
@@ -90,9 +93,7 @@ export function AgentsTab({
       ? (s.personas[personaScopeKey(projectScope)] ?? EMPTY_PERSONAS)
       : EMPTY_PERSONAS,
   );
-  const selectedRunTaskId = useStore(store, (s) => s.selectedRunTaskId);
   const storageReadable = useStore(store, (s) => s.storageReadable);
-  const runOpenSeq = useStore(store, (s) => s.runOpenSeq);
 
   // Load the persona document once, and mirror the current workspace scope
   // whenever the active project changes. load() re-mirrors every synced scope,
@@ -130,17 +131,6 @@ export function AgentsTab({
   useEffect(() => {
     setSkillsNotice(null);
   }, [activeProject?.id]);
-
-  // A run opened from the sidebar (or a fresh launch) takes over the run area:
-  // drop the editor so the task pane is visible. Keyed on runOpenSeq — which
-  // bumps on every selectRun — so re-opening the ALREADY-selected run still
-  // reveals it rather than leaving the editor up.
-  const seenRunSeq = useRef(runOpenSeq);
-  useEffect(() => {
-    if (runOpenSeq === seenRunSeq.current) return;
-    seenRunSeq.current = runOpenSeq;
-    if (store.getState().selectedRunTaskId) setEditing(null);
-  }, [runOpenSeq, store]);
 
   return (
     <Pane title="agents">
@@ -180,12 +170,6 @@ export function AgentsTab({
                 onSaved={(id) => setEditing({ scope: editing.scope, id })}
                 onDeleted={() => setEditing(null)}
                 onSkillsNotice={setSkillsNotice}
-              />
-            ) : selectedRunTaskId ? (
-              <KodworkPane
-                taskId={selectedRunTaskId}
-                workStore={workStore}
-                projectsStore={projectsStore}
               />
             ) : (
               <EmptyState hasProject={!!activeProject} />
@@ -585,6 +569,12 @@ function PersonaEditor({
       { harness, projectRoot: projectPath, providerLabel: provider?.name ?? providerId },
     );
     onSkillsNotice(result.skillsNotice);
+    // The draft lives on the dedicated Task tab (#95, #97), not here — switch
+    // so the user lands on it immediately instead of hunting for it.
+    if (result.taskId) {
+      const state = projectsStore.getState();
+      state.setShellLayout({ ...state.shellLayout, activeTab: "task" });
+    }
   };
 
   const onDeleteClick = async () => {
@@ -922,7 +912,7 @@ function EmptyState({ hasProject }: { hasProject: boolean }) {
     <div className="flex h-full items-center justify-center p-6 text-center text-xs text-text-dim">
       <p className="max-w-xs leading-relaxed">
         {hasProject
-          ? "Create an agent persona, or pick a run from the sidebar to see its progress here."
+          ? "Create an agent persona, then prepare a run. Its progress shows on the Task tab."
           : "Open a project to build and run agents."}
       </p>
     </div>

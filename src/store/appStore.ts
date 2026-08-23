@@ -55,6 +55,7 @@ import { applyCssVars, toXtermTheme } from "../themes/applier";
 import { installShortcuts } from "../shortcuts/dispatcher";
 import { setComboOverrides } from "../shortcuts/bindings";
 import { createFilesStore } from "./files";
+import { openAgentRun } from "../components/shell/agent-runs";
 import { buildScanContext, createHarnessStore } from "./harness";
 import { inspectKodSkills } from "../harness/kodskills";
 import { createReviewStore } from "./review";
@@ -746,6 +747,22 @@ const kodworkPresence = createKodworkPresence({
   openTask: (taskId) => {
     const task = kodworkStore.getState().tasks[taskId];
     if (!task) return;
+    // v2's dedicated Task tab (#95, #97) never switches the active project or
+    // opens a files-store tab — a task notification is a "look at this," not a
+    // "go to this project" gesture. The v1 shell has no top-level tab concept,
+    // so it keeps the original behavior: jump to the project and open the
+    // task in the Editor pane's tab strip.
+    const shellV2 =
+      RELEASE_MANIFEST.features.shell && appStore.getState().shellV2Enabled;
+    if (shellV2) {
+      void openAgentRun(kodworkStore, agentsStore, task.projectId, taskId).then(
+        () => {
+          const state = appStore.getState();
+          state.setShellLayout({ ...state.shellLayout, activeTab: "task" });
+        },
+      );
+      return;
+    }
     void appStore.getState().setActiveProject(task.projectId).then(async () => {
       await kodworkStore.getState().openTask(task.id, task.projectId);
       filesStore.getState().openKodworkTab(task.id);

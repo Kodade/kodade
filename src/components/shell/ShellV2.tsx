@@ -26,6 +26,7 @@ import { WorkspaceFilesPane } from "../WorkspaceFilesPane";
 import { appStore, filesStore } from "../../store/appStore";
 import { AgentsTab } from "./AgentsTab";
 import { CodeTab } from "./CodeTab";
+import { TaskTab } from "./TaskTab";
 import { KeepAliveTabs, type KeepAliveTab } from "./KeepAliveTabs";
 import { WorkspacesSidebar } from "./WorkspacesSidebar";
 import { shellTabButtonId, shellTabPanelId } from "./tab-ids";
@@ -173,6 +174,10 @@ export function ShellV2() {
     {
       id: "code",
       render: (active) => <CodeTab active={active} />,
+    },
+    {
+      id: "task",
+      render: () => <TaskTab />,
     },
     {
       id: "editor",

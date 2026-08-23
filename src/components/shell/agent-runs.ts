@@ -1,12 +1,13 @@
 // Wiring between a persona/run row and the Agents tab (#64, slice 2; skills in
-// #65).
+// #65), and between the sidebar/notifications and the dedicated Task tab
+// (#95, #97).
 //
 // The run engine is untouched: launching creates a normal KödWork work session
 // and pre-fills its draft through the store's own setters (setProvider /
 // setOutcome), so the task then runs on the existing spawn path with all its
-// scoped-permission behavior. Selecting a run just points the Agents tab's run
-// area at an already-registered task — no files/editor tab is opened, because
-// in v2 the task detail lives inside the Agents tab, not the Editor tab.
+// scoped-permission behavior. Selecting a run just points the Task tab at an
+// already-registered task — no files/editor tab is opened and no project is
+// switched, because the task detail lives on its own top-level surface now.
 //
 // A persona's KödSkills are handled before the task is opened, through the SAME
 // loadKodSkills → prepareKodSkills path the KödHarness picker uses: the install
@@ -39,17 +40,19 @@ export type LaunchPersonaRunResult = {
   skillsNotice: string | null;
 };
 
-// Register an existing run in the work store (if needed) and show it in the tab.
+// Register an existing run in the work store (if needed) and point the
+// dedicated v2 Task tab at it (#95, #97). Deliberately does NOT touch the
+// active project or any files-store tab: viewing a task is a read, not a "go
+// to this project" gesture, and the whole point of a dedicated task surface
+// is that peeking at one can never hijack whatever project or KödChat
+// workspace the caller already has open. Callers switch `shellLayout.activeTab`
+// to "task" themselves once this resolves.
 export async function openAgentRun(
-  projectsStore: StoreApi<ProjectsState>,
   workStore: StoreApi<KodworkState>,
   agentsStore: StoreApi<AgentsState>,
   projectId: string,
   taskId: string,
 ): Promise<void> {
-  if (projectsStore.getState().activeProjectId !== projectId) {
-    await projectsStore.getState().setActiveProject(projectId);
-  }
   await workStore.getState().openTask(taskId, projectId);
   agentsStore.getState().selectRun(taskId);
 }
