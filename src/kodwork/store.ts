@@ -25,6 +25,7 @@ import {
   encodeClaudeUserMessage,
 } from "../agents/claude-input";
 import {
+  MAX_DISCUSSION_ENTRIES,
   MAX_PLAN_ITEMS,
   MAX_TOOL_LINES,
   advanceRecurrence,
@@ -129,6 +130,9 @@ export type KodworkState = {
   openTask(taskId: string, projectId: string): Promise<void>;
   // Draft edits (no-ops while the task is running).
   setOutcome(taskId: string, outcome: string): void;
+  // Override the auto-derived title (e.g. a persona launch titling from its
+  // own name rather than prompt text, #103). A no-op while running.
+  setTitle(taskId: string, title: string): void;
   setFolder(taskId: string, folder: string): void;
   setProvider(taskId: string, providerId: string): void;
   setAccess(taskId: string, access: ChatAccessLevel): void;
@@ -153,6 +157,12 @@ export type KodworkState = {
   noteHumanChange(path: string): void;
   respondPermission(taskId: string, decision: "once" | "always" | "deny"): Promise<void>;
   steerTask(taskId: string, message: string): Promise<void>;
+  // Ask the agent about a settled task's output on the SAME provider session
+  // (#100). A "discuss" turn, not a "revise" one: it goes through the normal
+  // ledger so file edits still land in a review, but produces no new report —
+  // the reply is appended to `discussion` and `summary` is left untouched. A
+  // no-op when the task has no resume id (nothing to resume the CLI onto).
+  discussTask(taskId: string, message: string): Promise<void>;
   // Drop a task and its document (its session was closed).
   removeTask(taskId: string): Promise<void>;
   // Flush any pending debounced document write.
@@ -191,6 +201,10 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     turn: number;
     interactive: boolean;
     permissionTimer: ReturnType<typeof setTimeout> | null;
+    // "discuss" (#100): a post-completion Q&A turn. Its reply lands in
+    // `discussion`, never in `summary` — a follow-up question must never
+    // overwrite the task's final report.
+    kind: "task" | "discuss";
   };
   const runs = new Map<string, Run>();
   const runByRunId = new Map<string, string>(); // runId → taskId
@@ -255,16 +269,23 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         case "message-delta": {
           const text = (run.messageText.get(event.messageId) ?? "") + event.text;
           run.messageText.set(event.messageId, text);
-          patch(taskId, (current) => ({ ...current, summary: clampSummary(text) }));
+          // A discuss turn's reply is not the task's report — leave `summary`
+          // (the last WORK pass's final output) alone and stitch the finished
+          // reply into `discussion` once the turn settles.
+          if (run.kind !== "discuss") {
+            patch(taskId, (current) => ({ ...current, summary: clampSummary(text) }));
+          }
           deps.activity?.streamed?.(task.projectId, taskId);
           return;
         }
         case "message-complete": {
           run.messageText.set(event.messageId, event.message.content);
-          patch(taskId, (current) => ({
-            ...current,
-            summary: clampSummary(event.message.content),
-          }));
+          if (run.kind !== "discuss") {
+            patch(taskId, (current) => ({
+              ...current,
+              summary: clampSummary(event.message.content),
+            }));
+          }
           deps.activity?.streamed?.(task.projectId, taskId);
           return;
         }
@@ -372,6 +393,20 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           ? task.review
           : { ...task.review, status: "accepted" as const },
       }));
+      // A discuss turn's reply joins the conversation, never the report — do
+      // this before the ledger branch so it lands regardless of outcome.
+      if (run.kind === "discuss" && !run.cancelled) {
+        const reply = [...run.messageText.values()].join("\n\n").trim();
+        if (reply) {
+          patch(taskId, (current) => ({
+            ...current,
+            discussion: [
+              ...current.discussion,
+              { role: "agent" as const, text: clampSummary(reply), at: now() },
+            ].slice(-MAX_DISCUSSION_ENTRIES),
+          }));
+        }
+      }
       const task = get().tasks[taskId];
       if (task && deps.ledger) {
         const outcomeState =
@@ -510,12 +545,13 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       settle(taskId, run);
     };
 
-    // Shared spawn path for startTask and resumeTask.
+    // Shared spawn path for startTask, resumeTask, and discussTask.
     const spawnRun = async (
       taskId: string,
       prompt: string,
       resumeId: string | null,
       resetProgress: boolean,
+      kind: "task" | "discuss" = "task",
     ) => {
       if (!enabled()) return;
       const task = get().tasks[taskId];
@@ -563,6 +599,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         turn,
         interactive: false,
         permissionTimer: null,
+        kind,
       };
       runs.set(taskId, run);
       runByRunId.set(runId, taskId);
@@ -697,6 +734,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           tools: doc.tools,
           statusText: doc.statusText,
           summary: doc.summary,
+          discussion: doc.discussion,
           usage: doc.usage,
           review: doc.review,
           reviewOutcomeState: doc.reviewOutcomeState,
@@ -728,6 +766,14 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
                 title: task.state === "draft" ? titleFromOutcome(outcome) : task.title,
               },
         );
+        persistDebounced(taskId);
+      },
+
+      setTitle(taskId: string, title: string) {
+        if (runs.has(taskId)) return;
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        patch(taskId, (task) => (task.title === trimmed ? task : { ...task, title: trimmed }));
         persistDebounced(taskId);
       },
 
@@ -1093,6 +1139,23 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           id: run.runId,
           data: encodeClaudeUserMessage(message.trim()),
         });
+      },
+
+      async discussTask(taskId: string, message: string) {
+        const task = get().tasks[taskId];
+        const trimmed = message.trim();
+        // No resume id means no provider session to resume onto — the caller
+        // (KodworkPane) shows a disabled composer explaining this rather than
+        // calling in first place, but guard here too for direct callers.
+        if (!task || !trimmed || !task.resumeId || runs.has(taskId)) return;
+        patch(taskId, (current) => ({
+          ...current,
+          discussion: [
+            ...current.discussion,
+            { role: "user" as const, text: trimmed, at: now() },
+          ].slice(-MAX_DISCUSSION_ENTRIES),
+        }));
+        await spawnRun(taskId, trimmed, task.resumeId, false, "discuss");
       },
 
       async removeTask(taskId: string) {

@@ -24,7 +24,7 @@ import {
 } from "../../store/harness";
 import type { AgentsState } from "../../agents/agents-store";
 import type { AgentPersona } from "../../agents/persona";
-import { personaDraftInput } from "../../agents/persona-run";
+import { personaDraftInput, personaTaskTitle } from "../../agents/persona-run";
 import { planPersonaSkills } from "../../agents/persona-skills";
 
 // A pending-change owner unique to the persona-skills surface, so a staged
@@ -70,6 +70,7 @@ export async function launchPersonaRun(
     projectRoot: string | null;
     providerLabel?: string;
   },
+  now: () => number = Date.now,
 ): Promise<LaunchPersonaRunResult> {
   if (projectsStore.getState().activeProjectId !== projectId) {
     await projectsStore.getState().setActiveProject(projectId);
@@ -85,6 +86,9 @@ export async function launchPersonaRun(
   // none, so order is only about staying consistent with the composer.
   workStore.getState().setProvider(taskId, draft.providerId);
   workStore.getState().setOutcome(taskId, draft.outcome);
+  // Overrides the outcome-derived title setOutcome just applied — a persona
+  // launch titles from the persona's name, not its prompt text (#103).
+  workStore.getState().setTitle(taskId, personaTaskTitle(persona.name, now()));
   agentsStore.getState().selectRun(taskId);
   return { taskId, skillsNotice };
 }

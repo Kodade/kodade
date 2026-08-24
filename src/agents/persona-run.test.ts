@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createPersona } from "./persona";
-import { personaDraftInput } from "./persona-run";
+import { personaDraftInput, personaTaskTitle } from "./persona-run";
 
 describe("personaDraftInput", () => {
   it("maps prompt to outcome and passes the provider through", () => {
@@ -28,5 +28,24 @@ describe("personaDraftInput", () => {
     });
     const draft = personaDraftInput(persona);
     expect(Object.keys(draft).sort()).toStrictEqual(["outcome", "providerId"]);
+  });
+});
+
+// #103: a persona launch must title from the persona's NAME, never from the
+// prompt text — the outcome-derived titler otherwise lifts words straight out
+// of the system prompt ("You are the Code Reviewer, a recurring review
+// agent…" → "Code Reviewer recurring"), inventing schedule semantics the task
+// was never actually configured with.
+describe("personaTaskTitle", () => {
+  it("titles from the persona name and a stable date, not the prompt", () => {
+    const title = personaTaskTitle("Code Reviewer", Date.parse("2026-08-23T14:00:00Z"));
+    expect(title).toBe("Code Reviewer — 2026-08-23");
+    expect(title).not.toContain("recurring");
+  });
+
+  it("falls back to a generic name when the persona name is blank", () => {
+    expect(personaTaskTitle("   ", Date.parse("2026-08-23T00:00:00Z"))).toBe(
+      "Agent — 2026-08-23",
+    );
   });
 });

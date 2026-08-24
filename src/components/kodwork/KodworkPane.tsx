@@ -456,7 +456,82 @@ function TaskProgress({
           {task.usage.totalTokens.toLocaleString()} total
         </p>
       )}
+
+      {/* Post-run conversation (#100): only once the task has settled and any
+          output review is resolved — a live run already has its own steering
+          composer above. */}
+      {!running && task.permissionRequest === null && !reviewing && (
+        <Discussion task={task} workStore={workStore} />
+      )}
     </div>
+  );
+}
+
+// A completed task keeps a conversation thread on the SAME provider session
+// (#100), separate from the report (`summary`) and from "Reject & continue"
+// (a full new pass). Disabled with an explanation when the run never
+// captured a resume id — nothing to resume the CLI onto.
+function Discussion({ task, workStore }: { task: KodworkTask; workStore: StoreApi<KodworkState> }) {
+  const [message, setMessage] = useState("");
+  const canDiscuss = !!task.resumeId;
+  return (
+    <section className="mt-4" aria-label="Conversation">
+      <h2 className="text-[10px] uppercase tracking-[0.12em] text-text-dim">Conversation</h2>
+      {task.discussion.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {task.discussion.map((entry, index) => (
+            <li
+              key={`${entry.at}:${index}`}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs whitespace-pre-wrap break-words ${
+                entry.role === "user"
+                  ? "border-accent/30 bg-accent/5 text-text"
+                  : "border-border bg-surface text-text"
+              }`}
+            >
+              <span className="mb-0.5 block text-[10px] uppercase tracking-[0.1em] text-text-dim">
+                {entry.role === "user" ? "You" : "Agent"}
+              </span>
+              {entry.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="mt-2 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!canDiscuss || !message.trim()) return;
+          void workStore.getState().discussTask(task.id, message);
+          setMessage("");
+        }}
+      >
+        <input
+          aria-label="Ask about this task"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          disabled={!canDiscuss}
+          placeholder={
+            canDiscuss
+              ? "Ask a question or give instructions…"
+              : "Conversation isn't available for this task"
+          }
+          className="min-w-0 flex-1 rounded border border-border bg-surface px-2.5 py-1.5 text-xs text-text placeholder:text-text-dim focus:border-accent/70 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+        <button
+          type="submit"
+          disabled={!canDiscuss || !message.trim()}
+          className="rounded border border-border px-2.5 py-1 text-xs text-text disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Send
+        </button>
+      </form>
+      {!canDiscuss && (
+        <p className="mt-1 text-[10px] text-text-dim">
+          This task's run never captured a provider session id, so its conversation can't be
+          resumed. Start a new task to continue this work.
+        </p>
+      )}
+    </section>
   );
 }
 

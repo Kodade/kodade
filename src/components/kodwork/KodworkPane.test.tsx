@@ -92,6 +92,7 @@ function progressStore() {
     tools: [{ id: "tool-1", tool: "Write", detail: "/repo/report.md", ok: true }],
     summary: "Created report.md",
     usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+    resumeId: "session-1",
   };
   return createStore(() => ({
     tasks: { [task.id]: task },
@@ -115,6 +116,7 @@ function progressStore() {
     noteHumanChange: vi.fn(),
     respondPermission: vi.fn(),
     steerTask: vi.fn(),
+    discussTask: vi.fn(),
     loadTemplates: vi.fn(),
     applyTemplate: vi.fn(),
     setRecurrence: vi.fn(),
@@ -361,5 +363,71 @@ describe("KodworkPane", () => {
     expect(host.querySelector('[data-testid="kodwork-error"]')?.textContent).toContain(
       "segmentation fault",
     );
+  });
+
+  // #100/#103: an accepted task is a useful artifact, not a dead end behind
+  // "Resume" — the report, the review outcome, and a conversation entry point
+  // must all still be there.
+  it("keeps the report and a conversation composer visible after Accept", () => {
+    const store = progressStore();
+    const current = store.getState().tasks["task-1"]!;
+    store.setState({
+      tasks: {
+        "task-1": {
+          ...current,
+          review: { kind: "folder", status: "accepted", files: [], feedback: "", fingerprint: null },
+        },
+      },
+    });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() => mounted?.render(<KodworkPane taskId="task-1" workStore={store} />));
+
+    // The report is still fully readable.
+    expect(host.textContent).toContain("Created report.md");
+    // ...and there's more to do here than click Resume.
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Ask about this task"]');
+    expect(input).not.toBeNull();
+    expect(input!.disabled).toBe(false);
+  });
+
+  it("sends a discuss message on the resumed provider session without a new pass", () => {
+    const store = progressStore();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() => mounted?.render(<KodworkPane taskId="task-1" workStore={store} />));
+
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Ask about this task"]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setValue.call(input, "Why did finding 3 get high severity?");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const form = input.closest("form")!;
+    act(() => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+
+    expect(store.getState().discussTask).toHaveBeenCalledWith(
+      "task-1",
+      "Why did finding 3 get high severity?",
+    );
+    // Sending a discuss message must never be routed through rejectReview —
+    // that path re-runs the whole task ("revise"), which is a different gesture.
+    expect(store.getState().rejectReview).not.toHaveBeenCalled();
+  });
+
+  it("shows a disabled, explained conversation input when the task has no resume id", () => {
+    const store = progressStore();
+    const current = store.getState().tasks["task-1"]!;
+    store.setState({ tasks: { "task-1": { ...current, resumeId: null } } });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    mounted = createRoot(host);
+    act(() => mounted?.render(<KodworkPane taskId="task-1" workStore={store} />));
+
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Ask about this task"]')!;
+    expect(input.disabled).toBe(true);
+    expect(host.textContent).toContain("can't be resumed");
   });
 });

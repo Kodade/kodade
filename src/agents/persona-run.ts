@@ -22,3 +22,15 @@ export type PersonaDraftInput = {
 export function personaDraftInput(persona: AgentPersona): PersonaDraftInput {
   return { outcome: persona.prompt, providerId: persona.providerId };
 }
+
+// A persona-launched task titles from the persona's NAME, never the prompt
+// text (#103). The task model's default titler lifts leading words out of the
+// outcome, which for a persona prompt like "You are the Code Reviewer, a
+// recurring review agent…" invents a schedule the task doesn't have — a title
+// must never assert scheduling semantics a task wasn't actually configured
+// with. Dated so repeat launches of the same persona stay distinguishable.
+export function personaTaskTitle(personaName: string, now: number): string {
+  const name = personaName.trim() || "Agent";
+  const date = new Date(now).toISOString().slice(0, 10);
+  return `${name} — ${date}`;
+}

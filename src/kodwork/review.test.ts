@@ -219,4 +219,35 @@ describe("KödWork output review gate", () => {
     await ctx.store.getState().acceptReview("task-1");
     expect(ctx.checkpoints).toEqual([]);
   });
+
+  // #100: a "discuss" turn resumes onto the SAME ledger machinery as any other
+  // run (so an agent that edits files during a discussion still gets a real
+  // review), but must not force the user back into a review when nothing
+  // changed — an empty ledger auto-resolves instead of regressing the task.
+  it("auto-resolves a discuss turn's empty ledger instead of reopening review", async () => {
+    const ctx = setup();
+    await runToReview(ctx);
+    await ctx.store.getState().acceptReview("task-1");
+    expect(ctx.store.getState().tasks["task-1"].state).toBe("done");
+
+    // The discuss turn touches nothing — an empty diff this time.
+    vi.mocked(ctx.ledger.finish).mockResolvedValueOnce({
+      kind: "git",
+      status: "pending",
+      files: [],
+      feedback: "",
+      fingerprint: null,
+    });
+    await ctx.store.getState().discussTask("task-1", "Why 'obsolete.md'?");
+    ctx.agent.exit("task-1#2", 0);
+    await vi.waitFor(() =>
+      expect(ctx.store.getState().tasks["task-1"].state).toBe("done"),
+    );
+
+    expect(ctx.store.getState().tasks["task-1"].review.status).toBe("accepted");
+    expect(ctx.store.getState().tasks["task-1"].discussion.at(-1)).toMatchObject({
+      role: "user",
+      text: "Why 'obsolete.md'?",
+    });
+  });
 });

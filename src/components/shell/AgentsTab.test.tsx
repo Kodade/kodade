@@ -59,6 +59,7 @@ function fakeWork() {
     openTask: vi.fn(async () => {}),
     setProvider: vi.fn(() => {}),
     setOutcome: vi.fn(() => {}),
+    setTitle: vi.fn(() => {}),
   })) as unknown as StoreApi<KodworkState>;
 }
 
