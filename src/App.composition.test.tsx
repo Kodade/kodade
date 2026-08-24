@@ -126,6 +126,7 @@ describe("App with the v2 shell switched on", () => {
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "Agents",
       "Code",
+      "Task",
       "Editor",
     ]);
 
@@ -146,5 +147,66 @@ describe("App with the v2 shell switched on", () => {
         .querySelector('[data-tab-id="agents"]')
         ?.getAttribute("data-tab-active"),
     ).toBe("true");
+  });
+
+  // Regression for #95/#97, exercised through the REAL App + TitleBar +
+  // ShellV2 composition: a KödWork task starting must never remove the
+  // top-of-window switcher, and opening a task must land on its own tab
+  // without disturbing whatever else was showing.
+  it("keeps the pill switcher intact and gives a running task its own tab", async () => {
+    const { agentsStore } = await import("./store/appStore");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<App />));
+
+    // A task starts (the equivalent of the sidebar/notification flow: a run
+    // is selected and the shell switches to the Task tab).
+    act(() => agentsStore.getState().selectRun("task-1"));
+    const { appStore } = await import("./store/appStore");
+    act(() =>
+      appStore.getState().setShellLayout({
+        ...appStore.getState().shellLayout,
+        activeTab: "task",
+      }),
+    );
+
+    // The switcher is still fully present and clickable — not just the Code
+    // tab's pill, all four.
+    const tabs = [
+      ...container.querySelectorAll<HTMLButtonElement>('header [role="tab"]'),
+    ];
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Agents",
+      "Code",
+      "Task",
+      "Editor",
+    ]);
+    expect(
+      container
+        .querySelector('[data-tab-id="task"]')
+        ?.getAttribute("data-tab-active"),
+    ).toBe("true");
+
+    // It can be left...
+    act(() => tabs[1].click());
+    expect(
+      container
+        .querySelector('[data-tab-id="code"]')
+        ?.getAttribute("data-tab-active"),
+    ).toBe("true");
+    expect(
+      container.querySelector<HTMLElement>('[data-tab-id="task"]')!.style
+        .display,
+    ).toBe("none");
+
+    // ...and re-entered, with the switcher and the selection both intact.
+    act(() => tabs[2].click());
+    expect(
+      container
+        .querySelector('[data-tab-id="task"]')
+        ?.getAttribute("data-tab-active"),
+    ).toBe("true");
+    expect(agentsStore.getState().selectedRunTaskId).toBe("task-1");
   });
 });

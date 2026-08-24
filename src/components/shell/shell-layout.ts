@@ -10,7 +10,13 @@
 
 import { DEFAULT_SIZES } from "../layout";
 
-export type ShellTabId = "agents" | "code" | "editor";
+// "task" is the dedicated KödWork task surface (#95, #97): a running or
+// finished task is its own top-level destination, independent of the Agents
+// tab's persona builder and the Code tab's chat/terminal workspace. Opening a
+// task from the sidebar only ever changes which tab is active here — never
+// the active project, never a files-store tab — so it can never hijack
+// whatever the user had open elsewhere.
+export type ShellTabId = "agents" | "code" | "editor" | "task";
 export type CodePaneMode = "both" | "chat" | "terminal"; // which panes are open
 export type CodeExpandTarget = "chat" | "terminal" | null; // temporarily full-app
 
@@ -22,7 +28,7 @@ export interface ShellLayout {
   editor: { filesPct: number; panels: { github: boolean; review: boolean } };
 }
 
-const SHELL_TAB_IDS: readonly ShellTabId[] = ["agents", "code", "editor"];
+const SHELL_TAB_IDS: readonly ShellTabId[] = ["agents", "code", "editor", "task"];
 const CODE_PANE_MODES: readonly CodePaneMode[] = ["both", "chat", "terminal"];
 const CODE_EXPAND_TARGETS: readonly CodeExpandTarget[] = [
   "chat",

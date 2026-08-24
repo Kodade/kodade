@@ -144,7 +144,7 @@ vi.mock("react-resizable-panels", async () => {
   };
 });
 
-import { appStore, filesStore } from "../../store/appStore";
+import { agentsStore, appStore, filesStore } from "../../store/appStore";
 import { defaultShellLayout } from "./shell-layout";
 import { ShellV2 } from "./ShellV2";
 
@@ -176,6 +176,7 @@ describe("ShellV2", () => {
       filesCollapsed: false,
       sidebarMode: "full",
     });
+    agentsStore.getState().selectRun(null);
 
     container = document.createElement("div");
     document.body.append(container);
@@ -472,5 +473,57 @@ describe("ShellV2", () => {
       container.querySelector<HTMLElement>('[data-tab-id="code"]')!.style
         .display,
     ).toBe("");
+  });
+
+  // The dedicated KödWork task surface (#95, #97): a task is its own tab, not
+  // a mode of Agents or Code, and switching to it must never unmount the
+  // Code tab's live chat/terminal (the same keep-alive invariant every other
+  // tab already honors).
+  describe("Task tab (#95, #97)", () => {
+    it("renders as its own tab and keeps Code mounted underneath it", () => {
+      act(() => root.render(<ShellV2 />));
+      expect(mocks.chatMounts).toBe(1);
+
+      act(() => {
+        appStore.getState().setShellLayout({
+          ...appStore.getState().shellLayout,
+          activeTab: "task",
+        });
+      });
+
+      const code = container.querySelector<HTMLElement>('[data-tab-id="code"]')!;
+      expect(code.style.display).toBe("none");
+      expect(container.querySelector('[data-tab-id="task"]')).not.toBeNull();
+      // Code's live chat/terminal never remounted just because Task took over.
+      expect(mocks.chatMounts).toBe(1);
+    });
+
+    it("shows whichever run is selected, and is reachable and leavable repeatedly", () => {
+      act(() => root.render(<ShellV2 />));
+      act(() => agentsStore.getState().selectRun("task-1"));
+      act(() => {
+        appStore.getState().setShellLayout({
+          ...appStore.getState().shellLayout,
+          activeTab: "task",
+        });
+      });
+      const task = container.querySelector<HTMLElement>('[data-tab-id="task"]')!;
+      // The mocked kodworkStore has no "task-1" doc, so KodworkPane's own
+      // "no longer open" placeholder proves it mounted with the right id.
+      expect(task.textContent).toContain("no longer open");
+
+      // Leave for Code, then come back: the selection survived untouched.
+      act(() => backToCode());
+      expect(task.style.display).toBe("none");
+      act(() => {
+        appStore.getState().setShellLayout({
+          ...appStore.getState().shellLayout,
+          activeTab: "task",
+        });
+      });
+      expect(task.style.display).toBe("");
+      expect(task.textContent).toContain("no longer open");
+      expect(agentsStore.getState().selectedRunTaskId).toBe("task-1");
+    });
   });
 });

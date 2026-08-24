@@ -15,10 +15,14 @@ import {
   ReviewIcon,
 } from "./TabStrip";
 
-// The v2 shell's tabs, in the order they read across the title bar.
+// The v2 shell's tabs, in the order they read across the title bar. Task sits
+// between Code and Editor: it is a dedicated KödWork task surface (#95, #97),
+// not a mode of either neighbor, and it is ALWAYS in this list — the switcher
+// must stay visible and complete whether or not a task is running.
 const SHELL_TABS: readonly { id: ShellTabId; label: string }[] = [
   { id: "agents", label: "Agents" },
   { id: "code", label: "Code" },
+  { id: "task", label: "Task" },
   { id: "editor", label: "Editor" },
 ];
 

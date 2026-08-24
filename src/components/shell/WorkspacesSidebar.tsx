@@ -206,21 +206,24 @@ export function WorkspacesSection({
                       sessions={workSessions}
                       tasks={tasks}
                       projectedGroup={projectedGroup}
-                      // A run opens INSIDE the Agents tab in v2 (not the Editor
-                      // tab): switch tabs, then point the run area at the task.
+                      // A task opens on its OWN dedicated tab (#95, #97), never
+                      // inside the Agents tab or the Code tab's workspace: point
+                      // the Task tab at it first, then switch — the active
+                      // project and whatever KödChat workspace is open elsewhere
+                      // stay exactly as they were.
                       onOpen={(taskId) => {
-                        const projects = projectsStore.getState();
-                        projects.setShellLayout({
-                          ...projects.shellLayout,
-                          activeTab: "agents",
-                        });
                         void openAgentRun(
-                          projectsStore,
                           workStore,
                           agentsStore,
                           project.id,
                           taskId,
-                        );
+                        ).then(() => {
+                          const state = projectsStore.getState();
+                          state.setShellLayout({
+                            ...state.shellLayout,
+                            activeTab: "task",
+                          });
+                        });
                       }}
                       onClose={(taskId) => {
                         // Drop the run's selection if it was showing, then close
