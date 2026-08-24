@@ -6,6 +6,8 @@ pub(crate) enum DesktopPlatform {
     MacOs,
     #[cfg(any(target_os = "windows", test))]
     Windows,
+    #[cfg(any(target_os = "linux", test))]
+    Linux,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -22,6 +24,8 @@ pub(crate) fn open_uri_command(platform: DesktopPlatform, uri: &str) -> DesktopC
         DesktopPlatform::MacOs => "open",
         #[cfg(any(target_os = "windows", test))]
         DesktopPlatform::Windows => "explorer.exe",
+        #[cfg(any(target_os = "linux", test))]
+        DesktopPlatform::Linux => "xdg-open",
     };
     DesktopCommand {
         program,
@@ -54,5 +58,9 @@ mod tests {
         let windows = open_uri_command(DesktopPlatform::Windows, uri);
         assert_eq!(windows.program, "explorer.exe");
         assert_eq!(windows.args, vec![OsString::from(uri)]);
+
+        let linux = open_uri_command(DesktopPlatform::Linux, uri);
+        assert_eq!(linux.program, "xdg-open");
+        assert_eq!(linux.args, vec![OsString::from(uri)]);
     }
 }

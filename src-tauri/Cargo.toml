@@ -172,6 +172,8 @@ llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = fa
 # Keep the cross-platform GGUF seam pinned with the safe bindings and matching vendored sys crate.
 llama-cpp-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common", "sampler"] }
 llama-cpp-sys-2 = { version = "=0.1.151", optional = true, default-features = false, features = ["common"] }
+# Linux voice transcription uses whisper.cpp's portable CPU backend.
+whisper-rs = { version = "0.16", optional = true, default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

@@ -20,7 +20,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::agent::{AgentManager, AgentSpawn};
 use crate::config::{self, ConfigScan};
 use crate::configguard::{Access, ConfigGuard};
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 use crate::desktop::DesktopCommand;
 use crate::desktop::{open_uri_command, spawn as spawn_desktop, DesktopPlatform};
 use crate::detect;
@@ -1695,7 +1695,22 @@ pub fn fs_reveal(root: String, path: String) -> Result<(), String> {
     {
         spawn_desktop(windows_reveal_command(&target), "reveal in Explorer")
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        let directory = if target.is_dir() {
+            target.as_path()
+        } else {
+            target.parent().unwrap_or(target.as_path())
+        };
+        spawn_desktop(
+            DesktopCommand {
+                program: "xdg-open",
+                args: vec![directory.as_os_str().to_owned()],
+            },
+            "reveal in file manager",
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Err(format!(
             "reveal in file manager is unsupported on this platform: {}",
@@ -1726,7 +1741,14 @@ pub fn open_url(url: String) -> Result<(), String> {
             "open URL with Windows handler",
         )
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        spawn_desktop(
+            open_uri_command(DesktopPlatform::Linux, parsed.as_str()),
+            "open URL with desktop handler",
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Err("opening URLs is unsupported on this platform".to_string())
     }

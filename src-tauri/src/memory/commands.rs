@@ -214,11 +214,13 @@ fn open_in_obsidian(uri: &str) -> Result<(), String> {
     let command = open_uri_command(DesktopPlatform::MacOs, uri);
     #[cfg(target_os = "windows")]
     let command = open_uri_command(DesktopPlatform::Windows, uri);
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    let command = open_uri_command(DesktopPlatform::Linux, uri);
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         spawn_desktop(command, "cannot open project knowledge in Obsidian")
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = uri;
         Err("opening project knowledge in Obsidian is unsupported on this platform".into())
