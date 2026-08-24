@@ -51,5 +51,6 @@
   "createdAt": 1000,
   "updatedAt": 6000,
   "startedAt": 1500,
-  "settledAt": null
+  "settledAt": null,
+  "discussion": []
 }

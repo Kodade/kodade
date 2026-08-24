@@ -46,6 +46,7 @@ function seams() {
     }),
     setProvider: vi.fn(() => {}),
     setOutcome: vi.fn(() => {}),
+    setTitle: vi.fn(() => {}),
   })) as unknown as StoreApi<KodworkState>;
   const agents = createStore(() => ({
     selectRun: vi.fn(() => {}),
@@ -120,6 +121,26 @@ describe("launchPersonaRun", () => {
     expect(work.getState().setProvider).toHaveBeenCalledWith("task-1", "claude");
     expect(work.getState().setOutcome).toHaveBeenCalledWith("task-1", "Review the code");
     expect(agents.getState().selectRun).toHaveBeenCalledWith("task-1");
+  });
+
+  // #103: the title must come from the persona's name, not get re-derived
+  // from the prompt text setOutcome just applied — setTitle runs AFTER
+  // setOutcome specifically to override it.
+  it("titles the launched task from the persona name, not the prompt", async () => {
+    const { calls, projects, work, agents } = seams();
+    const harness = fakeHarness(calls);
+
+    await launchPersonaRun(
+      projects,
+      work,
+      agents,
+      "p1",
+      persona([]),
+      { harness, projectRoot: "/repo" },
+      () => Date.parse("2026-08-23T00:00:00Z"),
+    );
+
+    expect(work.getState().setTitle).toHaveBeenCalledWith("task-1", "Reviewer — 2026-08-23");
   });
 
   it("never touches the install path for a persona with no skills", async () => {

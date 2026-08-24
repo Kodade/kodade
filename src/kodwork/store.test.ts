@@ -351,6 +351,63 @@ describe("resume", () => {
   });
 });
 
+// Post-run conversation (#100): "discuss" resumes the SAME provider session
+// like "Resume"/"Reject & continue" do, but its reply must never overwrite
+// the task's final report — that is the whole distinction from "revise".
+describe("discuss", () => {
+  it("resumes the CLI's saved session, records the exchange, and leaves the report untouched", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN);
+    agent.exit("t1#1", 0);
+    const report = store.getState().tasks.t1.summary;
+    expect(report).toContain("The file contains");
+
+    await store.getState().discussTask("t1", "Why did that happen?");
+    expect(agent.starts[1].args.join(" ")).toContain(
+      "--resume 11111111-2222-3333-4444-555555555555",
+    );
+    expect(agent.sends[1]?.data).toContain("Why did that happen?");
+    agent.emitLines("t1#2", CLAUDE_TOOL_TURN);
+    agent.exit("t1#2", 0);
+
+    // The original report survives the discuss turn unchanged...
+    expect(store.getState().tasks.t1.summary).toBe(report);
+    // ...and the exchange is readable as a conversation, not folded into it.
+    const discussion = store.getState().tasks.t1.discussion;
+    expect(discussion[0]).toMatchObject({ role: "user", text: "Why did that happen?" });
+    expect(discussion[1]).toMatchObject({ role: "agent" });
+    expect(discussion[1]!.text).toContain("The file contains");
+  });
+
+  it("does nothing when the task never captured a resume id", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.exit("t1#1", 1, "boom"); // no session line ⇒ no resumeId
+    expect(store.getState().tasks.t1.resumeId).toBeNull();
+
+    await store.getState().discussTask("t1", "Any thoughts?");
+    expect(agent.starts).toHaveLength(1); // no second run was spawned
+    expect(store.getState().tasks.t1.discussion).toHaveLength(0);
+  });
+
+  it("ignores a blank message", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN);
+    agent.exit("t1#1", 0);
+
+    await store.getState().discussTask("t1", "   ");
+    expect(agent.starts).toHaveLength(1);
+  });
+});
+
 describe("skill templates and in-app scheduling", () => {
   it("prefills an editable outcome from an installed skill template", async () => {
     const { store } = setup({

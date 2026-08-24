@@ -57,6 +57,16 @@ export type KodworkToolLine = {
   ok: boolean | null;
 };
 
+// A post-run conversation turn (#100). Kept separate from `summary` — the
+// agent's final report for the last WORK pass — so a follow-up question never
+// overwrites the report the user is discussing. Not a full chat transcript:
+// just enough to read the discussion back after a reload.
+export type KodworkDiscussionEntry = {
+  role: "user" | "agent";
+  text: string;
+  at: number;
+};
+
 export type KodworkTask = {
   id: string; // the SessionMeta id — a task IS a session of kind "work"
   projectId: string;
@@ -76,6 +86,9 @@ export type KodworkTask = {
   statusText: string | null;
   // The agent's final report for the last run.
   summary: string | null;
+  // Post-completion Q&A on the same provider session (#100). Empty for a task
+  // that never had a discuss turn.
+  discussion: KodworkDiscussionEntry[];
   usage: TokenUsage | null;
   // Produced files must pass this gate before a successful run is final.
   review: KodworkReview;
@@ -141,6 +154,7 @@ const MAX_TOOL_DETAIL_CHARS = 120;
 const MAX_REVIEW_FILES = 500;
 const MAX_REVIEW_TEXT_CHARS = 16 * 1024;
 const MAX_REVIEW_FEEDBACK_CHARS = 20_000;
+export const MAX_DISCUSSION_ENTRIES = 200;
 
 export const DEFAULT_TASK_TITLE = "New task";
 
@@ -204,6 +218,7 @@ export function newTask(
     tools: [],
     statusText: null,
     summary: null,
+    discussion: [],
     usage: null,
     review: { ...EMPTY_KODWORK_REVIEW },
     reviewOutcomeState: null,
@@ -231,6 +246,10 @@ export function toPersistedTask(task: KodworkTask): PersistedKodworkTask {
     ...task,
     plan: task.plan.slice(0, MAX_PLAN_ITEMS),
     tools: task.tools.slice(-MAX_TOOL_LINES),
+    discussion: task.discussion.slice(-MAX_DISCUSSION_ENTRIES).map((entry) => ({
+      ...entry,
+      text: clampSummary(entry.text),
+    })),
     review: {
       ...task.review,
       files: task.review.files.slice(0, MAX_REVIEW_FILES).map((file) => ({
@@ -283,6 +302,7 @@ export function parsePersistedTask(raw: string): PersistedKodworkTask | null {
     tools: parseTools(doc.tools),
     statusText: typeof doc.statusText === "string" ? doc.statusText : null,
     summary: typeof doc.summary === "string" ? doc.summary : null,
+    discussion: parseDiscussion(doc.discussion),
     usage: parseUsage(doc.usage),
     review: interrupted ? { ...EMPTY_KODWORK_REVIEW } : parseReview(doc.review),
     reviewOutcomeState:
@@ -512,6 +532,25 @@ function parseTools(value: unknown): KodworkToolLine[] {
     });
   }
   return lines;
+}
+
+function parseDiscussion(value: unknown): KodworkDiscussionEntry[] {
+  if (!Array.isArray(value)) return [];
+  const entries: KodworkDiscussionEntry[] = [];
+  for (const raw of value.slice(-MAX_DISCUSSION_ENTRIES)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const entry = raw as Record<string, unknown>;
+    if (
+      (entry.role !== "user" && entry.role !== "agent") ||
+      typeof entry.text !== "string"
+    ) continue;
+    entries.push({
+      role: entry.role,
+      text: clampSummary(entry.text),
+      at: asTime(entry.at),
+    });
+  }
+  return entries.slice(-MAX_DISCUSSION_ENTRIES);
 }
 
 function parseDeniedTools(value: unknown): { tool: string; detail: string | null }[] {
