@@ -2009,3 +2009,133 @@ describe("editor tabs", () => {
     expect(store.getState().openTabs).toEqual([]);
   });
 });
+
+describe("project editor restoration", () => {
+  it("restores each project's active tab and unsaved buffers, including closed tabs", async () => {
+    const { store, files } = makeStore();
+    files.fileReads.set("/a/one.ts", { kind: "text", content: "one" });
+    files.fileReads.set("/a/two.ts", { kind: "text", content: "two" });
+    files.fileReads.set("/b/one.ts", { kind: "text", content: "other" });
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/one.ts");
+    store.getState().setBuffer("edited one");
+    await store.getState().selectFile("/a/two.ts");
+    store.getState().setBuffer("edited two");
+    await store.getState().setRoot("/b");
+    await store.getState().selectFile("/b/one.ts");
+    store.getState().setBuffer("edited other");
+    await store.getState().setRoot("/a");
+    await Promise.resolve();
+    expect(store.getState().activeTab).toEqual({
+      kind: "file",
+      path: "/a/two.ts",
+    });
+    expect(store.getState().buffer).toBe("edited two");
+    await store.getState().selectFile("/a/one.ts");
+    expect(store.getState().buffer).toBe("edited one");
+    store.getState().closeTab({ kind: "file", path: "/a/one.ts" });
+    await store.getState().setRoot("/b");
+    await Promise.resolve();
+    expect(store.getState().buffer).toBe("edited other");
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/one.ts");
+    expect(store.getState().buffer).toBe("edited one");
+  });
+
+  it("ignores an old read after A to B to A, even for the same path", async () => {
+    const { store, files } = makeStore();
+    await store.getState().setRoot("/a");
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "old" });
+    files.deferRead = true;
+    const oldRead = store.getState().selectFile("/a/f.ts");
+    await store.getState().setRoot("/b");
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "new" });
+    await store.getState().setRoot("/a");
+    files.resolveRead();
+    await oldRead;
+    expect(store.getState().loading).toBe(true);
+    files.resolveRead();
+    await Promise.resolve();
+    expect(store.getState().buffer).toBe("new");
+  });
+
+  it("restores a non-file active tab and retains the hidden dirty buffer", async () => {
+    const { store, files } = makeStore();
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "disk" });
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/f.ts");
+    store.getState().setBuffer("draft");
+    store.getState().openGithubTab();
+    await store.getState().setRoot("/b");
+    await store.getState().setRoot("/a");
+    expect(store.getState().activeTab).toEqual({ kind: "github" });
+    await store.getState().selectFile("/a/f.ts");
+    expect(store.getState().buffer).toBe("draft");
+    store.getState().dropTabsForRoot("/a");
+    expect(store.getState().selectedPath).toBeNull();
+    expect(store.getState().dirtyPaths).toEqual({});
+  });
+
+  it("refreshes a pending restoration read when an earlier save completes", async () => {
+    const { store, files } = makeStore();
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "old" });
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/f.ts");
+    store.getState().setBuffer("saved");
+    files.deferWrite = true;
+    const saving = store.getState().saveFile();
+    await store.getState().setRoot("/b");
+    files.deferRead = true;
+    await store.getState().setRoot("/a");
+    files.resolveWrite();
+    await saving;
+    files.resolveRead();
+    await Promise.resolve();
+    expect(store.getState().loading).toBe(true);
+    files.resolveRead();
+    await Promise.resolve();
+    expect(store.getState().buffer).toBe("saved");
+    expect(store.getState().editorStatus).toBe("clean");
+  });
+
+  it("keeps edits made after returning while an earlier save is in flight", async () => {
+    const { store, files } = makeStore();
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "old" });
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/f.ts");
+    store.getState().setBuffer("first");
+    files.deferWrite = true;
+    const saving = store.getState().saveFile();
+    await store.getState().setRoot("/b");
+    await store.getState().setRoot("/a");
+    await Promise.resolve();
+    store.getState().setBuffer("second");
+    files.resolveWrite();
+    await saving;
+    expect(store.getState().buffer).toBe("second");
+    expect(store.getState().savedContent).toBe("first");
+    expect(store.getState().editorStatus).toBe("dirty");
+  });
+
+  it("isolates an in-flight save from another project's editor", async () => {
+    const { store, files } = makeStore();
+    files.fileReads.set("/a/f.ts", { kind: "text", content: "a" });
+    files.fileReads.set("/b/f.ts", { kind: "text", content: "b" });
+    await store.getState().setRoot("/a");
+    await store.getState().selectFile("/a/f.ts");
+    store.getState().setBuffer("saved a");
+    files.deferWrite = true;
+    const saving = store.getState().saveFile();
+    await store.getState().setRoot("/b");
+    await store.getState().selectFile("/b/f.ts");
+    store.getState().setBuffer("dirty b");
+    files.resolveWrite();
+    await saving;
+    expect(store.getState().buffer).toBe("dirty b");
+    expect(store.getState().editorStatus).toBe("dirty");
+    await store.getState().setRoot("/a");
+    await Promise.resolve();
+    expect(store.getState().buffer).toBe("saved a");
+    expect(store.getState().editorStatus).toBe("clean");
+  });
+});

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Preserve the restart action for a downloaded update when checking again (#111).
+- Preserve unsaved editor buffers and the active tab when switching projects (#114).
 
 - KödWork tasks now open on their own Task tab in the tabbed layout, instead
   of taking over the Agents tab or reusing whatever project and chat happened
