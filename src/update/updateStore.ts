@@ -67,8 +67,8 @@ export function createUpdateStore(deps: UpdateDeps) {
     async checkForUpdate(options = {}) {
       const silent = options.silent ?? false;
       const phase = get().status.phase;
-      // Never stack a second check on an in-flight one.
-      if (phase === "checking" || phase === "downloading") return;
+      // Keep an installed update ready for restart and avoid overlapping operations.
+      if (phase === "checking" || phase === "downloading" || phase === "ready") return;
 
       set({ status: { phase: "checking" } });
       try {

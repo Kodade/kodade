@@ -41,7 +41,7 @@ export function UpdateCheckAction() {
       >
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || status.phase === "ready"}
           onClick={() => void updateStore.getState().checkForUpdate()}
           className="rounded border border-border px-3 py-1 text-xs text-text-dim hover:bg-surface-hover hover:text-text disabled:opacity-50"
         >

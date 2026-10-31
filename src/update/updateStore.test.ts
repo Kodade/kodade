@@ -61,6 +61,24 @@ describe("checkForUpdate", () => {
     });
   });
 
+  it.each(["offline", "empty"])('preserves a ready update on an %s recheck', async (result) => {
+    const check = vi.fn()
+      .mockResolvedValueOnce(makePendingUpdate())
+      .mockImplementationOnce(async () => {
+        if (result === "offline") throw new Error("offline");
+        return null;
+      });
+    const relaunch = vi.fn(async () => {});
+    const store = createUpdateStore({ check, relaunch });
+    await store.getState().checkForUpdate();
+    await store.getState().install();
+    await store.getState().checkForUpdate();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(store.getState().status.phase).toBe("ready");
+    await store.getState().restart();
+    expect(relaunch).toHaveBeenCalledOnce();
+  });
+
   it("a second check is ignored while one is already checking or downloading", async () => {
     let resolveCheck: (u: PendingUpdate | null) => void = () => {};
     const check = vi.fn(
