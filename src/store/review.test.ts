@@ -962,6 +962,20 @@ describe("createReviewStore — comments (M12e)", () => {
     expect(counts).toEqual({ "a.ts": 1, "b.ts": 1 });
   });
 
+  it("keeps worktree comments isolated across project switches", async () => {
+    const store = loadedStore();
+    await store.getState().load(ROOT);
+    store.getState().addComment({ path: "a.ts", startLine: 1, endLine: 1, body: "first" });
+    const loading = store.getState().load("/other");
+    expect(store.getState().comments).toEqual([]);
+    await loading;
+    store.getState().addComment({ path: "a.ts", startLine: 1, endLine: 1, body: "second" });
+    await store.getState().load(ROOT);
+    expect(store.getState().comments.map((c) => c.body)).toEqual(["first"]);
+    await store.getState().load("/other");
+    expect(store.getState().comments.map((c) => c.body)).toEqual(["second"]);
+  });
+
   it("preserves each scope's comments across a scope switch (session-local, per scope)", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["1", "0", "a.ts"]]), stderr: "" });

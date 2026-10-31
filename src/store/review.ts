@@ -419,7 +419,7 @@ export function createReviewStore(deps: ReviewDeps) {
 
   return createStore<ReviewState>((set, get) => {
     // The current scope's comment-stash key (mirrors reviewScopeKey's identity).
-    const commentKey = () => reviewScopeKey(get().scope, get().headBranch, get().branchBase);
+    const commentKey = () => JSON.stringify([get().projectRoot, reviewScopeKey(get().scope, get().headBranch, get().branchBase)]);
     // Swap `comments` to a scope's stashed list (called after load resolves the
     // scope identity, same seam `reviewed` uses).
     const loadComments = () => set({ comments: commentStash.get(commentKey()) ?? [] });
@@ -580,6 +580,7 @@ export function createReviewStore(deps: ReviewDeps) {
       comments: [],
 
       async load(projectRoot) {
+        ++targetGeneration;
         const gen = ++generation;
         const scope = get().scope;
         // A different project resets the list; the same project keeps the old
@@ -589,7 +590,7 @@ export function createReviewStore(deps: ReviewDeps) {
           projectRoot,
           loading: true,
           error: null,
-          ...(sameProject ? {} : { files: [], totals: { files: 0, adds: 0, dels: 0 }, loaded: false }),
+          ...(sameProject ? {} : { comments: [], branchBase: null, headBranch: null, files: [], totals: { files: 0, adds: 0, dels: 0 }, loaded: false }),
         });
         try {
           if (scope.kind === "pr") {
@@ -687,6 +688,7 @@ export function createReviewStore(deps: ReviewDeps) {
       async openWorktree(projectRoot) {
         ++targetGeneration;
         set({
+          comments: [],
           scope: { kind: "worktree" },
           branchBase: null,
           headBranch: null,
@@ -698,6 +700,8 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async openChatReview(target) {
+        ++generation;
+        set({ comments: [], files: [], loaded: false });
         const targetGen = ++targetGeneration;
         let choices = [target];
         let selected = target;
@@ -744,6 +748,7 @@ export function createReviewStore(deps: ReviewDeps) {
         set({
           scope: { kind: "worktree" },
           projectRoot: selected.selectedWorktreeRoot ?? selected.executionRoot,
+          comments: [],
           branchBase: null,
           headBranch: null,
           error: null,
@@ -755,10 +760,12 @@ export function createReviewStore(deps: ReviewDeps) {
       },
 
       async selectChatTarget(target) {
+        ++generation;
+        set({ comments: [], files: [], loaded: false });
         const targetGen = ++targetGeneration;
         const selected = await discoverPullRequest(target);
         if (targetGen !== targetGeneration) return;
-        set({ chatTarget: selected, chatTargetChoices: [], scope: { kind: "worktree" } });
+        set({ chatTarget: selected, chatTargetChoices: [], scope: { kind: "worktree" }, comments: [] });
         deps.onChatTargetSelected?.(selected);
         await get().load(selected.selectedWorktreeRoot ?? selected.executionRoot);
       },
@@ -777,7 +784,7 @@ export function createReviewStore(deps: ReviewDeps) {
         if (scope.kind === "branch" && get().chatTarget?.baselineSha) {
           scope = { kind: "branch", base: get().chatTarget!.baselineSha };
         }
-        set({ scope, branchBase: null, headBranch: null, error: null });
+        set({ scope, branchBase: null, headBranch: null, comments: [], error: null });
         const root = get().projectRoot;
         if (root) await get().load(root);
       },
