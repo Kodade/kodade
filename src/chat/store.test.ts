@@ -39,6 +39,102 @@ async function openThread(store: ReturnType<typeof setup>["store"], provider = "
 }
 
 describe("a turn", () => {
+  it("reserves a delayed preflight until the first turn starts", async () => {
+    let resolveMemory!: (value: string | null) => void;
+    const memory = new Promise<string | null>((resolve) => { resolveMemory = resolve; });
+    const { agent, store } = setup({ memoryContext: () => memory });
+    await openThread(store);
+    const first = store.getState().send("t1", "first");
+    await store.getState().send("t1", "second");
+    expect(agent.starts).toHaveLength(0);
+    resolveMemory(null);
+    await first;
+    expect(agent.starts).toHaveLength(1);
+    expect(agent.starts[0].stdin).toBe("first");
+    expect(store.getState().threads.t1.entries).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: "second" })]),
+    );
+  });
+
+  it("does not start or mutate a replacement thread after removal during preflight", async () => {
+    let resolveMemory!: (value: string | null) => void;
+    const memory = new Promise<string | null>((resolve) => { resolveMemory = resolve; });
+    const { agent, store } = setup({ memoryContext: () => memory });
+    await openThread(store);
+    const first = store.getState().send("t1", "old message");
+    await store.getState().removeThread("t1");
+    await openThread(store);
+    resolveMemory(null);
+    await first;
+    expect(agent.starts).toHaveLength(0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+    expect(store.getState().threads.t1.entries).toHaveLength(0);
+    await store.getState().send("t1", "new message");
+    expect(agent.starts[0].stdin).toBe("new message");
+  });
+
+  it("releases a reservation when preflight cannot find a project", async () => {
+    const { store } = setup({ projectRoot: () => null });
+    await openThread(store);
+    await store.getState().send("t1", "first");
+    expect(store.getState().threads.t1.status).toBe("idle");
+    store.getState().setProvider("t1", "codex");
+    expect(store.getState().threads.t1.providerId).toBe("codex");
+  });
+
+  it("keeps a new reservation when a cancelled preflight finishes late", async () => {
+    const resolves: Array<(value: string | null) => void> = [];
+    const { agent, store } = setup({
+      memoryContext: () => new Promise((resolve) => resolves.push(resolve)),
+    });
+    await openThread(store);
+    const oldSend = store.getState().send("t1", "old");
+    await store.getState().cancel("t1");
+    const newSend = store.getState().send("t1", "new");
+    resolves[0](null);
+    await oldSend;
+    expect(store.getState().canSend("t1")).toBe(false);
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "third");
+    resolves[1](null);
+    await newSend;
+    expect(agent.starts).toHaveLength(1);
+    expect(agent.starts[0].stdin).toBe("new");
+  });
+
+  it("does not apply a delayed review baseline after cancellation", async () => {
+    const git = new MockGit();
+    let resolveHead!: (value: { stdout: string; stderr: string }) => void;
+    const head = new Promise<{ stdout: string; stderr: string }>((resolve) => { resolveHead = resolve; });
+    vi.spyOn(git, "run").mockImplementationOnce(() => head);
+    const { agent, store } = setup({ git });
+    await openThread(store);
+    const first = store.getState().send("t1", "first");
+    await store.getState().cancel("t1");
+    resolveHead({ stdout: "abc", stderr: "" });
+    await first;
+    expect(agent.starts).toHaveLength(0);
+    expect(store.getState().threads.t1.reviewTarget).toBeUndefined();
+    expect(store.getState().threads.t1.status).toBe("idle");
+  });
+
+  it("reserves a turn during memory preflight and releases it on cancellation", async () => {
+    let resolveMemory!: (value: string | null) => void;
+    const memory = new Promise<string | null>((resolve) => { resolveMemory = resolve; });
+    const { agent, store } = setup({ memoryContext: () => memory });
+    await openThread(store);
+    const first = store.getState().send("t1", "first");
+    expect(store.getState().threads.t1.status).toBe("working");
+    await store.getState().send("t1", "second");
+    await store.getState().cancel("t1");
+    resolveMemory(null);
+    await first;
+    expect(agent.starts).toHaveLength(0);
+    expect(store.getState().threads.t1.status).toBe("idle");
+    await store.getState().send("t1", "retry");
+    expect(agent.starts).toHaveLength(1);
+  });
+
   it("keeps a Claude run owned after its result, detaches after silence, and resumes on a later event", async () => {
     let detach: (() => void) | undefined;
     const { agent, store } = setup({

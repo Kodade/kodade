@@ -322,6 +322,7 @@ export function ChatPane({
                   setDrafts((current) => ({ ...current, [thread.id]: draft }))
                 }
                 onSend={(text) => {
+                  if (!chatThreadsStore.getState().canSend(thread.id)) return;
                   setAttachments([]);
                   setDrafts((current) => ({ ...current, [thread.id]: "" }));
                   // Captured BEFORE send: only the FIRST message titles the

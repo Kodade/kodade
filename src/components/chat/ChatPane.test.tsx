@@ -113,11 +113,13 @@ async function mount({
   workingTree = makeWorkingTreeStore(),
   showTerminalToggle = true,
   onTerminalRequest,
+  memoryContext,
 }: {
   review?: ReturnType<typeof makeReviewStore>;
   workingTree?: ReturnType<typeof makeWorkingTreeStore>;
   showTerminalToggle?: boolean;
   onTerminalRequest?: () => void;
+  memoryContext?: (root: string) => Promise<string | null>;
 } = {}) {
   const storage = new MockStorage();
   const agent = new MockAgentIpc();
@@ -138,6 +140,7 @@ async function mount({
   const chatThreadsStore = createChatStore({
     agent,
     storage,
+    memoryContext,
     projectRoot: () => "/repos/alpha",
     remoteTarget: (id) =>
       remoteTargetForProjectId(projectsStore.getState().remoteTargets, id),
@@ -305,6 +308,53 @@ describe("ChatPane", () => {
     expect(host.querySelector('[data-chat-role="user"]')?.textContent).toBe(
       "hello agent",
     );
+  });
+
+  it("retains a rejected follow-up draft through a thread switch during preflight", async () => {
+    let resolveMemory!: (value: string | null) => void;
+    const memory = new Promise<string | null>((resolve) => { resolveMemory = resolve; });
+    const { host, root, projectsStore, chatThreadsStore, agent, projectId } = await mount({
+      memoryContext: () => memory,
+    });
+    mounted = root;
+    let first = "";
+    await act(async () => {
+      first = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(first, projectId, "claude");
+    });
+    const textarea = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "follow-up");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    let pending!: Promise<void>;
+    await act(async () => {
+      // The old composer render can still receive Enter before React renders Working.
+      pending = chatThreadsStore.getState().send(first, "first message");
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(textarea.value).toBe("follow-up");
+    expect(host.querySelector('[data-testid="chat-working"]')).not.toBeNull();
+    let second = "";
+    await act(async () => {
+      second = projectsStore.getState().addChatThread(projectId, "claude")!;
+      await chatThreadsStore.getState().openThread(second, projectId, "claude");
+    });
+    expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("");
+    await act(async () => {
+      projectsStore.getState().setActiveSession(projectId, first);
+    });
+    expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("follow-up");
+    await act(async () => { resolveMemory(null); await pending; });
+    expect(agent.starts).toHaveLength(1);
+    expect(agent.starts[0].stdin).toBe("first message");
+    expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("follow-up");
+    await act(async () => { agent.exit(`${first}#1`, 0); });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click();
+    });
+    expect(agent.starts[1].stdin).toBe("follow-up");
+    expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!.value).toBe("");
   });
 
   it("keeps unsent drafts isolated when switching chat threads", async () => {
