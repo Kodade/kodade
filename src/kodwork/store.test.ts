@@ -212,6 +212,23 @@ describe("a task run", () => {
 });
 
 describe("settling", () => {
+  it("forwards cancellation while native startup is still pending", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    let rejectStart!: (error: Error) => void;
+    const start = vi.spyOn(agent, "start").mockImplementationOnce(() =>
+      new Promise<void>((_resolve, reject) => { rejectStart = reject; }),
+    );
+    const pending = store.getState().startTask("t1");
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    await store.getState().cancelTask("t1");
+    expect(agent.cancels).toEqual([{ id: "t1#1" }]);
+    rejectStart(new Error("prompt write cancelled"));
+    await pending;
+    expect(store.getState().tasks.t1.state).toBe("cancelled");
+  });
+
   it("cancel marks the task cancelled once the exit lands, without a checkpoint", async () => {
     const { agent, store, checkpoints } = setup();
     await store.getState().start();
@@ -380,6 +397,54 @@ describe("discuss", () => {
     expect(discussion[0]).toMatchObject({ role: "user", text: "Why did that happen?" });
     expect(discussion[1]).toMatchObject({ role: "agent" });
     expect(discussion[1]!.text).toContain("The file contains");
+  });
+
+  it.each(["failed", "cancelled"] as const)("preserves a %s result, plan, tools and error after discussion", async (state) => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emit("t1#1", CLAUDE_PLAN_LINE);
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN.slice(0, -1));
+    if (state === "cancelled") await store.getState().cancelTask("t1");
+    agent.exit("t1#1", 1, "original failure");
+    const original = store.getState().tasks.t1;
+    expect(original.state).toBe(state);
+
+    await store.getState().discussTask("t1", "Explain the result");
+    agent.emit("t1#2", CLAUDE_PLAN_LINE);
+    agent.emitLines("t1#2", CLAUDE_TOOL_TURN);
+    agent.exit("t1#2", 0);
+    expect(store.getState().tasks.t1).toMatchObject({
+      state, error: original.error, summary: original.summary,
+      plan: original.plan, tools: original.tools, settledAt: original.settledAt,
+    });
+  });
+
+  it("cancels a discussion without cancelling the completed task", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN);
+    agent.exit("t1#1", 0);
+    await store.getState().discussTask("t1", "Explain");
+    await store.getState().cancelTask("t1");
+    agent.exit("t1#2", 143, "cancelled");
+    expect(store.getState().tasks.t1.state).toBe("done");
+  });
+
+  it("reports a discussion spawn failure without replacing the task error", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    await store.getState().startTask("t1");
+    agent.emitLines("t1#1", CLAUDE_TOOL_TURN.slice(0, -1));
+    agent.exit("t1#1", 1, "original failure");
+    agent.failStartWith = new Error("provider unavailable");
+    await store.getState().discussTask("t1", "Explain");
+    expect(store.getState().tasks.t1).toMatchObject({ state: "failed", error: "original failure" });
+    expect(store.getState().tasks.t1.discussion.at(-1)?.text).toContain("provider unavailable");
   });
 
   it("does nothing when the task never captured a resume id", async () => {

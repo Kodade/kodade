@@ -4,7 +4,17 @@
 
 - Preserve the restart action for a downloaded update when checking again (#111).
 - Review comments now stay with their project and review scope (#116).
+- Fixed headless agent startup hanging on large prompts: output drains before
+  input is written, cancellation stays responsive, and failed prompt writes
+  are reported (#113).
+- Preserve unsaved editor buffers and the active tab when switching projects (#114).
+- KödChat keeps follow-up drafts when a previous message is still starting (#112).
+- Harden Linux shell fallback, file reveal, document confinement and no-replace
+  rename; show appropriate microphone guidance and use POSIX KödSSH quoting
+  on Linux (#115, #118).
 
+- KödWork discussions preserve the completed task's result and progress, and
+  rejected output feedback includes every reviewed file (#110, #117).
 - KödWork tasks now open on their own Task tab in the tabbed layout, instead
   of taking over the Agents tab or reusing whatever project and chat happened
   to be open. Clicking a task from the sidebar (or a KödWork notification)

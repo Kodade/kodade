@@ -70,6 +70,7 @@ describe("VoiceControls", () => {
   });
 
   it("offers a privacy-settings deep link only when the error is a denied microphone", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const deniedMarkup = renderToStaticMarkup(
       <VoiceControls
         store={controlsStore({
@@ -83,6 +84,20 @@ describe("VoiceControls", () => {
       />,
     );
     expect(deniedMarkup).toContain("Open privacy settings");
+    platform.mockReturnValue("Linux x86_64");
+    const linuxMarkup = renderToStaticMarkup(
+      <VoiceControls
+        store={controlsStore({
+          voice: {
+            phase: "error", level: 0,
+            message: "Allow microphone access in your desktop or audio service settings.",
+          },
+        })}
+        disabled={false}
+      />,
+    );
+    expect(linuxMarkup).not.toContain("Open privacy settings");
+    platform.mockRestore();
 
     const otherMarkup = renderToStaticMarkup(
       <VoiceControls

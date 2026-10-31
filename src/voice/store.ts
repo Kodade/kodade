@@ -148,7 +148,9 @@ function friendlyError(message: string, isMac: boolean): string {
   if (/permission|not authorized|access denied|microphone.*denied/i.test(message)) {
     return isMac
       ? "Allow microphone access in System Settings → Privacy & Security → Microphone."
-      : "Allow microphone access in Settings → Privacy → Microphone.";
+      : /Win/i.test(navigator.platform)
+        ? "Allow microphone access in Settings → Privacy → Microphone."
+        : "Allow microphone access in your desktop or audio service settings. Check that a microphone is connected and available.";
   }
   return message || "Voice input stopped unexpectedly.";
 }
@@ -794,7 +796,16 @@ export function createVoiceStore(
       },
 
       async openPrivacySettings() {
-        await deps.openMicrophonePrivacySettings().catch(() => undefined);
+        try {
+          await deps.openMicrophonePrivacySettings();
+        } catch (error) {
+          if (get().voice.phase === "error") {
+            transition({
+              type: "error",
+              message: `Could not open microphone settings: ${messageFrom(error)}`,
+            });
+          }
+        }
       },
 
       async insertReview() {
