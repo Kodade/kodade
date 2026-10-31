@@ -1056,7 +1056,6 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         const run = runs.get(taskId);
         if (!run || run.settling) return;
         run.cancelled = true;
-        if (run.starting) return;
         try {
           await deps.agent.cancel({ id: run.runId });
         } catch (error) {

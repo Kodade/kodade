@@ -212,6 +212,23 @@ describe("a task run", () => {
 });
 
 describe("settling", () => {
+  it("forwards cancellation while native startup is still pending", async () => {
+    const { agent, store } = setup();
+    await store.getState().start();
+    await draftTask(store);
+    let rejectStart!: (error: Error) => void;
+    const start = vi.spyOn(agent, "start").mockImplementationOnce(() =>
+      new Promise<void>((_resolve, reject) => { rejectStart = reject; }),
+    );
+    const pending = store.getState().startTask("t1");
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    await store.getState().cancelTask("t1");
+    expect(agent.cancels).toEqual([{ id: "t1#1" }]);
+    rejectStart(new Error("prompt write cancelled"));
+    await pending;
+    expect(store.getState().tasks.t1.state).toBe("cancelled");
+  });
+
   it("cancel marks the task cancelled once the exit lands, without a checkpoint", async () => {
     const { agent, store, checkpoints } = setup();
     await store.getState().start();
