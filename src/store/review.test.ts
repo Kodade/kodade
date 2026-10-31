@@ -976,6 +976,39 @@ describe("createReviewStore — comments (M12e)", () => {
     expect(store.getState().comments.map((c) => c.body)).toEqual(["second"]);
   });
 
+  it.each(["branch", "pr"] as const)("isolates identical %s scopes across projects", async (kind) => {
+    const git = new MockGit();
+    git.responses.set("merge-base main HEAD", { stdout: "sha1\n", stderr: "" });
+    git.responses.set("rev-parse --abbrev-ref HEAD", { stdout: "feature/x\n", stderr: "" });
+    const github = new MockGithub();
+    github.responses.set("pr diff 7", { stdout: fileDiff("a.ts"), stderr: "" });
+    const store = createReviewStore({ git, github, watch: new MockWatch() });
+    await store.getState().load(ROOT);
+    await store.getState().setScope(kind === "branch" ? { kind, base: "main" } : { kind, number: 7 });
+    store.getState().addComment({ path: "a.ts", startLine: 1, endLine: 1, body: "first project" });
+    await store.getState().load("/other");
+    expect(store.getState().comments).toEqual([]);
+    store.getState().addComment({ path: "a.ts", startLine: 1, endLine: 1, body: "second project" });
+    await store.getState().load(ROOT);
+    expect(store.getState().comments.map((c) => c.body)).toEqual(["first project"]);
+  });
+
+  it("ignores an old project load that finishes after switching back", async () => {
+    const git = new DelayableGit();
+    const store = createReviewStore({ git, watch: new MockWatch() });
+    await store.getState().load(ROOT);
+    store.getState().addComment({ path: "a.ts", startLine: 1, endLine: 1, body: "retained" });
+    git.delay("diff --numstat -z");
+    const oldLoad = store.getState().load("/other");
+    expect(store.getState().comments).toEqual([]);
+    git.delay("");
+    await store.getState().load(ROOT);
+    git.resolveDelayed({ stdout: numstat([["1", "0", "other.ts"]]), stderr: "" });
+    await oldLoad;
+    expect(store.getState().projectRoot).toBe(ROOT);
+    expect(store.getState().comments.map((c) => c.body)).toEqual(["retained"]);
+  });
+
   it("preserves each scope's comments across a scope switch (session-local, per scope)", async () => {
     const git = new MockGit();
     git.responses.set("diff --numstat -z", { stdout: numstat([["1", "0", "a.ts"]]), stderr: "" });
