@@ -4,6 +4,9 @@
 
 - Preserve the restart action for a downloaded update when checking again (#111).
 - Review comments now stay with their project and review scope (#116).
+- Fixed headless agent startup hanging on large prompts: output drains before
+  input is written, cancellation stays responsive, and failed prompt writes
+  are reported (#113).
 
 - KödWork discussions preserve the completed task's result and progress, and
   rejected output feedback includes every reviewed file (#110, #117).

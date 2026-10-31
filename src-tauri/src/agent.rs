@@ -43,7 +43,8 @@ static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 // One live headless run. The Child itself lives in the waiter thread blocking
 // on wait(); cancellation goes through the retained process tree.
 struct AgentRun {
-    tree: Arc<ProcessTree>,
+    tree: Option<Arc<ProcessTree>>,
+    cancelled: bool,
     stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     token: u64,
 }
@@ -91,14 +92,45 @@ impl AgentManager {
         on_line: LineSink,
         on_exit: ExitSink,
     ) -> Result<(), String> {
-        // Hold the map lock across resolve+spawn+insert so two starts can't
-        // race one id. Everything here is a fork/exec, and no stream I/O ever
-        // takes this lock.
-        let mut runs = self.runs.lock().unwrap();
-        if runs.contains_key(&spawn.id) {
-            return Err(format!("agent run id already in use: {}", spawn.id));
+        // Reserve the id before slow shell resolution; cancellation marks the
+        // reservation until the process tree can be published.
+        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut runs = self.runs.lock().unwrap();
+            if runs.contains_key(&spawn.id) {
+                return Err(format!("agent run id already in use: {}", spawn.id));
+            }
+            runs.insert(
+                spawn.id.clone(),
+                AgentRun {
+                    tree: None,
+                    cancelled: false,
+                    stdin: Arc::new(Mutex::new(None)),
+                    token,
+                },
+            );
         }
+        let result = self.start_reserved(&spawn, shell, token, on_line, on_exit);
+        if result.is_err() {
+            let mut runs = self.runs.lock().unwrap();
+            if runs
+                .get(&spawn.id)
+                .is_some_and(|run| run.token == token && run.tree.is_none())
+            {
+                runs.remove(&spawn.id);
+            }
+        }
+        result
+    }
 
+    fn start_reserved(
+        &self,
+        spawn: &AgentSpawn,
+        shell: &ShellEnvironment,
+        token: u64,
+        on_line: LineSink,
+        on_exit: ExitSink,
+    ) -> Result<(), String> {
         let (executable, login_path) = shell
             .resolve_executable_with_login_path(&spawn.bin)
             .ok_or_else(|| format!("{} is not installed or not on PATH", spawn.bin))?;
@@ -134,16 +166,12 @@ impl AgentManager {
             .map_err(|e| format!("start {}: {e}", spawn.bin))?;
         let tree = Arc::new(ProcessTree::attach_child(&child));
 
-        let mut child_stdin = child.stdin.take();
-        if let Some(prompt) = spawn.stdin.as_ref() {
-            // Write then drop: the child sees EOF and starts its turn.
-            if let Some(handle) = child_stdin.as_mut() {
-                let _ = handle.write_all(prompt.as_bytes());
-                let _ = handle.flush();
-            }
-            child_stdin = None;
-        }
-        let stdin = Arc::new(Mutex::new(child_stdin));
+        let mut prompt_stdin = child.stdin.take();
+        let stdin = Arc::new(Mutex::new(if spawn.stdin.is_none() {
+            prompt_stdin.take()
+        } else {
+            None
+        }));
 
         let stdout = child
             .stdout
@@ -154,21 +182,38 @@ impl AgentManager {
             .take()
             .ok_or_else(|| format!("capture {} stderr", spawn.bin))?;
 
-        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-        runs.insert(
-            spawn.id.clone(),
-            AgentRun {
-                tree: tree.clone(),
-                stdin,
-                token,
-            },
-        );
-        drop(runs);
-
+        let cancelled = {
+            let mut runs = self.runs.lock().unwrap();
+            let run = runs.get_mut(&spawn.id).expect("reserved run");
+            run.tree = Some(tree.clone());
+            run.stdin = stdin;
+            run.cancelled
+        };
         let reader = spawn_line_reader(spawn.id.clone(), stdout, on_line, tree.clone());
         let errors = spawn_stderr_reader(stderr);
-        self.spawn_waiter(spawn.id, token, child, reader, errors, on_exit);
-        Ok(())
+        // Keep the child unreaped until input settles so failure cleanup
+        // cannot signal a reused PID. Both output readers are already active.
+        let result = if cancelled {
+            Err(format!("agent run {} cancelled during startup", spawn.id))
+        } else if let Some(prompt) = spawn.stdin.as_ref() {
+            prompt_stdin
+                .as_mut()
+                .ok_or_else(|| format!("capture {} stdin", spawn.bin))
+                .and_then(|handle| {
+                    handle
+                        .write_all(prompt.as_bytes())
+                        .and_then(|()| handle.flush())
+                        .map_err(|e| format!("write to agent run {}: {e}", spawn.id))
+                })
+        } else {
+            Ok(())
+        };
+        drop(prompt_stdin);
+        if result.is_err() {
+            let _ = tree.terminate();
+        }
+        self.spawn_waiter(spawn.id.clone(), token, child, reader, errors, on_exit);
+        result
     }
 
     // Write to a still-open stdin. Only meaningful for runs started WITHOUT a
@@ -211,22 +256,30 @@ impl AgentManager {
     // the frontend settles a cancelled thread through the normal path.
     pub fn cancel(&self, id: &str) -> Result<(), String> {
         let tree = {
-            let runs = self.runs.lock().unwrap();
-            match runs.get(id) {
-                Some(run) => run.tree.clone(),
+            let mut runs = self.runs.lock().unwrap();
+            match runs.get_mut(id) {
+                Some(run) => {
+                    run.cancelled = true;
+                    run.tree.clone()
+                }
                 // Cancelling an already-finished run is the common race when a
                 // user hits stop as the turn lands. Not an error.
                 None => return Ok(()),
             }
         };
-        tree.terminate()
+        tree.map_or(Ok(()), |tree| tree.terminate())
     }
 
     // Kill every live run (app shutdown). Idempotent.
     pub fn cancel_all(&self) {
         let trees: Vec<Arc<ProcessTree>> = {
-            let runs = self.runs.lock().unwrap();
-            runs.values().map(|run| run.tree.clone()).collect()
+            let mut runs = self.runs.lock().unwrap();
+            runs.values_mut()
+                .filter_map(|run| {
+                    run.cancelled = true;
+                    run.tree.clone()
+                })
+                .collect()
         };
         for tree in trees {
             let _ = tree.terminate();
@@ -373,6 +426,152 @@ mod tests {
             let _ = exit_tx.send((id, code, stderr));
         });
         (on_line, on_exit, line_rx, exit_rx)
+    }
+
+    // Run start on a worker so a pipe deadlock fails with a timeout.
+    #[cfg(unix)]
+    fn start_script(
+        manager: &AgentManager,
+        script: &str,
+    ) -> (
+        mpsc::Receiver<Result<(), String>>,
+        mpsc::Receiver<(String, String)>,
+        mpsc::Receiver<(String, Option<i32>, String)>,
+    ) {
+        let manager = manager.clone();
+        let script = script.to_string();
+        let (on_line, on_exit, lines, exits) = sinks();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let shell = ShellEnvironment::new("/bin/sh".into(), ShellKind::Posix, "/tmp".into());
+            let result = manager.start_with_shell(
+                AgentSpawn {
+                    id: "large-input".into(),
+                    cwd: "/tmp".into(),
+                    bin: "sh".into(),
+                    args: vec!["-c".into(), script],
+                    stdin: Some("p".repeat(2 * 1024 * 1024)),
+                },
+                &shell,
+                on_line,
+                on_exit,
+            );
+            let _ = tx.send(result);
+        });
+        (rx, lines, exits)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cancellation_during_shell_resolution_is_not_lost() {
+        let fixture = tempfile::tempdir().unwrap();
+        let marker = fixture.path().join("resolving");
+        let release = fixture.path().join("release");
+        let wrapper = fixture.path().join("shell");
+        write_executable(&wrapper, &format!(
+            "#!/bin/sh\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\n[ \"$1\" = -l ] && shift\nexec /bin/sh \"$@\"\n",
+            marker.display(), release.display()));
+        let manager = AgentManager::new();
+        let worker = manager.clone();
+        let (on_line, on_exit, _, exits) = sinks();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let shell = ShellEnvironment::new(wrapper, ShellKind::Posix, "/tmp".into());
+            let _ = tx.send(worker.start_with_shell(
+                AgentSpawn {
+                    id: "resolving".into(),
+                    cwd: "/tmp".into(),
+                    bin: "sh".into(),
+                    args: vec!["-c".into(), "sleep 30".into()],
+                    stdin: None,
+                },
+                &shell,
+                on_line,
+                on_exit,
+            ));
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists());
+        // These need the map lock while resolution is still blocked.
+        assert!(manager.is_live("resolving"));
+        manager.cancel_all();
+        std::fs::write(release, "").unwrap();
+        assert!(rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap_err()
+            .contains("cancelled"));
+        exits.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(!manager.is_live("resolving"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn drains_both_pipes_before_writing_large_prompt() {
+        let manager = AgentManager::new();
+        let (started, lines, exits) = start_script(&manager,
+            "dd if=/dev/zero bs=1048576 count=1 2>/dev/null; printf '\n'; dd if=/dev/zero bs=1048576 count=1 >&2 2>/dev/null; wc -c");
+        let result = started.recv_timeout(Duration::from_secs(10));
+        if result.is_err() {
+            manager.cancel_all();
+        }
+        result.expect("start must not deadlock").unwrap();
+        assert_eq!(
+            exits.recv_timeout(Duration::from_secs(10)).unwrap().1,
+            Some(0)
+        );
+        let output: Vec<_> = lines.try_iter().collect();
+        assert_eq!(output.last().unwrap().1.trim(), "2097152");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_prompt_write_is_reported_and_child_is_reaped() {
+        let manager = AgentManager::new();
+        let (started, _, exits) = start_script(&manager, "exec 0<&-; exec sleep 30");
+        let result = started.recv_timeout(Duration::from_secs(10));
+        if result.is_err() {
+            manager.cancel_all();
+        }
+        assert!(result.unwrap().unwrap_err().contains("write to agent run"));
+        exits.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(!manager.is_live("large-input"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn blocked_prompt_can_be_cancelled_and_duplicate_start_is_rejected() {
+        let manager = AgentManager::new();
+        let (started, lines, exits) = start_script(&manager, "echo ready; exec sleep 30");
+        assert_eq!(
+            lines.recv_timeout(Duration::from_secs(10)).unwrap().1,
+            "ready"
+        );
+        let (on_line, on_exit, _, _) = sinks();
+        let error = manager
+            .start(
+                AgentSpawn {
+                    id: "large-input".into(),
+                    cwd: "/tmp".into(),
+                    bin: "sh".into(),
+                    args: vec![],
+                    stdin: None,
+                },
+                on_line,
+                on_exit,
+            )
+            .unwrap_err();
+        assert!(error.contains("already in use"));
+        manager.cancel("large-input").unwrap();
+        assert!(started
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .is_err());
+        exits.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(!manager.is_live("large-input"));
     }
 
     #[test]
