@@ -7,6 +7,7 @@
 - Fixed headless agent startup hanging on large prompts: output drains before
   input is written, cancellation stays responsive, and failed prompt writes
   are reported (#113).
+- Preserve unsaved editor buffers and the active tab when switching projects (#114).
 
 - KödWork discussions preserve the completed task's result and progress, and
   rejected output feedback includes every reviewed file (#110, #117).

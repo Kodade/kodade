@@ -268,13 +268,13 @@ export function createFilesStore(deps: FilesDeps) {
     // Per-path stash of unsaved edits for files switched away from while
     // dirty/conflicted. Restored on re-select so switching files never discards
     // work. Cleared for a path when it's saved or its conflict is resolved.
-    const stash = new Map<string, EditorStash>();
+    let stash = new Map<string, EditorStash>();
+    const stashesByRoot = new Map<string, Map<string, EditorStash>>();
+    const activeTabsByRoot = new Map<string, Tab>();
+    let selectionGen = 0;
 
-    // Path of the write currently in flight (status === "saving"), if any. A
-    // rename during an in-flight save rewrites this via followRename so the
-    // save's completion compares against the file's CURRENT path and doesn't
-    // strand the editor in "saving" (Fix 7). null when no save is in flight.
-    let savingPath: string | null = null;
+    // Track each in-flight write separately across project switches and renames.
+    const saves = new Set<{ path: string; root: string | null }>();
 
     // Old paths of in-flight rename/trash ops. reconcileOpenFile's missing-file
     // branch ignores a path in this set: the op's own completion owns the
@@ -378,13 +378,14 @@ export function createFilesStore(deps: FilesDeps) {
     // Handle an external filesystem change to the currently-open file: reconcile
     // the editor against fresh disk content. Runs only for the selected path.
     const reconcileOpenFile = async (path: string) => {
+      const selection = selectionGen;
       let read: FileRead;
       try {
         read = await deps.files.readFile(path);
       } catch {
         // Read-back failed. If the file still exists this may be a transient
         // error, but a delete is the common case; treat it as delete-under-edit.
-        if (get().selectedPath !== path) return;
+        if (selection !== selectionGen || get().selectedPath !== path) return;
         // A rename/trash op for this path (or an ancestor) is in flight: the
         // read fails only because the op is mid-move. The op's own completion
         // (followRename / trash's reconcile) owns the bookkeeping — a watcher
@@ -410,7 +411,7 @@ export function createFilesStore(deps: FilesDeps) {
         return;
       }
       // A newer selection superseded this file while the read was in flight.
-      if (get().selectedPath !== path) return;
+      if (selection !== selectionGen || get().selectedPath !== path) return;
       // Only text files participate in the edit/conflict flow.
       if (read.kind !== "text") return;
       const disk = read.content;
@@ -458,6 +459,7 @@ export function createFilesStore(deps: FilesDeps) {
     // Close the open file: clear the selection and reset the editor machine.
     // Used when a clean, open file is deleted on disk.
     const closeEditor = () => {
+      selectionGen++;
       lastSaved = null;
       const current = get();
       const activeTab =
@@ -501,6 +503,62 @@ export function createFilesStore(deps: FilesDeps) {
       }
     };
 
+    // Snapshot before any asynchronous watcher work so rapid switches cannot
+    // discard the outgoing editor or revive an older selection.
+    const switchScope = (scope: string | null, remote: boolean) => {
+      const oldRoot = activeRoot();
+      const old = get();
+      if (oldRoot) {
+        if (old.activeTab) activeTabsByRoot.set(oldRoot, old.activeTab);
+        else activeTabsByRoot.delete(oldRoot);
+        if (
+          old.selectedPath &&
+          old.fileContent?.kind === "text" &&
+          (old.editorStatus === "dirty" ||
+            old.editorStatus === "conflict" ||
+            old.editorStatus === "saving")
+        ) {
+          stash.set(old.selectedPath, {
+            buffer: old.buffer,
+            savedContent: old.savedContent,
+            status: old.editorStatus === "conflict" ? "conflict" : "dirty",
+          });
+        }
+      }
+      rootGen++;
+      selectionGen++;
+      lastSaved = null;
+      remoteScope = remote ? scope : null;
+      stash = scope ? (stashesByRoot.get(scope) ?? new Map()) : new Map();
+      if (scope) stashesByRoot.set(scope, stash);
+      const tabs = scope ? (tabsByRoot.get(scope) ?? []) : [];
+      set({
+        rootPath: remote ? null : scope,
+        children: {},
+        expanded: scope && !remote ? { [scope]: true } : {},
+        selectedPath: null,
+        fileContent: null,
+        loading: false,
+        editorStatus: "clean",
+        buffer: "",
+        savedContent: "",
+        diskContent: null,
+        saveError: null,
+        deletedOnDisk: false,
+        dirtyPaths: {},
+        filter: "",
+        edit: null,
+        opError: null,
+        openTabs: tabs,
+        activeTab: null,
+        tabModes: scope ? (tabModesByRoot.get(scope) ?? {}) : {},
+      });
+      syncDirtyPaths();
+      const active = scope ? activeTabsByRoot.get(scope) : undefined;
+      if (active && tabs.some((tab) => tabsEqual(tab, active)))
+        get().activateTab(active);
+    };
+
     return {
       rootPath: null,
       children: {},
@@ -525,88 +583,30 @@ export function createFilesStore(deps: FilesDeps) {
 
       async setRoot(root: string | null) {
         if (get().rootPath === root && remoteScope === null) return;
-        remoteScope = null;
-        const gen = ++rootGen; // this call owns the tree until a newer one starts
-        // Switching projects abandons the old project's editor/stash state.
-        stash.clear();
-        lastSaved = null;
-        // Stop the previous project's watcher before anything else.
+        switchScope(root, false);
+        const gen = rootGen;
         await deps.files.unwatch(gen);
-        if (gen !== rootGen) return; // superseded mid-switch (A→B→A)
-
-        if (!root) {
-          set({
-            rootPath: null,
-            children: {},
-            expanded: {},
-            selectedPath: null,
-            fileContent: null,
-            dirtyPaths: {},
-            filter: "",
-            edit: null,
-            opError: null,
-            openTabs: [],
-            activeTab: null,
-            tabModes: {},
-          });
-          return;
-        }
-
-        // Reset tree for the new project; keep root expanded by default. A new
-        // project clears any in-flight edit, filter, and op error. Swap the
-        // visible tab set to whatever this root already had open (empty on first
-        // visit; restoreTabs may seed it after a restart).
-        set({
-          rootPath: root,
-          children: {},
-          expanded: { [root]: true },
-          selectedPath: null,
-          fileContent: null,
-          filter: "",
-          edit: null,
-          opError: null,
-          openTabs: tabsByRoot.get(root) ?? [],
-          activeTab: null,
-          tabModes: tabModesByRoot.get(root) ?? {},
-        });
-
+        if (gen !== rootGen || !root) return;
         await deps.files.watch(root, gen);
-        if (gen !== rootGen) return; // a newer switch owns the watcher now
-        // Load the root listing (tolerate an unreadable root — empty tree).
+        if (gen !== rootGen) return;
         try {
           const entries = await deps.files.listDir(root);
-          if (gen !== rootGen) return;
-          set((s) => ({ children: { ...s.children, [root]: entries } }));
+          if (gen === rootGen)
+            set((s) => ({ children: { ...s.children, [root]: entries } }));
         } catch {
           /* leave root empty */
         }
       },
 
       async setRemoteScope(projectId: string) {
-        if (!projectId || (get().rootPath === null && remoteScope === projectId))
+        if (
+          !projectId ||
+          (get().rootPath === null && remoteScope === projectId)
+        )
           return;
-        const gen = ++rootGen;
-        stash.clear();
-        lastSaved = null;
+        switchScope(projectId, true);
+        const gen = rootGen;
         await deps.files.unwatch(gen);
-        if (gen !== rootGen) return;
-        remoteScope = projectId;
-        const tabs = tabsByRoot.get(projectId) ?? [];
-        set({
-          rootPath: null,
-          children: {},
-          expanded: {},
-          selectedPath: null,
-          fileContent: null,
-          loading: false,
-          dirtyPaths: {},
-          filter: "",
-          edit: null,
-          opError: null,
-          openTabs: tabs,
-          activeTab: tabs.at(-1) ?? null,
-          tabModes: {},
-        });
       },
 
       async toggleDir(path: string) {
@@ -654,6 +654,7 @@ export function createFilesStore(deps: FilesDeps) {
         // through to the "Binary file" placeholder (the reported bug). The tree
         // marks dirs via isDir on each entry; the root is always a dir too.
         if (isKnownDir(prev, path)) return;
+        const selection = ++selectionGen;
         deps.onActivity?.({ type: "file-opened", root: prev.rootPath });
 
         // Stash the file we're leaving if it has unsaved work, so switching back
@@ -696,7 +697,7 @@ export function createFilesStore(deps: FilesDeps) {
         try {
           const result = await deps.files.readFile(path);
           // A newer selection may have superseded this read.
-          if (get().selectedPath !== path) return;
+          if (selection !== selectionGen || get().selectedPath !== path) return;
           set({ fileContent: result, loading: false });
           if (root) deps.onFileOpened?.(root, path);
           if (result.kind !== "text") return;
@@ -740,8 +741,19 @@ export function createFilesStore(deps: FilesDeps) {
             openText(result.content);
           }
         } catch {
-          if (get().selectedPath !== path) return;
-          set({ fileContent: { kind: "binary" }, loading: false });
+          if (selection !== selectionGen || get().selectedPath !== path) return;
+          const saved = stash.get(path);
+          if (saved) {
+            set({
+              fileContent: { kind: "text", content: saved.savedContent },
+              loading: false,
+              buffer: saved.buffer,
+              savedContent: saved.savedContent,
+              editorStatus: "conflict",
+              diskContent: null,
+              deletedOnDisk: true,
+            });
+          } else set({ fileContent: { kind: "binary" }, loading: false });
         }
       },
 
@@ -776,6 +788,10 @@ export function createFilesStore(deps: FilesDeps) {
           set({ buffer: text });
           return;
         }
+        if (text === s.savedContent) {
+          stash.delete(s.selectedPath);
+          syncDirtyPaths();
+        }
         set({
           buffer: text,
           editorStatus: text === s.savedContent ? "clean" : "dirty",
@@ -802,33 +818,63 @@ export function createFilesStore(deps: FilesDeps) {
         // Capture the exact bytes we're writing NOW. Typing during the in-flight
         // write must not be marked clean by this save's completion.
         const savedBuffer = s.buffer;
+        if ([...saves].some((save) => save.root === root && save.path === path))
+          return;
 
         // Track the in-flight save's path so a rename during the write (which
-        // rewrites savingPath via followRename) doesn't strand us in "saving"
+        // updates the tracked path via followRename) doesn't strand us in "saving"
         // (Fix 7). The write itself targets the ORIGINAL path (that's where the
         // bytes go); completion reconciles against the possibly-rewritten path.
-        savingPath = path;
+        const save = { path, root };
+        const saveStash = stash;
+        saves.add(save);
         set({ editorStatus: "saving", saveError: null });
         try {
           await deps.files.writeFile(path, savedBuffer);
           deps.onFileMutated?.(path);
           deps.onActivity?.({ type: "file-saved", root });
-          // The file may have been renamed mid-write (savingPath rewritten) or a
+          // The file may have been renamed mid-write (tracked path rewritten) or a
           // different file selected. Reconcile against the current save path.
-          const curPath = savingPath;
+          const curPath = save.path;
           if (root && curPath) deps.onFileSaved?.(root, curPath);
-          if (curPath === null || get().selectedPath !== curPath) {
+          if (
+            activeRoot() !== root ||
+            stash !== saveStash ||
+            get().selectedPath !== curPath ||
+            get().loading
+          ) {
             // We saved a path that's no longer the active editor (the user
             // switched away / closed the tab mid-save — its buffer was stashed).
             // The write SUCCEEDED, so if the stash still holds exactly the bytes
             // we just wrote, it's clean now: drop it so no stale dirty dot lingers
             // (Fix: close-during-save). A stash that has since diverged is left.
             if (curPath !== null) {
-              const stashed = stash.get(curPath);
+              const stashed = saveStash.get(curPath);
               if (stashed && stashed.buffer === savedBuffer) {
-                stash.delete(curPath);
-                syncDirtyPaths();
+                saveStash.delete(curPath);
+              } else if (stashed && stashed.status !== "conflict") {
+                saveStash.set(curPath, {
+                  ...stashed,
+                  savedContent: savedBuffer,
+                });
               }
+              if (
+                activeRoot() === root &&
+                stash === saveStash &&
+                get().selectedPath === curPath &&
+                get().loading
+              ) {
+                const active = get().activeTab;
+                set({ selectedPath: null });
+                suppressOpenIntent = true;
+                try {
+                  void get().selectFile(curPath);
+                  if (active && active.kind !== "file") set({ activeTab: active });
+                } finally {
+                  suppressOpenIntent = false;
+                }
+              }
+              syncDirtyPaths();
             }
             return;
           }
@@ -844,7 +890,7 @@ export function createFilesStore(deps: FilesDeps) {
           // path is matched.
           lastSaved = { path: curPath, content: savedBuffer };
           // The write succeeded — this path has no unsaved work to stash anymore.
-          stash.delete(curPath);
+          saveStash.delete(curPath);
           set({
             savedContent: savedBuffer,
             diskContent: savedBuffer,
@@ -857,11 +903,17 @@ export function createFilesStore(deps: FilesDeps) {
           syncDirtyPaths();
         } catch (err) {
           // Reconcile against the current save path (a rename may have moved us).
-          const curPath = savingPath;
+          const curPath = save.path;
           // Path is no longer the active editor (switched away / closed mid-save):
           // the write FAILED, so leave the stash untouched — the buffer is
           // recoverable when the file is reopened (Fix: close-during-save).
-          if (curPath === null || get().selectedPath !== curPath) return;
+          if (
+            activeRoot() !== root ||
+            stash !== saveStash ||
+            get().selectedPath !== curPath ||
+            get().loading
+          )
+            return;
           // Write failed (read-only file, missing dir): keep the buffer intact
           // and surface the error. Disk was never truncated (atomic write). The
           // buffer still differs from disk, so we're back to dirty.
@@ -870,10 +922,8 @@ export function createFilesStore(deps: FilesDeps) {
             saveError: err instanceof Error ? err.message : String(err),
           });
         } finally {
-          // This save is no longer in flight (whether it committed, was
-          // superseded, or failed) — stop tracking its path. Only one save runs
-          // at a time (the "saving" guard above), so this always clears our own.
-          savingPath = null;
+          // Other projects can have their own writes in flight.
+          saves.delete(save);
         }
       },
 
@@ -1171,8 +1221,10 @@ export function createFilesStore(deps: FilesDeps) {
         else set({ openTabs: next });
         if (tab.kind === "file") removeTabMode(tab.path);
         if (tab.kind === "browser") deps.onBrowserTabClosed?.();
-        if (tab.kind === "remote-preview") deps.onRemotePreviewClosed?.(tab.host, tab.path);
-        if (tab.kind === "remote-files") deps.onRemoteFilesClosed?.(tab.host, tab.path);
+        if (tab.kind === "remote-preview")
+          deps.onRemotePreviewClosed?.(tab.host, tab.path);
+        if (tab.kind === "remote-files")
+          deps.onRemoteFilesClosed?.(tab.host, tab.path);
         // Spec (#30): closing a dirty tab must NOT silently discard edits — the
         // per-path stash keeps them, so reopening the file restores the buffer
         // (and the tree keeps its dirty dot). Clean tabs have no stash entry.
@@ -1212,10 +1264,7 @@ export function createFilesStore(deps: FilesDeps) {
       activateTab(tab: Tab) {
         const root = activeRoot();
         const tabs = root ? (tabsByRoot.get(root) ?? []) : get().openTabs;
-        if (
-          !tabs.some((candidate) => tabsEqual(candidate, tab))
-        )
-          return;
+        if (!tabs.some((candidate) => tabsEqual(candidate, tab))) return;
         // Activating an already-open tab is never an open GESTURE: it is the
         // tab strip, a close picking a neighbor, a cycle shortcut, or a
         // restore. openIntentCount stays put so a surface watching for "the
@@ -1364,6 +1413,14 @@ export function createFilesStore(deps: FilesDeps) {
         // onTabsChanged here, that would re-persist a root that no longer exists.)
         const had = tabsByRoot.delete(root);
         tabModesByRoot.delete(root);
+        activeTabsByRoot.delete(root);
+        stashesByRoot.delete(root);
+        if (activeRoot() === root) {
+          stash = new Map();
+          stashesByRoot.set(root, stash);
+          closeEditor();
+          syncDirtyPaths();
+        }
         if (!had) return;
         if (activeRoot() === root)
           set({ openTabs: [], activeTab: null, tabModes: {} });
@@ -1463,9 +1520,10 @@ export function createFilesStore(deps: FilesDeps) {
       }
       // Move an in-flight save's tracked path so its completion reconciles
       // against the new location instead of stranding in "saving" (Fix 7).
-      if (savingPath) {
-        const next = remapPath(savingPath, from, to);
-        if (next) savingPath = next;
+      for (const save of saves) {
+        if (save.root !== activeRoot()) continue;
+        const next = remapPath(save.path, from, to);
+        if (next) save.path = next;
       }
       // Swap the open selection if it (or its ancestor dir) was renamed.
       const open = get().selectedPath;
