@@ -213,20 +213,21 @@ export function createKodworkLedger({
           "Keep changes scoped to this feedback and preserve the review gate.",
         ].join("\n");
       }
-      const first = diffs[0];
-      const path = first.newPath ?? first.oldPath ?? review.files[0]?.relativePath ?? "output";
-      const comment: ReviewComment = {
-        path,
-        startLine: 1,
-        endLine: Math.max(
-          1,
-          ...first.hunks.flatMap((hunk) =>
-            hunk.lines.map((line) => line.newLine ?? line.oldLine ?? 1),
+      const comments: ReviewComment[] = review.files.map((file) => {
+        const diff = diffs.find((item) => (item.newPath ?? item.oldPath) === file.relativePath);
+        return {
+          path: file.relativePath,
+          startLine: 1,
+          endLine: Math.max(
+            1,
+            ...(diff?.hunks.flatMap((hunk) =>
+              hunk.lines.map((line) => line.newLine ?? line.oldLine ?? 1),
+            ) ?? []),
           ),
-        ),
-        body: feedback,
-      };
-      return compileFixPrompt([comment], diffs);
+          body: feedback,
+        };
+      });
+      return compileFixPrompt(comments, diffs);
     },
 
     prepareRestore(task) {

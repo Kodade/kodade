@@ -4,6 +4,31 @@ import { newTask } from "./model";
 import { createKodworkLedger } from "./ledger";
 
 describe("KödWork ledger", () => {
+  it("includes every ledger file in reject feedback when only one has an unstaged diff", async () => {
+    const ipc = new MockKodworkIpc();
+    const git = new MockGit();
+    ipc.reviews.set("task-feedback", {
+      kind: "git", fingerprint: "mixed-feedback",
+      files: ["unstaged.ts", "staged.ts", "new.ts"].map((relativePath) => ({
+        path: `/repo/${relativePath}`, relativePath, change: "modified" as const,
+        binary: false, before: "old", after: "new", adds: 1, dels: 1,
+      })),
+    });
+    git.responses.set("diff --no-color -- unstaged.ts", { stdout: [
+      "diff --git a/unstaged.ts b/unstaged.ts", "--- a/unstaged.ts", "+++ b/unstaged.ts",
+      "@@ -1 +1 @@", "-old", "+new", "",
+    ].join("\n"), stderr: "" });
+    const ledger = createKodworkLedger({ ipc, git });
+    const task = newTask("task-feedback", "project-1", "/repo", "claude", 1);
+    await ledger.begin(task);
+    const review = await ledger.finish(task);
+    const prompt = await ledger.compileFeedback({ ...review, feedback: "Fix all output" });
+    expect(prompt).toContain("unstaged.ts");
+    expect(prompt).toContain("staged.ts");
+    expect(prompt).toContain("new.ts");
+    expect(prompt).toContain("+new");
+    expect(prompt.match(/Fix all output/g)).toHaveLength(3);
+  });
   it("reuses porcelain-v2 status to present a git rename as one change", async () => {
     const ipc = new MockKodworkIpc();
     const git = new MockGit();

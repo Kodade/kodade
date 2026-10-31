@@ -205,6 +205,10 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     // `discussion`, never in `summary` — a follow-up question must never
     // overwrite the task's final report.
     kind: "task" | "discuss";
+    previous: Pick<KodworkTask, "state" | "error" | "needsLogin" | "startedAt" | "settledAt" | "review" | "reviewOutcomeState"> | null;
+    starting: boolean;
+    settling: boolean;
+    discussionError: string | null;
   };
   const runs = new Map<string, Run>();
   const runByRunId = new Map<string, string>(); // runId → taskId
@@ -300,12 +304,14 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           patch(taskId, (current) => ({ ...current, statusText: clampStatus(event.text) }));
           return;
         case "plan":
+          if (run.kind === "discuss") return;
           patch(taskId, (current) => ({
             ...current,
             plan: event.items.slice(0, MAX_PLAN_ITEMS),
           }));
           return;
         case "tool-call-started": {
+          if (run.kind === "discuss") return;
           const id = newId();
           run.toolLines.set(event.callId, id);
           patch(taskId, (current) => ({
@@ -332,6 +338,11 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           return;
         }
         case "auth-error":
+          if (run.kind === "discuss") {
+            run.failed = true;
+            run.discussionError = event.message;
+            return;
+          }
           patch(taskId, (current) => ({
             ...current,
             needsLogin: true,
@@ -352,6 +363,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           return;
         }
         case "tool-denied":
+          if (run.kind === "discuss") return;
           patch(taskId, (current) => ({
             ...current,
             deniedTools: [...current.deniedTools, { tool: event.tool, detail: event.detail }].slice(-50),
@@ -359,6 +371,10 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           return;
         case "error":
           run.failed = true;
+          if (run.kind === "discuss") {
+            run.discussionError = event.message;
+            return;
+          }
           patch(taskId, (current) => ({ ...current, error: event.message }));
           return;
         case "done":
@@ -372,22 +388,27 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     // Close out a run: decide the terminal state, notify the inbox, persist,
     // and (on success only) write the KödMem completion checkpoint.
     const settle = (taskId: string, run: Run) => {
-      if (runs.get(taskId)?.runId !== run.runId) return;
-      runs.delete(taskId);
+      if (runs.get(taskId) !== run || run.settling) return;
+      run.settling = true;
       if (run.permissionTimer) clearTimer(run.permissionTimer);
       runByRunId.delete(run.runId);
       patch(taskId, (task) => ({
         ...task,
-        state: run.cancelled
+        state: run.previous ? (deps.ledger ? "running" : run.previous.state) : (run.cancelled
           ? "cancelled"
           : task.needsLogin
             ? "needs-user"
             : run.failed
               ? "failed"
-              : "done",
+              : "done"),
         statusText: null,
         usage: addUsage(task.usage, run.usage),
-        settledAt: now(),
+        settledAt: run.previous ? run.previous.settledAt : now(),
+        ...(run.previous ? {
+          error: run.previous.error,
+          needsLogin: run.previous.needsLogin,
+          startedAt: run.previous.startedAt,
+        } : {}),
         permissionRequest: null,
         review: deps.ledger
           ? task.review
@@ -407,15 +428,30 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           }));
         }
       }
+      if (run.kind === "discuss" && run.discussionError && !run.cancelled) {
+        patch(taskId, (current) => ({
+          ...current,
+          discussion: [...current.discussion, {
+            role: "agent" as const,
+            text: `Could not complete discussion: ${run.discussionError}`,
+            at: now(),
+          }].slice(-MAX_DISCUSSION_ENTRIES),
+        }));
+      }
       const task = get().tasks[taskId];
       if (task && deps.ledger) {
         const outcomeState =
-          task.state === "draft" || task.state === "running"
+          run.previous?.state === "done" || run.previous?.state === "failed" ||
+          run.previous?.state === "cancelled" || run.previous?.state === "needs-user"
+            ? run.previous.state
+            : task.state === "draft" || task.state === "running"
             ? "failed"
             : task.state;
-        void finishReview(task, run.turn, outcomeState);
+        void finishReview(task, run.turn, outcomeState, run.previous)
+          .finally(() => { if (runs.get(taskId) === run) runs.delete(taskId); });
         return;
       }
+      runs.delete(taskId);
       if (task) {
         deps.activity?.working?.(task.projectId, taskId, null);
         deps.activity?.attention?.(
@@ -429,7 +465,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         );
         // Success is the only outcome worth remembering; a failed or cancelled
         // run left nothing done.
-        if (task.state === "done") void checkpoint(task, run.turn);
+        if (task.state === "done" && run.kind !== "discuss") void checkpoint(task, run.turn);
       }
       void persistNow(taskId);
     };
@@ -438,6 +474,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       task: KodworkTask,
       turn: number,
       outcomeState: "done" | "failed" | "cancelled" | "needs-user",
+      previous: Run["previous"] = null,
     ) => {
       try {
         const collected = await deps.ledger!.finish(task);
@@ -450,6 +487,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           })),
         };
         humanChanges.delete(task.id);
+        if (review.files.length === 0) await deps.ledger!.accept(task.id);
         patch(task.id, (current) => ({
           ...current,
           review:
@@ -474,17 +512,20 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
                 : null,
         );
         if (review.files.length === 0) {
-          await deps.ledger!.accept(task.id);
-          if (current.state === "done") void checkpoint(current, turn);
+          if (current.state === "done" && !previous) void checkpoint(current, turn);
         }
         void persistNow(current.id);
       } catch (error) {
         patch(task.id, (current) => ({
           ...current,
-          state: "failed",
-          error: `Could not collect task output: ${
+          state: previous ? outcomeState : "failed",
+          ...(previous ? { review: previous.review, reviewOutcomeState: previous.reviewOutcomeState, discussion: [...current.discussion, {
+            role: "agent" as const,
+            text: `Could not collect discussion output: ${error instanceof Error ? error.message : String(error)}`,
+            at: now(),
+          }].slice(-MAX_DISCUSSION_ENTRIES) } : { error: `Could not collect task output: ${
             error instanceof Error ? error.message : String(error)
-          }`,
+          }` }),
         }));
         const current = get().tasks[task.id];
         if (current) {
@@ -494,6 +535,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
             current.id,
             "output review failed",
           );
+          void persistNow(current.id);
         }
       }
     };
@@ -530,7 +572,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     const onLine = (runId: string, line: string) => {
       const taskId = runByRunId.get(runId) ?? taskIdOfRun(runId);
       const run = runs.get(taskId);
-      if (!run || run.runId !== runId) return; // a stale/cancelled run
+      if (!run || run.runId !== runId || run.settling) return; // a stale/settled run
       for (const event of run.parser.line(line)) applyEvent(taskId, run, event);
       persistDebounced(taskId);
     };
@@ -538,7 +580,7 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
     const onExit = (runId: string, code: number | null, stderr: string) => {
       const taskId = runByRunId.get(runId) ?? taskIdOfRun(runId);
       const run = runs.get(taskId);
-      if (!run || run.runId !== runId) return;
+      if (!run || run.runId !== runId || run.settling) return;
       for (const event of run.parser.end(code, stderr)) applyEvent(taskId, run, event);
       // `end` always yields a `done`, but settle defensively — a task must
       // never be stuck "running" after its process is gone.
@@ -558,31 +600,19 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       if (!task || runs.has(taskId) || !prompt.trim()) return;
       const adapter = adapters(task.providerId);
       if (!adapter) {
-        patch(taskId, (current) => ({
+        const message = `${task.providerId} is not yet supported in KödWork.`;
+        patch(taskId, (current) => kind === "discuss" ? {
           ...current,
-          error: `${task.providerId} is not yet supported in KödWork.`,
-        }));
+          discussion: [...current.discussion,
+            { role: "user" as const, text: prompt, at: now() },
+            { role: "agent" as const, text: message, at: now() },
+          ].slice(-MAX_DISCUSSION_ENTRIES),
+        } : { ...current, error: message });
         void persistNow(taskId);
         return;
       }
       const cwd = task.folder || deps.projectRoot(task.projectId);
       if (!cwd) return;
-
-      if (deps.ledger) {
-        try {
-          await deps.ledger.begin(task);
-          humanChanges.set(task.id, new Set());
-        } catch (error) {
-          patch(taskId, (current) => ({
-            ...current,
-            state: "failed",
-            error: `Could not start output ledger: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          }));
-          return;
-        }
-      }
 
       const turn = (turns.get(taskId) ?? 0) + 1;
       turns.set(taskId, turn);
@@ -600,6 +630,14 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         interactive: false,
         permissionTimer: null,
         kind,
+        previous: kind === "discuss" ? {
+          state: task.state, error: task.error, needsLogin: task.needsLogin,
+          startedAt: task.startedAt, settledAt: task.settledAt,
+          review: task.review, reviewOutcomeState: task.reviewOutcomeState,
+        } : null,
+        starting: true,
+        settling: false,
+        discussionError: null,
       };
       runs.set(taskId, run);
       runByRunId.set(runId, taskId);
@@ -622,6 +660,10 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           feedback: "",
         },
         reviewOutcomeState: null,
+        ...(kind === "discuss" ? {
+          discussion: [...current.discussion, { role: "user" as const, text: prompt, at: now() }]
+            .slice(-MAX_DISCUSSION_ENTRIES),
+        } : {}),
         ...(resetProgress
           ? {
               plan: [],
@@ -641,17 +683,55 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
       deps.activity?.streamed?.(task.projectId, taskId);
       void persistNow(taskId);
 
-      const spawn = adapter.spawn({
-        prompt,
-        cwd,
-        resumeId,
-        model: null,
-        access: task.access,
-        ambient: deps.ambientPrompt?.() ?? null,
-        interactive: true,
-      });
-      run.interactive = spawn.initialInput !== undefined;
+      if (deps.ledger) {
+        try {
+          humanChanges.set(task.id, new Set());
+          await deps.ledger.begin(task);
+          if (runs.get(taskId) !== run) {
+            await deps.ledger.accept(taskId);
+            return;
+          }
+        } catch (error) {
+          if (runs.get(taskId) !== run) return;
+          humanChanges.delete(taskId);
+          runs.delete(taskId);
+          runByRunId.delete(runId);
+          const message = `Could not start output ledger: ${error instanceof Error ? error.message : String(error)}`;
+          patch(taskId, (current) => run.previous ? {
+            ...current, ...run.previous, statusText: null,
+            discussion: [...current.discussion, { role: "agent" as const, text: message, at: now() }]
+              .slice(-MAX_DISCUSSION_ENTRIES),
+          } : {
+            ...current,
+            state: run.cancelled ? "cancelled" : "failed",
+            error: message,
+            statusText: null,
+            settledAt: now(),
+            review: task.review,
+            reviewOutcomeState: task.reviewOutcomeState,
+          });
+          deps.activity?.working?.(task.projectId, taskId, null);
+          void persistNow(taskId);
+          return;
+        }
+      }
+      if (run.cancelled) {
+        run.starting = false;
+        settle(taskId, run);
+        return;
+      }
+
       try {
+        const spawn = adapter.spawn({
+          prompt,
+          cwd,
+          resumeId,
+          model: null,
+          access: task.access,
+          ambient: deps.ambientPrompt?.() ?? null,
+          interactive: true,
+        });
+        run.interactive = spawn.initialInput !== undefined;
         await deps.agent.start({
           id: runId,
           cwd,
@@ -659,6 +739,12 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
           args: spawn.args,
           ...(spawn.stdin === undefined ? {} : { stdin: spawn.stdin }),
         });
+        run.starting = false;
+        if (run.settling) return;
+        if (runs.get(taskId) !== run || run.cancelled) {
+          await deps.agent.cancel({ id: runId });
+          return;
+        }
         if (spawn.initialInput !== undefined) {
           await deps.agent.send({ id: runId, data: spawn.initialInput });
         }
@@ -968,8 +1054,9 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
 
       async cancelTask(taskId: string) {
         const run = runs.get(taskId);
-        if (!run) return;
+        if (!run || run.settling) return;
         run.cancelled = true;
+        if (run.starting) return;
         try {
           await deps.agent.cancel({ id: run.runId });
         } catch (error) {
@@ -1147,14 +1234,8 @@ export function createKodworkStore(deps: KodworkDeps): StoreApi<KodworkState> {
         // No resume id means no provider session to resume onto — the caller
         // (KodworkPane) shows a disabled composer explaining this rather than
         // calling in first place, but guard here too for direct callers.
-        if (!task || !trimmed || !task.resumeId || runs.has(taskId)) return;
-        patch(taskId, (current) => ({
-          ...current,
-          discussion: [
-            ...current.discussion,
-            { role: "user" as const, text: trimmed, at: now() },
-          ].slice(-MAX_DISCUSSION_ENTRIES),
-        }));
+        if (!task || !trimmed || !task.resumeId || runs.has(taskId) ||
+          task.state === "running" || task.review.status === "pending") return;
         await spawnRun(taskId, trimmed, task.resumeId, false, "discuss");
       },
 

@@ -250,4 +250,74 @@ describe("KödWork output review gate", () => {
       text: "Why 'obsolete.md'?",
     });
   });
+
+  it("reserves a discussion during ledger setup and cancels it before the agent starts", async () => {
+    const ctx = setup();
+    await runToReview(ctx);
+    await ctx.store.getState().acceptReview("task-1");
+    let release!: () => void;
+    vi.mocked(ctx.ledger.begin).mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    vi.mocked(ctx.ledger.finish).mockResolvedValueOnce({
+      kind: "git", status: "pending", files: [], feedback: "", fingerprint: null,
+    });
+    const first = ctx.store.getState().discussTask("task-1", "First question");
+    await ctx.store.getState().discussTask("task-1", "Second question");
+    await ctx.store.getState().cancelTask("task-1");
+    release();
+    await first;
+    await vi.waitFor(() => expect(ctx.ledger.accept).toHaveBeenCalledTimes(2));
+    expect(ctx.agent.starts).toHaveLength(1);
+    expect(ctx.store.getState().tasks["task-1"]).toMatchObject({ state: "done" });
+    expect(ctx.store.getState().tasks["task-1"].discussion.map((entry) => entry.text)).toEqual(["First question"]);
+  });
+
+  it("reports discussion ledger setup failure in the conversation and preserves the result", async () => {
+    const ctx = setup();
+    await runToReview(ctx);
+    await ctx.store.getState().acceptReview("task-1");
+    const original = ctx.store.getState().tasks["task-1"];
+    vi.mocked(ctx.ledger.begin).mockRejectedValueOnce(new Error("snapshot unavailable"));
+    await ctx.store.getState().discussTask("task-1", "Why?");
+    expect(ctx.store.getState().tasks["task-1"]).toMatchObject({
+      state: original.state, error: original.error, review: original.review,
+      summary: original.summary, plan: original.plan, tools: original.tools,
+    });
+    expect(ctx.store.getState().tasks["task-1"].discussion.at(-1)?.text).toContain("snapshot unavailable");
+    expect(ctx.agent.starts).toHaveLength(1);
+    await ctx.store.getState().discussTask("task-1", "Try again");
+    expect(ctx.agent.starts).toHaveLength(2);
+  });
+
+  it("reviews discussion edits before returning to the original failed state", async () => {
+    const ctx = setup();
+    await ctx.store.getState().start();
+    await ctx.store.getState().openTask("task-1", "project-1");
+    ctx.store.getState().setOutcome("task-1", "prepare a report");
+    await ctx.store.getState().startTask("task-1");
+    ctx.agent.emit("task-1#1", JSON.stringify({ type: "system", subtype: "init", session_id: "11111111-2222-3333-4444-555555555555" }));
+    ctx.agent.exit("task-1#1", 1, "original error");
+    await vi.waitFor(() => expect(ctx.store.getState().tasks["task-1"].review.status).toBe("pending"));
+    await ctx.store.getState().acceptReview("task-1");
+    await ctx.store.getState().discussTask("task-1", "Explain");
+    ctx.agent.exit("task-1#2", 0);
+    await vi.waitFor(() => expect(ctx.store.getState().tasks["task-1"].review.status).toBe("pending"));
+    expect(ctx.store.getState().tasks["task-1"].reviewOutcomeState).toBe("failed");
+    await ctx.store.getState().acceptReview("task-1");
+    expect(ctx.store.getState().tasks["task-1"]).toMatchObject({ state: "failed", error: "original error" });
+  });
+
+  it("reports discussion collection failure without replacing the completed result", async () => {
+    const ctx = setup();
+    await runToReview(ctx);
+    await ctx.store.getState().acceptReview("task-1");
+    const original = ctx.store.getState().tasks["task-1"];
+    vi.mocked(ctx.ledger.finish).mockRejectedValueOnce(new Error("collection failed"));
+    await ctx.store.getState().discussTask("task-1", "Explain");
+    ctx.agent.exit("task-1#2", 0);
+    await vi.waitFor(() => expect(ctx.store.getState().tasks["task-1"].state).toBe("done"));
+    expect(ctx.store.getState().tasks["task-1"]).toMatchObject({
+      error: original.error, review: original.review, summary: original.summary,
+    });
+    expect(ctx.store.getState().tasks["task-1"].discussion.at(-1)?.text).toContain("collection failed");
+  });
 });
