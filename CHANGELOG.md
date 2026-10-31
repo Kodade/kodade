@@ -5,6 +5,8 @@
 - Preserve the restart action for a downloaded update when checking again (#111).
 - Review comments now stay with their project and review scope (#116).
 
+- KödWork discussions preserve the completed task's result and progress, and
+  rejected output feedback includes every reviewed file (#110, #117).
 - KödWork tasks now open on their own Task tab in the tabbed layout, instead
   of taking over the Agents tab or reusing whatever project and chat happened
   to be open. Clicking a task from the sidebar (or a KödWork notification)
