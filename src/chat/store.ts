@@ -131,6 +131,8 @@ export type ChatState = {
   setReviewTarget(threadId: string, target: ChatReviewTarget): void;
   refreshOllama(): Promise<void>;
   refreshProviderModels(providerId: string, projectId?: string): Promise<void>;
+  // Check ownership synchronously before clearing the composer.
+  canSend(threadId: string): boolean;
   // Send one user message and run a turn. Resolves once the run has STARTED —
   // the answer arrives through the event stream.
   send(threadId: string, text: string): Promise<void>;
@@ -220,6 +222,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
     detachTimer?: ReturnType<typeof setTimeout>;
   };
   const runs = new Map<string, Run>();
+  const preflights = new Map<string, object>();
   const runByRunId = new Map<string, string>(); // runId → threadId
   const turns = new Map<string, number>();
   const nativeLiveRunIds = new Set<string>();
@@ -252,7 +255,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
   let writeChain: Promise<void> = Promise.resolve();
 
   const store = createStore<ChatState>((set, get) => {
-    const captureReviewTarget = async (threadId: string, projectRoot: string) => {
+    const captureReviewTarget = async (threadId: string, projectRoot: string, isCurrent: () => boolean) => {
       const existing = get().threads[threadId]?.reviewTarget;
       if (existing || !deps.git) return;
       let baselineSha: string | null = null;
@@ -269,6 +272,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       } catch {
         // Detached HEAD and non-Git folders have no branch provenance.
       }
+      if (!isCurrent()) return;
       patch(threadId, (thread) =>
         thread.reviewTarget
           ? thread
@@ -827,7 +831,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setProvider(threadId: string, providerId: string) {
-        if (runs.has(threadId)) return;
+        if (runs.has(threadId) || preflights.has(threadId)) return;
         const projectId = get().threads[threadId]?.projectId;
         patch(threadId, (thread) =>
           thread.providerId === providerId
@@ -853,7 +857,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setModel(threadId: string, model: string | null) {
-        if (runs.has(threadId)) return;
+        if (runs.has(threadId) || preflights.has(threadId)) return;
         patch(threadId, (thread) => {
           if (thread.model === model) return thread;
           return {
@@ -871,7 +875,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setAccess(threadId: string, access: ChatAccessLevel) {
-        if (runs.has(threadId)) return;
+        if (runs.has(threadId) || preflights.has(threadId)) return;
         patch(threadId, (thread) =>
           thread.access === access ? thread : { ...thread, access },
         );
@@ -879,7 +883,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setThinking(threadId: string, thinking: string | null) {
-        if (runs.has(threadId)) return;
+        if (runs.has(threadId) || preflights.has(threadId)) return;
         patch(threadId, (thread) =>
           thread.thinking === thinking ? thread : { ...thread, thinking },
         );
@@ -887,7 +891,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       setSpeed(threadId: string, speed: ChatSpeed) {
-        if (runs.has(threadId)) return;
+        if (runs.has(threadId) || preflights.has(threadId)) return;
         patch(threadId, (thread) =>
           supportsSpeed(thread.providerId, speed) && thread.speed !== speed
             ? { ...thread, speed }
@@ -1045,188 +1049,208 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
         }
       },
 
+      canSend(threadId: string) {
+        return !!get().threads[threadId] && !runs.has(threadId) && !preflights.has(threadId);
+      },
+
       async send(threadId: string, text: string) {
         const prompt = text.trim();
         if (!prompt) return;
         const thread = get().threads[threadId];
-        if (!thread || runs.has(threadId)) return;
-        let projectMemory: string | null = null;
-        const localRoot = deps.projectRoot(thread.projectId);
-        if (localRoot && deps.memoryContext) {
-          try {
-            projectMemory = boundProviderMemory(await deps.memoryContext(localRoot));
-          } catch {
-            projectMemory = null;
+        if (!thread || runs.has(threadId) || preflights.has(threadId)) return;
+        const reservation = {};
+        preflights.set(threadId, reservation);
+        patch(threadId, (current) => ({ ...current, status: "working" }));
+        try {
+          let projectMemory: string | null = null;
+          const localRoot = deps.projectRoot(thread.projectId);
+          if (localRoot && deps.memoryContext) {
+            try {
+              projectMemory = boundProviderMemory(await deps.memoryContext(localRoot));
+            } catch {
+              projectMemory = null;
+            }
+            if (!get().threads[threadId] || preflights.get(threadId) !== reservation || runs.has(threadId)) return;
           }
-          if (!get().threads[threadId] || runs.has(threadId)) return;
-        }
 
-        if (thread.providerId === "ollama") {
-          const runtime = deps.ollama;
-          if (!runtime) {
-            appendEntry(threadId, { kind: "error", id: newId(), message: OLLAMA_UNAVAILABLE_MESSAGE });
+          if (thread.providerId === "ollama") {
+            const runtime = deps.ollama;
+            if (!runtime) {
+              appendEntry(threadId, { kind: "error", id: newId(), message: OLLAMA_UNAVAILABLE_MESSAGE });
+              void persistNow(threadId);
+              return;
+            }
+            if (get().ollama.status !== "ready") await get().refreshOllama();
+            const current = get().threads[threadId];
+            if (!current || preflights.get(threadId) !== reservation || runs.has(threadId)) return;
+            const availableModels = get().ollama.models;
+            const selectedModelAvailable =
+              current.model !== null &&
+              availableModels.some((candidate) => candidate.id === current.model);
+            const model = selectedModelAvailable
+              ? current.model!
+              : availableModels[0]?.id;
+            if (!model) {
+              appendEntry(threadId, {
+                kind: "error",
+                id: newId(),
+                message: get().ollama.message ?? "Choose or install an Ollama model, then try again.",
+              });
+              void persistNow(threadId);
+              return;
+            }
+            const conversationId =
+              current.model !== null && current.model !== model
+                ? current.conversationId + 1
+                : current.conversationId;
+            if (current.model !== model) {
+              patch(threadId, (entry) => ({ ...entry, model, conversationId }));
+            }
+            const turn = (turns.get(threadId) ?? 0) + 1;
+            turns.set(threadId, turn);
+            const runId = `${threadId}#${turn}`;
+            const controller = new AbortController();
+            const run: Run = {
+              runId,
+              abort: () => controller.abort(),
+              messageEntries: new Map(),
+              thinkingEntries: new Map(),
+              toolEntries: new Map(),
+              conversationId,
+              turn,
+            };
+            runs.set(threadId, run);
+            runByRunId.set(runId, threadId);
+            armDetachTimer(threadId, run);
+            const firstMessage = !current.entries.some((entry) => entry.kind === "message");
+            appendEntry(threadId, {
+              kind: "message",
+              id: newId(),
+              role: "user",
+              text: prompt,
+              conversationId,
+            });
+            patch(threadId, (entry) => ({
+              ...entry,
+              status: "working",
+              needsLogin: false,
+              title: firstMessage ? titleFromMessage(prompt) : entry.title,
+            }));
+            deps.activity?.attention?.(current.projectId, threadId, null);
+            deps.activity?.streamed?.(current.projectId, threadId);
             void persistNow(threadId);
+            void streamOllama({
+              threadId,
+              run,
+              runtime,
+              model,
+              controller,
+              memoryContext: projectMemory,
+              ambient: deps.ambientPrompt?.() ?? null,
+            });
             return;
           }
-          if (get().ollama.status !== "ready") await get().refreshOllama();
-          const current = get().threads[threadId];
-          if (!current) return;
-          const availableModels = get().ollama.models;
-          const selectedModelAvailable =
-            current.model !== null &&
-            availableModels.some((candidate) => candidate.id === current.model);
-          const model = selectedModelAvailable
-            ? current.model!
-            : availableModels[0]?.id;
-          if (!model) {
+
+          const adapter = adapters(thread.providerId);
+          if (!adapter) {
             appendEntry(threadId, {
               kind: "error",
               id: newId(),
-              message: get().ollama.message ?? "Choose or install an Ollama model, then try again.",
+              message: `${thread.providerId} is not yet supported in KödChat. Open a terminal to use it.`,
             });
             void persistNow(threadId);
             return;
           }
-          const conversationId =
-            current.model !== null && current.model !== model
-              ? current.conversationId + 1
-              : current.conversationId;
-          if (current.model !== model) {
-            patch(threadId, (entry) => ({ ...entry, model, conversationId }));
-          }
+          const remoteTarget = deps.remoteTarget?.(thread.projectId) ?? null;
+          const projectRoot = localRoot;
+          if (projectRoot === null && remoteTarget === null) return;
+          // Capture before spawning: the review baseline is the checkout state
+          // the agent actually received, never a moving default branch later on.
+          if (projectRoot) await captureReviewTarget(threadId, projectRoot, () => preflights.get(threadId) === reservation && !runs.has(threadId));
+          const currentThread = get().threads[threadId];
+          if (!currentThread || preflights.get(threadId) !== reservation || runs.has(threadId)) return;
+          const cwd = remoteTarget ? "" : projectRoot!;
+
           const turn = (turns.get(threadId) ?? 0) + 1;
           turns.set(threadId, turn);
           const runId = `${threadId}#${turn}`;
-          const controller = new AbortController();
           const run: Run = {
             runId,
-            abort: () => controller.abort(),
+            parser: adapter.createParser({ providerResultIsTerminal: false }),
             messageEntries: new Map(),
             thinkingEntries: new Map(),
             toolEntries: new Map(),
-            conversationId,
+            conversationId: currentThread.conversationId,
             turn,
           };
           runs.set(threadId, run);
           runByRunId.set(runId, threadId);
           armDetachTimer(threadId, run);
-          const firstMessage = !current.entries.some((entry) => entry.kind === "message");
+
+          // The first message names the thread; read that BEFORE appending it.
+          const firstMessage = !currentThread.entries.some((entry) => entry.kind === "message");
           appendEntry(threadId, {
             kind: "message",
             id: newId(),
             role: "user",
             text: prompt,
-            conversationId,
+            conversationId: currentThread.conversationId,
           });
-          patch(threadId, (entry) => ({
-            ...entry,
+          patch(threadId, (current) => ({
+            ...current,
             status: "working",
             needsLogin: false,
-            title: firstMessage ? titleFromMessage(prompt) : entry.title,
+            title: firstMessage ? titleFromMessage(prompt) : current.title,
           }));
-          deps.activity?.attention?.(current.projectId, threadId, null);
-          deps.activity?.streamed?.(current.projectId, threadId);
+          deps.activity?.attention?.(currentThread.projectId, threadId, null);
+          deps.activity?.streamed?.(currentThread.projectId, threadId);
           void persistNow(threadId);
-          void streamOllama({
-            threadId,
-            run,
-            runtime,
-            model,
-            controller,
-            memoryContext: projectMemory,
+
+          const spawn = adapter.spawn({
+            prompt: promptWithMemory(prompt, projectMemory),
+            cwd: remoteTarget?.path ?? projectRoot!,
+            resumeId: currentThread.resumeId,
+            model: currentThread.model,
+            access: currentThread.access,
+            thinking: currentThread.thinking,
+            speed: currentThread.speed,
             ambient: deps.ambientPrompt?.() ?? null,
           });
-          return;
-        }
-
-        const adapter = adapters(thread.providerId);
-        if (!adapter) {
-          appendEntry(threadId, {
-            kind: "error",
-            id: newId(),
-            message: `${thread.providerId} is not yet supported in KödChat. Open a terminal to use it.`,
-          });
-          void persistNow(threadId);
-          return;
-        }
-        const remoteTarget = deps.remoteTarget?.(thread.projectId) ?? null;
-        const projectRoot = localRoot;
-        if (projectRoot === null && remoteTarget === null) return;
-        // Capture before spawning: the review baseline is the checkout state
-        // the agent actually received, never a moving default branch later on.
-        if (projectRoot) await captureReviewTarget(threadId, projectRoot);
-        const currentThread = get().threads[threadId];
-        if (!currentThread || runs.has(threadId)) return;
-        const cwd = remoteTarget ? "" : projectRoot!;
-
-        const turn = (turns.get(threadId) ?? 0) + 1;
-        turns.set(threadId, turn);
-        const runId = `${threadId}#${turn}`;
-        const run: Run = {
-          runId,
-          parser: adapter.createParser({ providerResultIsTerminal: false }),
-          messageEntries: new Map(),
-          thinkingEntries: new Map(),
-          toolEntries: new Map(),
-          conversationId: currentThread.conversationId,
-          turn,
-        };
-        runs.set(threadId, run);
-        runByRunId.set(runId, threadId);
-        armDetachTimer(threadId, run);
-
-        // The first message names the thread; read that BEFORE appending it.
-        const firstMessage = !currentThread.entries.some((entry) => entry.kind === "message");
-        appendEntry(threadId, {
-          kind: "message",
-          id: newId(),
-          role: "user",
-          text: prompt,
-          conversationId: currentThread.conversationId,
-        });
-        patch(threadId, (current) => ({
-          ...current,
-          status: "working",
-          needsLogin: false,
-          title: firstMessage ? titleFromMessage(prompt) : current.title,
-        }));
-        deps.activity?.attention?.(currentThread.projectId, threadId, null);
-        deps.activity?.streamed?.(currentThread.projectId, threadId);
-        void persistNow(threadId);
-
-        const spawn = adapter.spawn({
-          prompt: promptWithMemory(prompt, projectMemory),
-          cwd: remoteTarget?.path ?? projectRoot!,
-          resumeId: currentThread.resumeId,
-          model: currentThread.model,
-          access: currentThread.access,
-          thinking: currentThread.thinking,
-          speed: currentThread.speed,
-          ambient: deps.ambientPrompt?.() ?? null,
-        });
-        const process = remoteTarget
-          ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)
-          : spawn;
-        try {
-          await deps.agent.start({
-            id: runId,
-            cwd,
-            bin: process.bin,
-            args: process.args,
-            ...(spawn.stdin === undefined ? {} : { stdin: spawn.stdin }),
-          });
-        } catch (error) {
-          // The CLI is missing, or the run id collided. Report it in the
-          // transcript and settle so the composer becomes usable again.
-          applyEvent(threadId, run, {
-            type: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
-          settle(threadId, run);
+          const process = remoteTarget
+            ? buildRemoteAgentSpawn(remoteTarget, spawn.bin, spawn.args)
+            : spawn;
+          try {
+            await deps.agent.start({
+              id: runId,
+              cwd,
+              bin: process.bin,
+              args: process.args,
+              ...(spawn.stdin === undefined ? {} : { stdin: spawn.stdin }),
+            });
+          } catch (error) {
+            // The CLI is missing, or the run id collided. Report it in the
+            // transcript and settle so the composer becomes usable again.
+            applyEvent(threadId, run, {
+              type: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+            settle(threadId, run);
+          }
+        } finally {
+          if (preflights.get(threadId) === reservation) {
+            preflights.delete(threadId);
+            if (!runs.has(threadId)) patch(threadId, (current) =>
+              current.status === "working" ? { ...current, status: "idle" } : current,
+            );
+          }
         }
       },
 
       async cancel(threadId: string) {
+        if (preflights.delete(threadId) && !runs.has(threadId)) {
+          patch(threadId, (current) => ({ ...current, status: "idle" }));
+          return;
+        }
         const run = runs.get(threadId);
         if (!run) return;
         if (run.abort) {
@@ -1245,6 +1269,7 @@ export function createChatStore(deps: ChatDeps): StoreApi<ChatState> {
       },
 
       async removeThread(threadId: string) {
+        preflights.delete(threadId);
         const handle = pending.get(threadId);
         if (handle) {
           clearTimer(handle);
