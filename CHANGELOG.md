@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 - Preserve the restart action for a downloaded update when checking again (#111).
+- Fixed headless agent startup hanging on large prompts: output drains before
+  input is written, cancellation stays responsive, and failed prompt writes
+  are reported (#113).
 
 - KödWork tasks now open on their own Task tab in the tabbed layout, instead
   of taking over the Agents tab or reusing whatever project and chat happened
