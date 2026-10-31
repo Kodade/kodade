@@ -9,6 +9,9 @@
   are reported (#113).
 - Preserve unsaved editor buffers and the active tab when switching projects (#114).
 - KödChat keeps follow-up drafts when a previous message is still starting (#112).
+- Harden Linux shell fallback, file reveal, document confinement and no-replace
+  rename; show appropriate microphone guidance and use POSIX KödSSH quoting
+  on Linux (#115, #118).
 
 - KödWork discussions preserve the completed task's result and progress, and
   rejected output feedback includes every reviewed file (#110, #117).

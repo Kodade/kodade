@@ -179,22 +179,30 @@ fn range_not_satisfiable(len: u64) -> Response<Vec<u8>> {
         .expect("static document response is valid")
 }
 
+#[cfg(target_os = "linux")]
+fn opened_file_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+    use std::os::fd::AsRawFd;
+    // Read the kernel's descriptor link, not the original, replaceable pathname.
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|e| format!("cannot resolve opened document: {e}"))
+}
+
 fn verify_opened_file_is_confined(root: &str, file: &std::fs::File) -> Result<(), String> {
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     {
         let opened_path = opened_file_path(file)?;
         let root = std::fs::canonicalize(root)
             .map_err(|e| format!("project root is unavailable: {root}: {e}"))?;
         opened_path_is_inside(&opened_path, &root)
     }
-    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (root, file);
         Ok(())
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn opened_path_is_inside(opened: &Path, root: &Path) -> Result<(), String> {
     if opened != root && opened.starts_with(root) {
         Ok(())
@@ -481,7 +489,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn opened_file_path_returns_the_real_opened_document_path() {
         let root = temp_dir("opened-fd");
@@ -498,7 +506,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn opened_handle_confinement_rejects_a_file_outside_the_root() {
         let base = temp_dir("opened-outside");
@@ -511,6 +519,25 @@ mod tests {
         verify_opened_file_is_confined(root.to_str().unwrap(), &file)
             .expect_err("the final path from the opened handle must remain confined");
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn opened_handle_rejects_symlink_swap_after_path_validation() {
+        let base = temp_dir("opened-swap");
+        let root = base.join("project");
+        std::fs::create_dir(&root).unwrap();
+        let document = root.join("image.png");
+        let outside = base.join("outside.png");
+        std::fs::write(&document, b"safe").unwrap();
+        std::fs::write(&outside, b"private").unwrap();
+        let validated = std::fs::canonicalize(&document).unwrap();
+        assert!(validated.starts_with(std::fs::canonicalize(&root).unwrap()));
+        std::fs::remove_file(&document).unwrap();
+        std::os::unix::fs::symlink(&outside, &document).unwrap();
+        let file = std::fs::File::open(&validated).unwrap();
+        assert!(verify_opened_file_is_confined(root.to_str().unwrap(), &file).is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[cfg(windows)]

@@ -236,6 +236,21 @@ describe("voice store", () => {
     expect(vox.starts).toHaveLength(1);
   });
 
+  it("gives Linux microphone guidance without a Windows settings path", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    try {
+      const denied = setup({ isMac: () => false });
+      denied.vox.failInitWith = new Error("microphone permission denied");
+      await denied.store.getState().press();
+      expect(denied.store.getState().voice).toMatchObject({
+        phase: "error",
+        message: expect.stringContaining("desktop or audio service settings"),
+      });
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("turns permission and device failures into actionable inline states", async () => {
     const denied = setup({ isMac: () => true });
     denied.vox.failInitWith = new Error("microphone permission denied");
@@ -576,13 +591,19 @@ describe("voice store", () => {
     );
   });
 
-  it("opens the microphone privacy settings deep link and swallows failures", async () => {
+  it("shows microphone privacy settings launch failures", async () => {
     const openMicrophonePrivacySettings = vi.fn(async () => {
       throw new Error("unsupported on this platform");
     });
-    const { store } = setup({ openMicrophonePrivacySettings });
+    const { store, vox } = setup({ openMicrophonePrivacySettings });
+    vox.failInitWith = new Error("microphone permission denied");
+    await store.getState().press();
 
     await expect(store.getState().openPrivacySettings()).resolves.toBeUndefined();
     expect(openMicrophonePrivacySettings).toHaveBeenCalledOnce();
+    expect(store.getState().voice).toMatchObject({
+      phase: "error",
+      message: "Could not open microphone settings: unsupported on this platform",
+    });
   });
 });

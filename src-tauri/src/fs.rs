@@ -546,6 +546,19 @@ fn is_case_only_rename(from: &Path, to: &Path) -> bool {
     ordinal_eq(&from_parent, &to_parent) && from_name != to_name && ordinal_eq(&from_name, &to_name)
 }
 
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn linux_reveal_directory(target: &std::path::Path) -> Result<&std::path::Path, String> {
+    let metadata = std::fs::symlink_metadata(target)
+        .map_err(|e| format!("reveal {}: {e}", target.display()))?;
+    if metadata.is_dir() {
+        Ok(target)
+    } else {
+        target
+            .parent()
+            .ok_or_else(|| "reveal target has no parent".to_string())
+    }
+}
+
 // Rename `from` to `to`, refusing to clobber an existing `to`.
 #[cfg(target_os = "macos")]
 fn rename_no_replace(from: &Path, to: &Path) -> Result<(), String> {
@@ -576,16 +589,42 @@ fn rename_no_replace(from: &Path, to: &Path) -> Result<(), String> {
     ))
 }
 
-// Non-macOS unix: no atomic no-replace primitive here, so the exists() check is
-// advisory (a racing create between the check and the rename could still be
-// clobbered — acceptable on the non-primary platform, documented as such).
-#[cfg(all(unix, not(target_os = "macos")))]
+// Linux must refuse existing names atomically, including dangling symlinks.
+#[cfg(target_os = "linux")]
 fn rename_no_replace(from: &Path, to: &Path) -> Result<(), String> {
-    if to.exists() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from_c = CString::new(from.as_os_str().as_bytes()).map_err(|_| "invalid source path")?;
+    let to_c = CString::new(to.as_os_str().as_bytes()).map_err(|_| "invalid destination path")?;
+    // SAFETY: both NUL-terminated strings remain alive throughout the syscall.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EEXIST) {
         return Err(format!("already exists: {}", to.display()));
     }
-    std::fs::rename(from, to)
-        .map_err(|e| format!("rename {} -> {}: {e}", from.display(), to.display()))
+    // Fail closed when the kernel/filesystem cannot provide atomic no-replace.
+    Err(format!(
+        "rename {} -> {}: {err}",
+        from.display(),
+        to.display()
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn rename_no_replace(_from: &Path, _to: &Path) -> Result<(), String> {
+    Err("atomic no-replace rename is unsupported on this platform".to_string())
 }
 
 // MoveFileExW without REPLACE_EXISTING is a kernel-enforced no-clobber rename.
@@ -843,6 +882,40 @@ mod tests {
         std::fs::write(&config, b"config").unwrap();
         assert!(path_is_ignored(&config, &root));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_reveal_opens_parent_for_directory_and_dangling_symlinks() {
+        let root = temp_dir("linux-reveal");
+        std::fs::create_dir_all(root.join("directory")).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(root.join("directory"), &link).unwrap();
+        assert_eq!(linux_reveal_directory(&link).unwrap(), root);
+        std::fs::remove_dir(root.join("directory")).unwrap();
+        assert_eq!(linux_reveal_directory(&link).unwrap(), root);
+        assert_eq!(linux_reveal_directory(&root).unwrap(), root);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_replace_preserves_dangling_symlink_and_source() {
+        let root = temp_dir("rename-dangling");
+        let from = root.join("source");
+        let to = root.join("occupied");
+        std::fs::write(&from, "keep").unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), &to).unwrap();
+        assert!(rename_no_replace(&from, &to).is_err());
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "keep");
+        assert!(std::fs::symlink_metadata(&to)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        std::fs::remove_file(&to).unwrap();
+        rename_no_replace(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "keep");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn temp_dir(tag: &str) -> PathBuf {

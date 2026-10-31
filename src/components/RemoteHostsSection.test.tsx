@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockAgentIpc, MockFiles, MockStorage, MockSsh } from "../ipc/mock";
 import { createProjectsStore } from "../store/projects";
 import { createSshStore } from "../store/ssh";
@@ -77,6 +77,8 @@ describe("RemoteHostsSection", () => {
   let container: HTMLDivElement | null = null;
 
   beforeEach(() => {
+    // These integration fixtures exercise Windows PowerShell launch quoting.
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -87,6 +89,7 @@ describe("RemoteHostsSection", () => {
     container?.remove();
     root = null;
     container = null;
+    vi.restoreAllMocks();
   });
 
   it("renders hosts parsed from ssh config", async () => {
@@ -469,9 +472,8 @@ describe("RemoteHostsSection", () => {
 
     expect(writes).toHaveLength(writesBefore + 1);
     // The remote command (cd && exec claude) travels as ONE quoted local
-    // argument, so `&&` and the exec run on the REMOTE shell. happy-dom's
-    // navigator reports a non-Mac platform (see src/ssh/command.ts's
-    // defaultLocalShell), so buildSshProjectLaunch's default here resolves to
+    // argument, so `&&` and the exec run on the REMOTE shell. The explicit
+    // Windows navigator fixture makes the default resolve to
     // PowerShell's outer quoting (doubled `'`, not POSIX's '"'"') — this test
     // exercises that Windows-safe path end to end through the real component.
     expect(writes.at(-1)!.data).toBe(

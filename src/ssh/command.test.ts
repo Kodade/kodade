@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertHost,
   buildRemoteAgentSpawn,
@@ -411,24 +411,26 @@ describe("buildSshProjectLaunch", () => {
       expect(launch).toBe(`ssh -t box "${inner.replace(/"/g, '\\"')}"`);
     });
 
-    it("omitting localShell falls back to OS detection, not the old hardcoded POSIX path", () => {
-      // Regression guard for the actual M11e bug: pre-fix, buildSshProjectLaunch
-      // ALWAYS used POSIX outer quoting regardless of OS. happy-dom reports a
-      // non-Mac navigator (see src/shortcuts/bindings.ts's detectMacPlatform),
-      // so the omitted-3rd-arg default now resolves to "powershell" here —
-      // proving the branch is live, not just reachable via an explicit arg.
-      const launch = buildSshProjectLaunch({
-        host: "box",
-        path: "/home/keith/app",
-      });
-      expect(launch).toBe(
-        buildSshProjectLaunch(
-          { host: "box", path: "/home/keith/app" },
-          undefined,
-          "powershell",
-        ),
-      );
-      expect(launch).not.toContain(`'"'"'`);
+    it.each([
+      ["Linux x86_64", "posix"],
+      ["MacIntel", "posix"],
+      ["Win32", "powershell"],
+    ] as const)("defaults %s to %s quoting", (platform, shell) => {
+      const spy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      try {
+        const target = { host: "box", path: "/srv/it's a project;$(echo injected)" };
+        expect(buildSshProjectLaunch(target)).toBe(
+          buildSshProjectLaunch(target, undefined, shell),
+        );
+        if (shell === "posix") {
+          expect(shellWords(buildSshProjectLaunch(target))).toEqual([
+            "ssh", "-t", "box",
+            `cd ${quotePosix(target.path)} && exec "$SHELL" -l`,
+          ]);
+        }
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

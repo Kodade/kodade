@@ -246,7 +246,7 @@ function VoicePrompt({ store }: { store: StoreApi<VoiceStoreState> }) {
             Download again
           </button>
         )}
-        {isPermissionDenied && (
+        {isPermissionDenied && /Mac|Win/i.test(navigator.platform) && (
           <button
             type="button"
             onClick={() => void store.getState().openPrivacySettings()}
