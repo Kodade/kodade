@@ -3,7 +3,6 @@
 // single, thoroughly-tested choke point instead of being re-derived at each
 // call site.
 
-import { detectMacPlatform } from "../shortcuts/bindings";
 import type { RemoteTarget, SshHost } from "./model";
 
 // Conservative allowlist for anything that becomes part of a local shell
@@ -264,13 +263,9 @@ function quoteCmd(s: string): string {
 // callers/tests can force a branch without faking navigator.
 export type LocalShellKind = "posix" | "powershell" | "cmd";
 
-// Default local shell inferred from OS: mac/Linux -> posix, Windows ->
-// powershell (kodade always prefers pwsh/powershell over cmd when spawning a
-// login shell — see src-tauri/src/shell.rs's resolution order). Reuses the
-// same isMac detection every other platform-conditional in the repo uses
-// (src/shortcuts/bindings.ts) rather than inventing a second convention.
+// Unix login shells use POSIX quoting; only Windows defaults to PowerShell.
 function defaultLocalShell(): LocalShellKind {
-  return detectMacPlatform() ? "posix" : "powershell";
+  return /Win/i.test(navigator.platform) ? "powershell" : "posix";
 }
 
 // The interactive command typed into a LOCAL shell to open a remote PROJECT

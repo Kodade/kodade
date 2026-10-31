@@ -1697,11 +1697,7 @@ pub fn fs_reveal(root: String, path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let directory = if target.is_dir() {
-            target.as_path()
-        } else {
-            target.parent().unwrap_or(target.as_path())
-        };
+        let directory = fs::linux_reveal_directory(&target)?;
         spawn_desktop(
             DesktopCommand {
                 program: "xdg-open",

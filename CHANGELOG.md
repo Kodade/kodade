@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 - Preserve the restart action for a downloaded update when checking again (#111).
+- Harden Linux shell fallback, file reveal, document confinement and no-replace
+  rename; show appropriate microphone guidance and use POSIX KödSSH quoting
+  on Linux (#115, #118).
 
 - KödWork tasks now open on their own Task tab in the tabbed layout, instead
   of taking over the Agents tab or reusing whatever project and chat happened

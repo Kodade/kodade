@@ -98,3 +98,13 @@ secret-residue proof is documented in the
 [projects vault acceptance procedure](PROJECTS-VAULT-ACCEPTANCE.md). Packaging,
 signing, installation, publication, and public-download verification remain
 separate release stages.
+
+## Linux development behavior
+
+Linux remains an unverified development target, not a supported public package.
+Shell discovery uses a usable `$SHELL`, then the user's passwd shell, bash, and
+sh. Reveal opens the parent of a symlink. Document reads require `/proc/self/fd`
+for post-open confinement; renames require kernel/filesystem support for atomic
+no-replace and fail closed otherwise. Microphone denial guidance refers to the
+desktop or audio service settings; no unsupported settings shortcut is offered.
+KödSSH uses POSIX local quoting on Linux and macOS, and PowerShell on Windows.

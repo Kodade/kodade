@@ -38,9 +38,9 @@ pub struct ShellEnvironment {
 }
 
 impl ShellEnvironment {
-    // Discover the user's platform shell. Unix preserves the existing $SHELL
-    // contract; Windows prefers modern PowerShell, then Windows PowerShell,
-    // then ComSpec/cmd.exe.
+    // Discover the user's platform shell. Linux falls back through passwd,
+    // bash and sh; macOS retains zsh. Windows prefers modern PowerShell,
+    // then Windows PowerShell, then ComSpec/cmd.exe.
     pub fn current() -> Self {
         #[cfg(windows)]
         {
@@ -52,10 +52,21 @@ impl ShellEnvironment {
         }
         #[cfg(not(windows))]
         {
+            #[cfg(not(target_os = "linux"))]
             let executable = std::env::var_os("SHELL")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
+            #[cfg(target_os = "linux")]
+            let executable = select_linux_shell(
+                std::env::var_os("SHELL").map(PathBuf::from),
+                linux_passwd_shell,
+                |path| {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::metadata(path)
+                        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                },
+            );
             let home = std::env::var_os("HOME")
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
@@ -192,6 +203,54 @@ impl ShellEnvironment {
         // Windows. The packaged-app PATH mismatch addressed here is POSIX-only.
         self.resolve_executable(bin).map(|path| (path, None))
     }
+}
+
+// NSS lookup uses the effective user's passwd entry, including directory services.
+#[cfg(target_os = "linux")]
+fn linux_passwd_shell() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = vec![0u8; 1024];
+    loop {
+        let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        // SAFETY: entry and buffer are writable for the call; strings are copied
+        // before either allocation is dropped. getpwuid_r avoids static storage.
+        let rc = unsafe {
+            libc::getpwuid_r(
+                libc::geteuid(),
+                entry.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if rc == libc::ERANGE && buffer.len() < 1024 * 1024 {
+            buffer.resize(buffer.len() * 2, 0);
+            continue;
+        }
+        if rc != 0 || result.is_null() {
+            return None;
+        }
+        let entry = unsafe { entry.assume_init() };
+        if entry.pw_shell.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell) }.to_bytes();
+        return Some(PathBuf::from(OsStr::from_bytes(bytes)));
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn select_linux_shell(
+    shell: Option<PathBuf>,
+    passwd: impl FnOnce() -> Option<PathBuf>,
+    usable: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    shell
+        .filter(|p| p.is_absolute() && usable(p))
+        .or_else(|| passwd().filter(|p| p.is_absolute() && usable(p)))
+        .or_else(|| usable(Path::new("/bin/bash")).then(|| PathBuf::from("/bin/bash")))
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }
 
 fn powershell_resolve_command(bin: &str) -> String {
@@ -448,6 +507,34 @@ fn wait_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_shell_fallback_order() {
+        let choose = |env: Option<&str>, passwd: Option<&str>, available: &[&str]| {
+            select_linux_shell(
+                env.map(PathBuf::from),
+                || passwd.map(PathBuf::from),
+                |p| available.iter().any(|a| p == Path::new(a)),
+            )
+        };
+        assert_eq!(
+            choose(
+                Some("/custom/fish"),
+                Some("/bin/bash"),
+                &["/custom/fish", "/bin/bash"]
+            ),
+            PathBuf::from("/custom/fish")
+        );
+        assert_eq!(
+            choose(None, Some("/custom/fish"), &["/custom/fish"]),
+            PathBuf::from("/custom/fish")
+        );
+        assert_eq!(
+            choose(Some("/missing"), Some(""), &["/bin/bash"]),
+            PathBuf::from("/bin/bash")
+        );
+        assert_eq!(choose(None, None, &[]), PathBuf::from("/bin/sh"));
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kodade-shell-{tag}-{}", std::process::id()));
