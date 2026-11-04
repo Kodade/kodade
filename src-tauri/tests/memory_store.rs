@@ -762,7 +762,7 @@ fn session_exit_fallback_creates_one_kodade_checkpoint_when_working_memory_is_ac
 
     let project_closed = store
         .record_activity(NewActivity {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             kind: ActivityKind::ProjectClosed,
             source: "kodade-ui".into(),
             session_id: None,
@@ -969,7 +969,7 @@ fn committed_working_memory_resumes_from_a_fresh_git_clone() {
         .expect("activate committed memory");
     first_store
         .checkpoint(NewCheckpoint {
-            workspace_id: first_workspace.id.clone(),
+            workspace_id: first_workspace.id,
             summary: "Completed the portable renderer handoff.".into(),
             decisions: vec!["Keep project memory committed with the code.".into()],
             next_actions: vec!["Resume on the second machine.".into()],
@@ -1527,7 +1527,7 @@ fn paged_tombstones_and_targeted_audit_recover_history_beyond_one_hundred_rows()
     assert_eq!(
         reloaded
             .audit_page(AuditQuery {
-                workspace_id: workspace.id.clone(),
+                workspace_id: workspace.id,
                 target_id: Some(first_id),
                 limit: 100,
                 offset: 0,
@@ -2050,7 +2050,7 @@ fn runtime_corruption_is_recovered_by_an_already_cached_store_clone() {
     let original = store
         .register_workspace(project.root(), "Original project", None)
         .expect("register original workspace");
-    let cached = store.clone();
+    let cached = store;
     std::fs::write(
         project.db(),
         b"not a sqlite database after startup\0private bytes",
@@ -2725,7 +2725,7 @@ fn authorization_credentials_are_rejected_before_any_public_store_write() {
 
     let activity_error = store
         .record_activity(NewActivity {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             kind: ActivityKind::ProviderLaunched,
             source: "kodade-ui".into(),
             session_id: Some("Authorization: Bearer opaque-oauth-value-123456".into()),
@@ -2801,7 +2801,7 @@ fn quoted_authorization_credentials_are_rejected_before_any_public_store_write()
 
     let activity_error = store
         .record_activity(NewActivity {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             kind: ActivityKind::ProviderLaunched,
             source: "kodade-ui".into(),
             session_id: Some(
@@ -2891,7 +2891,7 @@ fn escaped_json_credentials_are_rejected_before_any_public_store_write() {
 
     let assignment_error = store
         .remember(NewMemory {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             kind: MemoryKind::Fact,
             title: "Spaced JSON assignment".into(),
             body: r#"{"API_KEY" : "opaque-production-value-123456"}"#.into(),
@@ -3173,7 +3173,7 @@ fn credential_rejection_covers_memory_links_and_checkpoint_changed_paths_before_
     ));
     assert!(matches!(
         store.checkpoint(NewCheckpoint {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             summary: "Safe handoff summary".into(),
             decisions: Vec::new(),
             next_actions: Vec::new(),
@@ -4258,7 +4258,7 @@ fn same_database_read_only_search_prefers_fresh_canonical_markdown_without_dupli
 
     let ordinary = read_only
         .search(MemoryQuery {
-            workspace_id: fixture.workspace.id.clone(),
+            workspace_id: fixture.workspace.id,
             text: "ordinary-project-doc-token".into(),
             kinds: Vec::new(),
             sources: vec![MemorySource::Kodade],
@@ -5058,7 +5058,7 @@ fn legacy_migration_preserves_checkpoint_state_and_idempotent_retry_semantics() 
     assert_eq!(
         reopened
             .search_checkpoints(CheckpointQuery {
-                workspace_id: fixture.workspace.id.clone(),
+                workspace_id: fixture.workspace.id,
                 text: "imported checkpoint".into(),
                 limit: 20,
                 offset: 0,
@@ -7445,7 +7445,7 @@ fn migrated_links_and_backlinks_rebuild_on_a_fresh_database() {
         .unwrap();
     let target_hit = fresh
         .search(MemoryQuery {
-            workspace_id: workspace.id.clone(),
+            workspace_id: workspace.id,
             text: "backlink after migration".into(),
             kinds: Vec::new(),
             sources: Vec::new(),
@@ -8438,7 +8438,7 @@ fn mapped_links_are_portable_and_projected_ids_remain_workspace_scoped() {
             pinned: true,
             idempotency_key: Some("portable-linked".into()),
             links: vec![MemoryLink {
-                target_id: target.id.clone(),
+                target_id: target.id,
                 relation: "supports".into(),
             }],
         })

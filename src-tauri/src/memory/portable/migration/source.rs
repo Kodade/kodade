@@ -173,7 +173,10 @@ pub(super) fn collect_legacy_snapshot(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the walk limits and shared accumulators explicitly"
+)]
 pub(super) fn collect_legacy_file(
     workspace_root: &Path,
     path: &Path,
@@ -334,7 +337,10 @@ fn parse_utc_timestamp(value: &str) -> Option<i64> {
     Some((days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000 + millis)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads the walk limits and shared accumulators explicitly"
+)]
 pub(super) fn collect_plan_files(
     workspace_root: &Path,
     directory: &Path,

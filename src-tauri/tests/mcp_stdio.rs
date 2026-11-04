@@ -1502,7 +1502,7 @@ fn stdio_get_context_bounds_the_complete_worst_case_response() {
     }
     store
         .checkpoint(NewCheckpoint {
-            workspace_id: registered.id.clone(),
+            workspace_id: registered.id,
             summary: "c".repeat(64 * 1024),
             decisions: (0..100)
                 .map(|index| format!("decision-{index:03}-{}", "d".repeat(1_000)))

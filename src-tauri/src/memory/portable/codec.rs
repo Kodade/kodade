@@ -734,7 +734,7 @@ pub(super) fn checkpoint_decision_relative(checkpoint_id: &str, index: usize) ->
 }
 
 pub(super) fn state_relative_path() -> Result<String> {
-    Ok(portable_policy()?.state_file.clone())
+    Ok(portable_policy()?.state_file)
 }
 
 pub(super) fn checkpoint_payload_hash(input: &NewCheckpoint, update_state: bool) -> Result<String> {

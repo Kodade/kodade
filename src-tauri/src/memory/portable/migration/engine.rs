@@ -708,7 +708,7 @@ impl MemoryStore {
                 })?;
                 cutover = parse_cutover_preimage(&project_preimage, &location.project_id)?;
             }
-            let uncovered = uncovered_snapshot(full_snapshot.clone(), cutover.as_ref());
+            let uncovered = uncovered_snapshot(full_snapshot, cutover.as_ref());
             let receipt_matches = backup.source_snapshots == uncovered.receipts;
             let cutover_matches = cutover.as_ref().is_some_and(|marker| {
                 marker.migrations.iter().any(|migration| {
@@ -920,7 +920,7 @@ impl MemoryStore {
             migration_id: migration_id.clone(),
             manifest_sha256: manifest_sha256.clone(),
             preview_fingerprint: fingerprint.clone(),
-            project_note_sha256: project_note_sha256.clone(),
+            project_note_sha256,
             source_snapshots: snapshot.receipts.clone(),
         })?;
         let mut prospective_cutover = cutover.unwrap_or_else(|| CutoverMarker {

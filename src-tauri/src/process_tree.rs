@@ -14,6 +14,17 @@ use std::process::Child;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Negated pid for kill(2) group signals. Rejects pids that would not name one
+// group: 0 and 1 negate to the caller's own group and "every process" (-1),
+// and pids above i32::MAX wrap into a positive single-process target.
+#[cfg(unix)]
+pub(crate) fn group_signal_target(pid: u32) -> Option<i32> {
+    i32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 1)
+        .map(|pid| -pid)
+}
+
 pub struct ProcessTree {
     pid: u32,
     #[cfg(windows)]
@@ -100,7 +111,13 @@ impl ProcessTree {
         }
         #[cfg(unix)]
         {
-            let rc = unsafe { libc::kill(-(self.pid as i32), libc::SIGKILL) };
+            let Some(group) = group_signal_target(self.pid) else {
+                return Err(format!("terminate process group {}: invalid id", self.pid));
+            };
+            // SAFETY: kill takes scalar arguments and dereferences nothing; group
+            // is a validated negative pgid, so it cannot signal our own group or
+            // every process.
+            let rc = unsafe { libc::kill(group, libc::SIGKILL) };
             if rc == 0 {
                 Ok(())
             } else {
@@ -615,5 +632,20 @@ mod windows {
 
     fn last_error(context: &str) -> String {
         format!("{context}: {}", std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::group_signal_target;
+
+    #[test]
+    fn group_signal_target_rejects_pids_that_would_not_name_one_group() {
+        assert_eq!(group_signal_target(4242), Some(-4242));
+        assert_eq!(group_signal_target(0), None);
+        assert_eq!(group_signal_target(1), None);
+        assert_eq!(group_signal_target(i32::MAX as u32), Some(-i32::MAX));
+        assert_eq!(group_signal_target(i32::MAX as u32 + 1), None);
+        assert_eq!(group_signal_target(u32::MAX), None);
     }
 }
