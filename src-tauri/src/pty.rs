@@ -14,6 +14,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
+#[cfg(unix)]
+use crate::process_tree::group_signal_target;
 use crate::process_tree::prepare_spawn;
 #[cfg(windows)]
 use crate::process_tree::ProcessTree;
@@ -209,7 +211,7 @@ impl PtyManager {
         // Waiter thread owns the child: block on wait(), drop OUR session entry
         // (token-checked — never a newer session reusing the id), emit exit once.
         let sessions = self.sessions.clone();
-        let exit_id = id.clone();
+        let exit_id = id;
         thread::spawn(move || {
             let code = child.wait().ok().map(|s| s.exit_code() as i32);
             // Bounded drain before exit: in the normal case the reader EOFs as
@@ -442,7 +444,12 @@ const SIG_KILL: i32 = libc::SIGKILL;
 // logged, except ESRCH — that just means the group already exited.
 #[cfg(unix)]
 fn signal_pgid(pid: u32, sig: i32, id: &str) {
-    let pgid = -(pid as i32);
+    let Some(pgid) = group_signal_target(pid) else {
+        eprintln!("kodade: pty {id}: refusing to signal invalid group id {pid}");
+        return;
+    };
+    // SAFETY: kill takes scalar arguments and dereferences nothing; pgid is a
+    // validated negative group id, never our own group or every process.
     let rc = unsafe { libc::kill(pgid, sig) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();

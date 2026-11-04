@@ -231,10 +231,15 @@ fn linux_passwd_shell() -> Option<PathBuf> {
         if rc != 0 || result.is_null() {
             return None;
         }
+        // SAFETY: getpwuid_r returned 0 with a non-null result, so it fully
+        // initialized entry.
         let entry = unsafe { entry.assume_init() };
         if entry.pw_shell.is_null() {
             return None;
         }
+        // SAFETY: pw_shell is non-null (checked above) and points to a
+        // NUL-terminated string inside buffer, which outlives this borrow; the
+        // bytes are copied into the returned PathBuf.
         let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell) }.to_bytes();
         return Some(PathBuf::from(OsStr::from_bytes(bytes)));
     }

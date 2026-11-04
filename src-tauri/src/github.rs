@@ -84,9 +84,9 @@ fn validate_flags(args: &[String], allowed: &[(&str, &str)]) -> Result<(), Strin
         return Err("gh arguments do not match the approved command shape".to_string());
     }
     let mut seen = Vec::new();
-    for pair in args.chunks_exact(2) {
-        let flag = pair[0].as_str();
-        let value = pair[1].as_str();
+    // The length check above guarantees there is no remainder.
+    for [flag, value] in args.as_chunks::<2>().0 {
+        let (flag, value) = (flag.as_str(), value.as_str());
         let approved = allowed
             .iter()
             .any(|(allowed_flag, allowed_value)| flag == *allowed_flag && value == *allowed_value);

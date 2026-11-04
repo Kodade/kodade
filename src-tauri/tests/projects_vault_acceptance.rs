@@ -859,7 +859,10 @@ fn checkpoint_input(workspace_id: &str, summary: &str, key: &str) -> NewCheckpoi
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "positional fixture for one child-process command line"
+)]
 fn checkpoint_child_command(
     db: &Path,
     workspace_id: &str,

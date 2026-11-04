@@ -386,7 +386,7 @@ fn spawn_stderr_reader<R: Read + Send + 'static>(mut reader: R) -> thread::JoinH
 }
 
 // Terminate a child directly (used by tests and shutdown paths that hold one).
-#[allow(dead_code)]
+#[allow(dead_code, reason = "only tests and future shutdown paths call it")]
 pub fn kill_child(tree: &ProcessTree, child: &mut Child) {
     terminate_child(tree, child);
 }
@@ -398,6 +398,14 @@ mod tests {
     use crate::shell::ShellKind;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    // Receivers returned by start_script: start result, lines, exits.
+    #[cfg(unix)]
+    type StartedScript = (
+        mpsc::Receiver<Result<(), String>>,
+        mpsc::Receiver<(String, String)>,
+        mpsc::Receiver<(String, Option<i32>, String)>,
+    );
 
     #[cfg(unix)]
     fn write_executable(path: &std::path::Path, contents: &str) {
@@ -430,14 +438,7 @@ mod tests {
 
     // Run start on a worker so a pipe deadlock fails with a timeout.
     #[cfg(unix)]
-    fn start_script(
-        manager: &AgentManager,
-        script: &str,
-    ) -> (
-        mpsc::Receiver<Result<(), String>>,
-        mpsc::Receiver<(String, String)>,
-        mpsc::Receiver<(String, Option<i32>, String)>,
-    ) {
+    fn start_script(manager: &AgentManager, script: &str) -> StartedScript {
         let manager = manager.clone();
         let script = script.to_string();
         let (on_line, on_exit, lines, exits) = sinks();
